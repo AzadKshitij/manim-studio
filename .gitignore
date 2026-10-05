@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor runtime artifacts
+.manim-editor/
+log.json
+trace.json
+media/
+videos/
+
+# Renders / exports
+*.mp4
+*.mov
+*.avi
+*.webm
+*.png.tmp
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Agent session memory (keep project skills, exclude local memory)
+.opencode/memory/
