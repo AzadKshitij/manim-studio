@@ -1,0 +1,224 @@
+"""Tests for the headless scene runner and the feature-showcase scene."""
+
+from __future__ import annotations
+
+import itertools
+from pathlib import Path
+
+import pytest
+
+from manim_editor.scene_runner import (
+    SceneLoadError,
+    check_scene_file,
+    discover_scenes,
+    load_scene_class,
+    render_still,
+    run_trace,
+)
+from manim_editor.timeline_model import load_log, save_log
+
+SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
+
+MULTI_SCENE_SOURCE = '''
+"""Two scenes for selection tests."""
+
+from manimlib import Scene
+
+
+class AlphaScene(Scene):
+    def construct(self):
+        self.wait(1)
+
+
+class BetaScene(Scene):
+    def construct(self):
+        self.wait(2)
+'''
+
+
+def _write(tmp_path: Path, name: str, source: str) -> Path:
+    path = tmp_path / name
+    path.write_text(source, encoding="utf-8")
+    return path
+
+
+class TestDiscoverScenes:
+    def test_showcase_is_discovered(self) -> None:
+        scenes = discover_scenes(SCENE_FILE)
+        assert [s.name for s in scenes] == ["FeatureShowcase"]
+        assert scenes[0].lineno > 0
+        assert "InteractiveScene" in scenes[0].bases
+
+    def test_multiple_scenes_in_source_order(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "multi.py", MULTI_SCENE_SOURCE)
+        assert [s.name for s in discover_scenes(path)] == ["AlphaScene", "BetaScene"]
+
+    def test_no_scenes(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "empty.py", "x = 1\n")
+        assert discover_scenes(path) == ()
+
+    def test_syntax_error_raises(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "broken.py", "class Foo(Scene:\n")
+        with pytest.raises(SceneLoadError):
+            discover_scenes(path)
+
+    def test_attribute_base_is_recognized(self, tmp_path: Path) -> None:
+        source = "import manimlib as ml\n\n\nclass MyScene(ml.Scene):\n    pass\n"
+        path = _write(tmp_path, "attr.py", source)
+        assert [s.name for s in discover_scenes(path)] == ["MyScene"]
+
+
+class TestCheckSceneFile:
+    def test_showcase_passes(self) -> None:
+        result = check_scene_file(SCENE_FILE)
+        assert result.ok
+        assert [s.name for s in result.scenes] == ["FeatureShowcase"]
+        assert result.error is None
+
+    def test_syntax_error_is_reported_not_raised(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "broken.py", "def f(:\n")
+        result = check_scene_file(path)
+        assert not result.ok
+        assert result.error is not None and result.error_line == 1
+
+    def test_no_scene_class_reports_error(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "empty.py", "x = 1\n")
+        result = check_scene_file(path)
+        assert not result.ok
+        assert result.error == "no Scene class found"
+
+    def test_missing_file_is_reported(self, tmp_path: Path) -> None:
+        result = check_scene_file(tmp_path / "nope.py")
+        assert not result.ok and result.error
+
+
+class TestLoadSceneClass:
+    def test_single_scene_auto_selected(self) -> None:
+        cls = load_scene_class(SCENE_FILE)
+        assert cls.__name__ == "FeatureShowcase"
+
+    def test_explicit_name(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "multi.py", MULTI_SCENE_SOURCE)
+        assert load_scene_class(path, "BetaScene").__name__ == "BetaScene"
+
+    def test_ambiguous_without_name(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "multi.py", MULTI_SCENE_SOURCE)
+        with pytest.raises(SceneLoadError, match="multiple scenes"):
+            load_scene_class(path)
+
+    def test_unknown_name(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "multi.py", MULTI_SCENE_SOURCE)
+        with pytest.raises(SceneLoadError, match="not found"):
+            load_scene_class(path, "GammaScene")
+
+    def test_import_error_wrapped(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "bad_import.py", "import does_not_exist_xyz\n")
+        with pytest.raises(SceneLoadError, match="ModuleNotFoundError"):
+            load_scene_class(path)
+
+
+class TestShowcaseCoverage:
+    """The showcase must keep exercising every editor feature."""
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            "self.add(",
+            "self.remove(",
+            "self.play(",
+            "self.wait(",
+            "save_state()",
+            "self.undo()",
+            "self.redo()",
+            "always_redraw",
+            "add_updater",
+            "for ",
+            "if ",
+            "VGroup(",
+            "Text(",
+            "RegularPolygon(",
+            "Dot(",
+            "Square(",
+            "Circle(",
+            "self.frame.animate",
+            "# checkpoint",
+            "Tex(",
+        ],
+    )
+    def test_marker_present(self, marker: str) -> None:
+        assert marker in SCENE_FILE.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def trace_result():
+    """Trace the showcase once for all integration assertions."""
+    try:
+        return run_trace(SCENE_FILE)
+    except Exception as exc:  # environment probe: skip when manimgl/GL unavailable
+        pytest.skip(f"manimgl runtime unavailable: {type(exc).__name__}: {exc}")
+
+
+@pytest.mark.manim
+class TestRunTrace:
+    def test_scene_identity(self, trace_result) -> None:
+        assert trace_result.scene_name == "FeatureShowcase"
+        assert trace_result.resolution == (854, 480)
+        assert trace_result.fps == 30
+
+    def test_blocks_are_sequential_and_timed(self, trace_result) -> None:
+        blocks = trace_result.snapshot.blocks
+        # 13 blocks without LaTeX, 15 with it (the Tex section is optional).
+        assert len(blocks) >= 12
+        assert [b.index for b in blocks] == list(range(len(blocks)))
+        for previous, current in itertools.pairwise(blocks):
+            assert current.start == pytest.approx(previous.end)
+        assert trace_result.snapshot.total_duration == pytest.approx(blocks[-1].end)
+
+    def test_requested_run_times_survive_trace(self, trace_result) -> None:
+        wait_durations = [b.duration for b in trace_result.snapshot.blocks if b.name == "Wait"]
+        assert wait_durations
+        for duration in wait_durations:
+            assert any(abs(duration - expected) < 1e-9 for expected in (0.1, 0.15, 0.2, 0.25)), (
+                duration
+            )
+
+    def test_expected_animation_names(self, trace_result) -> None:
+        names = [b.name for b in trace_result.snapshot.blocks]
+        assert "ShowCreation" in names
+        assert "Rotate" in names
+        assert "Transform" in names
+        assert any("FadeIn" in name and "Indicate" in name for name in names)
+        assert any(name.startswith("Animate(") for name in names)
+
+    def test_scene_api_stats(self, trace_result) -> None:
+        stats = trace_result.snapshot.stats
+        assert stats["play"] >= 10
+        assert stats["wait"] >= 3
+        assert stats["add"] >= 4
+        assert stats["remove"] >= 2
+        assert stats["save_state"] >= 1
+        assert stats["undo"] == 1
+        assert stats["redo"] == 1
+
+    def test_events_cover_api(self, trace_result) -> None:
+        kinds = {event.kind for event in trace_result.snapshot.events}
+        assert {"add", "remove", "save_state", "undo", "redo"} <= kinds
+
+    def test_log_round_trip(self, trace_result, tmp_path: Path) -> None:
+        path = tmp_path / "log.json"
+        save_log(path, trace_result.snapshot.blocks)
+        loaded = load_log(path)
+        assert loaded.blocks == trace_result.snapshot.blocks
+
+
+@pytest.mark.manim
+class TestRenderStill:
+    def test_still_is_written(self, tmp_path: Path) -> None:
+        target = tmp_path / "showcase.png"
+        written = render_still(SCENE_FILE, output=target, resolution=(320, 180))
+        assert written == target and target.is_file()
+
+        from PIL import Image
+
+        with Image.open(target) as image:
+            assert image.size == (320, 180)
