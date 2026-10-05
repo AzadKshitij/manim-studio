@@ -67,6 +67,7 @@ class Command:
     """Commands sent editor → host over the control channel."""
 
     LOAD: Final = "load"
+    RELOAD: Final = "reload"
     PLAY: Final = "play"
     STOP: Final = "stop"
     SEEK: Final = "seek"

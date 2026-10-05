@@ -9,12 +9,10 @@ starts fast and so ``sys.argv`` can be sanitized first (manimgl parses it at imp
 from __future__ import annotations
 
 import ast
-import importlib.util
 import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from hashlib import md5
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,14 +24,18 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_TRACE_RESOLUTION",
     "SceneCheckResult",
+    "SceneError",
     "SceneInfo",
     "SceneLoadError",
     "TraceResult",
     "check_scene_file",
     "discover_scenes",
+    "format_scene_error",
     "load_scene_class",
+    "load_scene_module",
     "render_still",
     "run_trace",
+    "select_scene_class",
 ]
 
 DEFAULT_TRACE_RESOLUTION: tuple[int, int] = (854, 480)
@@ -43,6 +45,53 @@ _SCENE_BASE_NAMES = {"Scene", "InteractiveScene", "ThreeDScene", "MovingCameraSc
 
 class SceneLoadError(Exception):
     """Raised when a scene file cannot be loaded, parsed or resolved."""
+
+
+@dataclass(frozen=True, slots=True)
+class SceneError:
+    """A user-scene failure prepared for the editor UI."""
+
+    message: str
+    traceback_text: str
+    line: int | None = None
+    scene_file: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "message": self.message,
+            "traceback": self.traceback_text,
+            "line": self.line,
+            "scene_file": self.scene_file,
+        }
+
+
+def format_scene_error(exc: BaseException, scene_path: str | Path | None = None) -> SceneError:
+    """Turn an exception into a compact editor-friendly payload.
+
+    Finds the innermost traceback frame inside the scene file so the editor can put
+    an error marker on the right line.
+    """
+    import traceback as _traceback
+
+    text = "".join(_traceback.format_exception(type(exc), exc, exc.__traceback__))
+    line: int | None = None
+    scene_file: str | None = None
+    if scene_path is not None:
+        target = Path(scene_path).resolve()
+        scene_file = str(target)
+        frames = _traceback.extract_tb(exc.__traceback__)
+        for frame in frames:
+            try:
+                if Path(frame.filename).resolve() == target:
+                    line = frame.lineno
+            except OSError:
+                continue
+    return SceneError(
+        message=f"{type(exc).__name__}: {exc}",
+        traceback_text=text,
+        line=line,
+        scene_file=scene_file,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,20 +238,24 @@ def manimlib_argv_guard() -> Iterator[None]:
         sys.argv[:] = previous
 
 
-def _load_module(path: str | Path) -> Any:
+def load_scene_module(path: str | Path, *, is_reload: bool = False) -> Any:
+    """Import a scene module through manimgl's loader.
+
+    With ``is_reload=True`` manimgl performs a deep reload of user-defined modules
+    the scene imported, which is what makes editor reloads pick up helper-file edits.
+    """
     resolved = Path(path).resolve()
-    digest = md5(str(resolved).encode("utf-8")).hexdigest()[:8]
-    module_name = f"manim_editor_scene_{resolved.stem}_{digest}"
-    spec = importlib.util.spec_from_file_location(module_name, resolved)
-    if spec is None or spec.loader is None:
+    with manimlib_argv_guard():
+        from manimlib.module_loader import ModuleLoader
+
+        try:
+            module = ModuleLoader.get_module(str(resolved), is_during_reload=is_reload)
+        except SceneLoadError:
+            raise
+        except Exception as exc:  # surface import failures with context
+            raise SceneLoadError(f"{type(exc).__name__} while importing {resolved}: {exc}") from exc
+    if module is None:
         raise SceneLoadError(f"cannot import {resolved}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:  # surfaced as SceneLoadError with context
-        sys.modules.pop(module_name, None)
-        raise SceneLoadError(f"{type(exc).__name__} while importing {resolved}: {exc}") from exc
     return module
 
 
@@ -226,27 +279,31 @@ def list_module_scenes(module: Any) -> tuple[str, ...]:
     return tuple(names)
 
 
-def load_scene_class(path: str | Path, scene_name: str | None = None) -> type:
-    """Import a scene file and return the requested scene class.
-
-    With one scene in the file, ``scene_name=None`` selects it; with several, the
-    name is required and a :class:`SceneLoadError` lists the candidates.
-    """
-    module = _load_module(path)
+def select_scene_class(
+    module: Any, scene_name: str | None = None, *, path: str | Path | None = None
+) -> type:
+    """Pick a scene class from a loaded module, with helpful errors."""
     available = list_module_scenes(module)
+    location = str(path) if path is not None else str(getattr(module, "__name__", "module"))
     if not available:
-        raise SceneLoadError(f"no Scene class found in {path}")
+        raise SceneLoadError(f"no Scene class found in {location}")
     if scene_name is None:
         if len(available) > 1:
             raise SceneLoadError(
-                f"{path} defines multiple scenes {sorted(available)}; pass --scene NAME"
+                f"{location} defines multiple scenes {sorted(available)}; pass --scene NAME"
             )
         scene_name = available[0]
     if scene_name not in available:
         raise SceneLoadError(
-            f"scene {scene_name!r} not found in {path}; available: {sorted(available)}"
+            f"scene {scene_name!r} not found in {location}; available: {sorted(available)}"
         )
     return getattr(module, scene_name)
+
+
+def load_scene_class(path: str | Path, scene_name: str | None = None) -> type:
+    """Import a scene file and return the requested scene class."""
+    module = load_scene_module(path)
+    return select_scene_class(module, scene_name, path=path)
 
 
 # ---------------------------------------------------------------------------
