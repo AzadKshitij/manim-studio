@@ -181,6 +181,7 @@ class SceneHost:
         self.shell: Any = None
         self._checkpoints: Any = None
         self._loaded_once = False
+        self._shutdown_started = False
 
     # ------------------------------------------------------------------
     # IPC plumbing
@@ -259,6 +260,18 @@ class SceneHost:
             # The editor went away; there is nobody left to serve.
             self.stop_event.set()
             self.quit_event.set()
+            self._arm_watchdog()
+
+    def _arm_watchdog(self) -> None:
+        """Guarantee the host dies with its editor even if the GL thread is stuck."""
+        timer = threading.Timer(3.0, self._watchdog_exit)
+        timer.daemon = True
+        timer.start()
+
+    def _watchdog_exit(self) -> None:
+        if not self._shutdown_started:
+            self.log.warning("editor connection lost; forcing process exit")
+            os._exit(0)
 
     def _start_frames(self) -> None:
         sock = self._connect(Channel.FRAMES)
@@ -702,6 +715,7 @@ class SceneHost:
             time.sleep(0.004)
 
     def _shutdown(self) -> None:
+        self._shutdown_started = True
         if self.frame_pump is not None:
             self.frame_pump.close()
             self.frame_pump = None

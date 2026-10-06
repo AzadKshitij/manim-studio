@@ -197,19 +197,25 @@ class HostPeer:
         return first
 
     def _pump_control(self, reader: Any) -> None:
-        for line in reader:
-            if not line.strip():
-                continue
-            self.events.put(json.loads(line.decode("utf-8")))
+        try:
+            for line in reader:
+                if not line.strip():
+                    continue
+                self.events.put(json.loads(line.decode("utf-8")))
+        except (OSError, ValueError):
+            return
 
     def _pump_frames(self, sock: socket.socket) -> None:
         parser = FrameParser()
-        while True:
-            data = sock.recv(1 << 20)
-            if not data:
-                return
-            for frame in parser.feed(data):
-                self.frames.put(frame)
+        try:
+            while True:
+                data = sock.recv(1 << 20)
+                if not data:
+                    return
+                for frame in parser.feed(data):
+                    self.frames.put(frame)
+        except OSError:
+            return
 
     def send(self, command: str, **payload: Any) -> None:
         assert self.writer is not None
@@ -267,6 +273,8 @@ class HostPeer:
 
     def close(self) -> None:
         if self.control is not None:
+            with contextlib.suppress(OSError):
+                self.control.shutdown(socket.SHUT_RDWR)
             with contextlib.suppress(OSError):
                 self.control.close()
         self.server.close()
@@ -349,3 +357,25 @@ class TestHostIntegration:
         stopped = peer.wait_event(lambda event: event.get("event") == Event.STOPPED)
         assert stopped["user_stopped"] is True
         assert stopped["time"] < 30  # stopped early, not after a full playthrough
+
+
+@pytest.mark.gl
+class TestHostLiveness:
+    def test_host_exits_when_editor_disconnects(self) -> None:
+        """The host must not outlive its editor, even after an abrupt disconnect."""
+        peer = HostPeer()
+        process = peer.start_host()
+        try:
+            peer.accept_control()
+            peer.accept_frames()
+            peer.wait_event(lambda event: event.get("event") == Event.LOG)
+            assert peer.control is not None
+            peer.control.shutdown(socket.SHUT_RDWR)  # simulate the editor process dying
+            peer.control.close()
+            process.wait(timeout=20)
+            assert process.returncode == 0
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            peer.close()
