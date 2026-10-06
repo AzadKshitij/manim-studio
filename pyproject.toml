@@ -33,6 +33,7 @@ dev = [
     "pytest-cov>=6.1",
     "ruff>=0.11",
     "mypy>=1.15",
+    "pyinstaller>=6.22.3",
 ]
 
 [build-system]

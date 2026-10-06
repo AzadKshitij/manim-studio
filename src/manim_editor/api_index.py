@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,14 @@ def find_manimlib_path() -> Path | None:
     """Locate the installed manimlib package without importing it."""
     import importlib.util
 
+    # Frozen build: manimlib's sources live inside the PYZ archive where find_spec
+    # sees no readable files, but the bundle also ships the .py sources as data so
+    # this AST scan keeps working (ADR 0005).
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        bundled = Path(bundle_root) / "manimlib"
+        if (bundled / "__init__.py").is_file():
+            return bundled
     spec = importlib.util.find_spec("manimlib")
     if spec is None or not spec.submodule_search_locations:
         return None

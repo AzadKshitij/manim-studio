@@ -3,18 +3,20 @@
 The editor never renders exports through its live preview process: exporting shells
 out to ``python -m manim_editor.manimgl_launcher`` (the manimgl CLI with the LaTeX
 compatibility fix applied) with writing enabled, which keeps the live GL context
-healthy and gives deterministic files.
+healthy and gives deterministic files.  Frozen builds re-invoke their own exe with
+an internal flag instead — see :mod:`manim_editor.spawn` (ADR 0005).
 """
 
 from __future__ import annotations
 
 import subprocess
-import sys
 import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from manim_editor import spawn
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -119,10 +121,7 @@ def build_export_plan(
         file_name = stem
         output_path = output_dir / f"{stem}{extension}"
 
-    argv: list[str] = [
-        sys.executable,
-        "-m",
-        "manim_editor.manimgl_launcher",
+    module_args: list[str] = [
         str(scene_file),
         *([scene_name] if scene_name else []),
         "-w",
@@ -130,11 +129,13 @@ def build_export_plan(
         *QUALITY_FLAGS[quality],
     ]
     if still:
-        argv.append("-s")
-    argv.extend(["--video_dir", str(output_dir), "--file_name", file_name])
+        module_args.append("-s")
+    module_args.extend(["--video_dir", str(output_dir), "--file_name", file_name])
     if fps is not None:
-        argv.extend(["--config_file", str(_fps_config_path(int(fps)))])
-    argv.extend(extra_args)
+        module_args.extend(["--config_file", str(_fps_config_path(int(fps)))])
+    module_args.extend(extra_args)
+    executable, tail = spawn.manimgl_export_command(module_args)
+    argv: list[str] = [executable, *tail]
     return ExportPlan(
         argv=tuple(argv),
         output_path=output_path,

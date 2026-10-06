@@ -70,6 +70,30 @@ uv run pytest -m "not gl and not slow"   # fast loop
 uv run pytest                              # everything, incl. GL + ffmpeg export
 ```
 
+PowerShell helpers in `scripts/` wrap the same commands:
+
+| script | purpose |
+| --- | --- |
+| `scripts\run.ps1 [FILE] …` | open the GUI from source (args pass through to `manim-editor gui`) |
+| `scripts\lint.ps1 [-Fix]` | format check + ruff + mypy (`-Fix` applies safe autofixes) |
+| `scripts\test.ps1 [-m …]` | pytest (args pass through) |
+| `scripts\check.ps1 [-Fast]` | full pre-commit gate: lint + pytest (`-Fast` skips GL/slow tests) |
+| `scripts\clean.ps1 [-Venv]` | remove `dist/`, `build/`, caches, `__pycache__` (`-Venv` also drops `.venv`) |
+| `scripts\build.ps1 …` | release pipeline: gate → PyInstaller bundle → smoke tests → portable zip → installer (see below) |
+
+## Packaging (Windows installer + portable)
+
+`scripts\build.ps1` produces everything under `dist/` (see `docs/adr/0005-frozen-packaging.md`):
+
+- `dist\ManimEditor\` — the application folder: `ManimEditor.exe` (double-click
+  GUI) + `manim-editor.exe` (console CLI for terminals and AI agents).
+- `dist\ManimEditor-<version>-portable.zip` — unzip-and-run anywhere.
+- `dist\ManimEditor-Setup-<version>.exe` — Inno Setup installer (per-user, no
+  admin prompt); skipped with `-SkipInstaller` or when Inno Setup 6 is missing.
+
+The frozen app still needs `ffmpeg` on `PATH` for video export and optionally
+LaTeX (`manim-editor latex install` provisions TinyTeX per user).
+
 See `AGENTS.md` for the full contract, `docs/protocol.md` for the wire protocol,
 `docs/adr/` for decisions, and the skills in `.opencode/skills/` for scene-authoring
 and codebase workflows. `tests/scenes/feature_showcase.py` is the canonical scene

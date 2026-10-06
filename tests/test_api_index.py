@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+import pytest
 
 from manim_editor.api_index import (
     ApiSymbol,
@@ -72,3 +75,20 @@ class TestPersistence:
         path = tmp_path / "api_index.json"
         path.write_text('{"version": 99, "symbols": []}', encoding="utf-8")
         assert load_index(path) == ()
+
+
+class TestFrozenLookup:
+    def test_prefers_bundled_sources(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bundle = tmp_path / "_internal"
+        package = bundle / "manimlib"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+        assert find_manimlib_path() == package
+
+    def test_falls_back_to_installed_package(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "empty_bundle"), raising=False)
+        path = find_manimlib_path()
+        assert path is not None and (path / "__init__.py").is_file()

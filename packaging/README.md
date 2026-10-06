@@ -1,0 +1,17 @@
+# packaging/
+
+Windows distribution for Manim Editor (see ADR 0005). Everything here is build
+input; everything produced lands in `dist/` at the repo root.
+
+| file | purpose |
+| --- | --- |
+| `manim_editor.spec` | PyInstaller build: one onedir bundle, two exes (`ManimEditor.exe` windowed GUI, `manim-editor.exe` console CLI/worker). |
+| `entrypoints/gui_entry.py` | Windowed entry (`frozen_entry.gui_entry`). |
+| `entrypoints/cli_entry.py` | Console entry (`frozen_entry.cli_entry`). |
+| `installer.iss` | Inno Setup 6 script (per-user install, no admin). |
+| `make_icon.py` | Procedural icon generator (`uv run python packaging/make_icon.py`). |
+| `manim_editor.ico` | Generated icon (committed so the installer builds offline). |
+
+Build with `scripts\build.ps1` from the repo root — never by invoking PyInstaller
+or ISCC by hand (the script pins `--distpath dist --workpath build`, the version
+define, and the smoke tests).

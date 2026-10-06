@@ -9,7 +9,6 @@ blocking reads.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,7 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
 
-from manim_editor import ipc
+from manim_editor import ipc, spawn
 from manim_editor.ipc import Channel, Command, Event, FrameParser
 
 __all__ = ["PreviewController"]
@@ -94,8 +93,6 @@ class PreviewController(QObject):
         port = self._server.serverPort()
         width, height = size
         args = [
-            "-m",
-            "manim_editor.preview_host",
             str(self.scene_path),
             "--port",
             str(port),
@@ -110,9 +107,11 @@ class PreviewController(QObject):
             args += ["--scene-name", scene_name]
         if fps is not None:
             args += ["--fps", str(fps)]
+        # Frozen builds re-invoke our own exe instead of `python -m` (ADR 0005).
+        executable, host_args = spawn.preview_host_command(args)
         self._expected_stop = False
         self.stateChanged.emit("starting")
-        self._process.start(sys.executable, args)
+        self._process.start(executable, list(host_args))
 
     def shutdown(self, *, timeout_ms: int = 3000) -> None:
         """Ask the host to quit, then guarantee termination.
