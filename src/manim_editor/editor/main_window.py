@@ -68,17 +68,20 @@ class MainWindow(QMainWindow):
         preview_size: tuple[int, int] = (1280, 720),
         restore_settings: bool = True,
         auto_preview: bool = True,
+        initial_frame: str = "end",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(APP_NAME)
         self._embedded = embedded
         self._preview_size = preview_size
+        self._initial_frame = initial_frame
         self._path: Path | None = None
         self._auto_reload = True
         self._auto_preview = auto_preview
         self._restore_settings = restore_settings
         self._video_mode = False
+        self._play_from_index: int | None = None
         self._total_duration = 0.0
         self._preview_process: QProcess | None = None
         self._export_process: QProcess | None = None
@@ -432,6 +435,7 @@ class MainWindow(QMainWindow):
             self._scene_name(),
             embedded=self._embedded,
             size=self._preview_size,
+            initial_frame=self._initial_frame,
         )
 
     def reload_preview(self) -> None:
@@ -447,7 +451,8 @@ class MainWindow(QMainWindow):
         if not self.controller.is_running:
             self._start_preview()
             return
-        index = self.timeline.log.index_at(self.timeline.playhead_time) or 0
+        # Play from the beginning unless the user explicitly picked a block.
+        index = self._play_from_index if self._play_from_index is not None else 0
         self._video_mode = False
         self.controller.play(from_index=index)
 
@@ -456,6 +461,7 @@ class MainWindow(QMainWindow):
 
     def seek_to_block(self, index: int) -> None:
         self._video_mode = False
+        self._play_from_index = index
         block = self.timeline.log.block_by_index(index)
         if block is not None:
             self.timeline.set_playhead(block.end)
@@ -610,7 +616,11 @@ class MainWindow(QMainWindow):
             return
         self.timeline.set_log(timeline_log)
         self._total_duration = timeline_log.total_duration
-        self.preview_panel.set_time(0.0, self._total_duration)
+        # The host shows the final frame by default; line the playhead up with it and
+        # forget any previously selected block so Play restarts from the beginning.
+        self.timeline.set_playhead(self._total_duration if self._initial_frame == "end" else 0.0)
+        self.preview_panel.set_time(self.timeline.playhead_time, self._total_duration)
+        self._play_from_index = None
         self._set_status(
             f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
         )
@@ -619,11 +629,6 @@ class MainWindow(QMainWindow):
         note = str(message.get("note", ""))
         self.preview_panel.set_status(state, note)
         self.timeline.set_playing(state == "playing")
-        index = message.get("index")
-        if state == "idle" and index is not None:
-            block = self.timeline.log.block_by_index(int(index))
-            if block is not None:
-                self.timeline.set_playhead(block.start)
 
     def _on_tick(self, time_seconds: float, _index: int) -> None:
         if self._video_mode:
@@ -661,11 +666,14 @@ class MainWindow(QMainWindow):
         if self._path is not None and name and self.controller.is_running:
             self.controller.load(self._path, name)
 
-    def _on_file_changed(self, _path: str) -> None:
+    def _on_file_changed(self, path: str) -> None:
         if self.editor.is_modified():
             self._set_status("file changed on disk — save (Ctrl+S) to overwrite, or reopen")
             return
-        self._set_status("file changed on disk — reloading preview")
+        # External change with a clean buffer: refresh the editor text as well, so
+        # the buffer and the (about to reload) preview never disagree.
+        self._set_status("file changed on disk — reloading editor and preview")
+        self.editor.load_file(path)
         self.reload_preview()
 
     # ------------------------------------------------------------------

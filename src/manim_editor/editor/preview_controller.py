@@ -79,7 +79,7 @@ class PreviewController(QObject):
         *,
         embedded: bool = True,
         size: tuple[int, int] = (1280, 720),
-        initial_frame: str = "start",
+        initial_frame: str = "end",
         fps: int | None = None,
     ) -> None:
         """(Re)start the host on the given scene file."""

@@ -171,7 +171,7 @@ class HostConfig:
     port: int | None = None
     embedded: bool = False
     size: tuple[int, int] = DEFAULT_SIZE
-    initial_frame: str = "start"
+    initial_frame: str = "end"
     fps: int | None = None
     fail_fast: bool = False
 
@@ -418,6 +418,10 @@ class SceneHost:
             scene = self._make_scene(skip_animations=True, end=0)
         self._activate_scene(scene)
         self.stop_event.clear()
+        # The scene must actually *run* before rendering: ``construct()`` is what adds
+        # mobjects (and with ``end=0`` it stops right before the first play).  Skipping
+        # this left every load/reload showing an unconstructed, empty scene.
+        run_construct(scene)
         self._render_current_frame()
         self.push_current_frame()
         self.emit_status("idle", index=0)
@@ -804,8 +808,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--initial-frame",
         choices=("start", "end"),
-        default="start",
-        help="state shown right after loading",
+        default="end",
+        help="state shown right after loading (default: final frame)",
     )
     parser.add_argument("--fps", type=int, default=None, help="camera fps override")
     parser.add_argument(
