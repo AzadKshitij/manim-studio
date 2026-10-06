@@ -18,6 +18,7 @@ uv run mypy                          # static typing gate for src/
 uv run pytest                        # full suite; Qt runs offscreen, GL auto-skips
 uv run pytest -m "not gl and not slow"   # fast inner loop
 uv run pytest -m gl                  # OpenGL integration tests (real GPU needed)
+uv run pytest -m slow                # real ffmpeg export test
 uv run manim-editor --help           # app CLI
 uv run manim-editor gui <file.py>    # open the editor
 ```
@@ -40,6 +41,12 @@ explaining why not.
 | `manim_editor/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |
 | `manim_editor/editor/*` | Qt shell, Scintilla, timeline widget, panels | PySide6 |
 | `manim_editor/cli.py` | Agent-facing CLI (`trace`, `export`, `check`, `new`, `preview`) | everything above |
+
+Status: Stage 1 (external GL window) and Stage 2 (embedded frame streaming) are
+implemented; timeline v1 (media transport scrub) and v2 (zoom/pan/click-jump/drag)
+are implemented; timeline v3 (live scrub) is intentionally deferred per the spec.
+Export, stills and the live shell are implemented. See `docs/protocol.md` for the
+wire protocol and `docs/adr/` for architectural decisions.
 
 Hard dependency rules:
 
@@ -99,7 +106,10 @@ Protocol details live in `docs/protocol.md`. Any change to the protocol bumps
 
 - Everything in the pure core has unit tests; Qt widgets have offscreen smoke tests
   (`QT_QPA_PLATFORM=offscreen`, `pytest-qt`); GL behavior has `@pytest.mark.gl`
-  integration tests that spawn the real preview host.
+  integration tests that spawn the real preview host; `@pytest.mark.slow` covers the
+  real ffmpeg export path.
+- `tests/test_editor_integration.py` is the full-stack contract: a real `MainWindow`
+  drives a real host through trace → frames → seek → live shell → play/stop.
 - `tests/scenes/feature_showcase.py` is the canonical scene that exercises every editor
   and scene-API feature: play/wait, add/remove, save_state/undo, updaters,
   always_redraw, loops/branches, groups, text, camera moves. It must trace cleanly.
@@ -134,6 +144,7 @@ The CLI emits machine-readable JSON on stdout when `--json` is passed. Exit code
 `0` success, `1` user/scene error, `2` usage error. `manim-editor check` is the fastest
 way to validate generated scenes before opening the editor.
 
-To author a scene, prefer `manim-editor/templates.py` snippets and the `manim-scene`
-skill, then validate with `check` + `trace`. The trace block list is the source of truth
-for timeline expectations in tests.
+To author a scene, load the `manim-scene-authoring` skill (or read
+`.opencode/skills/manim-scene-authoring/SKILL.md`); it documents the CLI loop,
+manimgl naming conventions and templates. For codebase work, load
+`manim-editor-dev` (`.opencode/skills/manim-editor-dev/SKILL.md`).
