@@ -8,9 +8,15 @@ import pytest
 from PySide6.QtGui import QImage
 
 from manim_editor.editor import main_window as main_window_module
+from manim_editor.editor.code_editor import PY_KEYWORD
 from manim_editor.editor.main_window import MainWindow
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
+
+
+def _byte_offset(text: str, needle: str) -> int:
+    """Scintilla positions are UTF-8 byte offsets, not character offsets."""
+    return len(text[: text.index(needle)].encode("utf-8"))
 
 
 class _StubController:
@@ -90,6 +96,13 @@ class TestOpenAndSave:
         assert window._scene_combo.currentText() == "FeatureShowcase"
         assert "FeatureShowcase" in window.editor.text()
         assert window.watcher.path == SCENE_FILE.resolve()
+
+    def test_open_scene_highlights_tokens(self, window: MainWindow) -> None:
+        assert window.open_path(SCENE_FILE) is True
+        text = window.editor.text()
+        # The loaded buffer is lexed and styled through the Pygments path.
+        assert window.editor.styleAt(_byte_offset(text, "import")) == PY_KEYWORD
+        assert window.editor.styleAt(_byte_offset(text, "class")) == PY_KEYWORD
 
     def test_open_does_not_send_redundant_load(self, window: MainWindow, tmp_path: Path) -> None:
         """Populating the scene combo must not look like a user scene switch."""

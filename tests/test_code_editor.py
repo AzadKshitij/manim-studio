@@ -7,7 +7,18 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import Qt
 
-from manim_editor.editor.code_editor import CodeEditor
+from manim_editor.editor.code_editor import (
+    PY_BUILTIN,
+    PY_CLASSNAME,
+    PY_COMMENT,
+    PY_CONSTANT,
+    PY_DEFNAME,
+    PY_IDENTIFIER,
+    PY_KEYWORD,
+    PY_NUMBER,
+    PY_STRING,
+    CodeEditor,
+)
 
 pytestmark = pytest.mark.usefixtures("qtbot")
 
@@ -128,3 +139,68 @@ class TestCompletionAndTheme:
     def test_ctrl_s_emits_save_request(self, editor: CodeEditor, qtbot) -> None:
         with qtbot.waitSignal(editor.saveRequested, timeout=3000):
             qtbot.keyClick(editor, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+
+
+class TestHighlighting:
+    """End-to-end styling through the Pygments container-lexer path."""
+
+    def test_token_styles_applied(self, editor: CodeEditor) -> None:
+        source = (
+            "from manimlib import *\n"
+            "\n"
+            "\n"
+            "def helper(x):\n"
+            '    """doc"""\n'
+            "    credit = LEFT + 3.14  # note\n"
+            "    print(True)\n"
+            "\n"
+            "\n"
+            "class Demo(Scene):\n"
+            "    pass\n"
+        )
+        editor.set_text(source)
+        samples = {
+            "from": PY_KEYWORD,
+            "helper": PY_DEFNAME,
+            "Demo": PY_CLASSNAME,
+            "LEFT": PY_CONSTANT,
+            "True": PY_CONSTANT,
+            "3.14": PY_NUMBER,
+            "# note": PY_COMMENT,
+            "print": PY_BUILTIN,
+            "credit": PY_IDENTIFIER,
+        }
+        for token, expected in samples.items():
+            assert editor.styleAt(source.index(token)) == expected, token
+        quote = source.index('"""')
+        assert editor.styleAt(quote) == PY_STRING
+
+    def test_edit_rehighlights_without_style_needed(self, editor: CodeEditor, qtbot) -> None:
+        editor.set_text("a = 1\n")
+        # Scintilla stamps new text with style 0 and may not emit styleNeeded;
+        # the editor restyles on the coalesced modify timer instead.
+        editor.insertText(editor.textLength(), "def added():\n    return 1\n")
+        qtbot.wait(50)
+        text = editor.text()
+        assert editor.styleAt(text.index("def")) == PY_KEYWORD
+        assert editor.styleAt(text.index("added")) == PY_DEFNAME
+
+    def test_non_ascii_offsets_align(self, editor: CodeEditor) -> None:
+        # A multi-byte char before the keyword shifts character and byte
+        # offsets apart; styling must still land on the right span.
+        source = 'name = "café"\nreturn name\n'
+        editor.set_text(source)
+
+        def byte_pos(needle: str, *, last: bool = False) -> int:
+            index = source.rindex(needle) if last else source.index(needle)
+            return len(source[:index].encode("utf-8"))
+
+        assert editor.styleAt(byte_pos('"café"')) == PY_STRING
+        assert editor.styleAt(byte_pos("return")) == PY_KEYWORD
+        assert editor.styleAt(byte_pos("name", last=True)) == PY_IDENTIFIER
+
+    def test_apply_theme_both_palettes(self, editor: CodeEditor) -> None:
+        editor.set_text("x = 1\n")
+        editor.apply_theme(dark=True)
+        editor.apply_theme(dark=False)
+        assert editor.styleAt(0) == PY_IDENTIFIER

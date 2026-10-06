@@ -14,6 +14,9 @@ dependencies = [
     "moderngl==5.12.0",
     "moderngl-window==3.1.1",
     "IPython>=8.18",
+    # Pygments lexers drive the code editor's syntax highlighting and its
+    # colour themes (see manim_editor.python_highlight).
+    "pygments>=2.19",
     # manimgl 1.7.2 imports pkg_resources at import time. setuptools>=81 no
     # longer ships it, so keep the runtime dependency bounded.
     "setuptools>=69,<81",

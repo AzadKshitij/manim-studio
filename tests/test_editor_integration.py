@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from manim_editor.editor.code_editor import PY_KEYWORD
 from manim_editor.editor.main_window import MainWindow
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
@@ -48,6 +49,10 @@ class TestEditorLiveHost:
                 lambda: bool(logs) and window.timeline.log.num_blocks >= 12, timeout=90000
             )
             assert len(logs) == 1
+
+            # 1b. The loaded scene is syntax-highlighted through the Pygments path.
+            offset = len(window.editor.text()[: window.editor.text().index("import")].encode())
+            assert window.editor.styleAt(offset) == PY_KEYWORD
 
             # 2. Live frames arrive and reach the preview panel.
             qtbot.waitUntil(lambda: len(frames) > 0, timeout=60000)

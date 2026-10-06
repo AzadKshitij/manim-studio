@@ -13,39 +13,64 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from pygments.style import Style
+from pygments.styles import get_style_by_name
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFontDatabase, QKeyEvent
 from PySide6.QtWidgets import QWidget
 from pyside6_scintilla import Scintilla, ScintillaEdit
 
 from manim_editor.ipc import as_bytes as _as_bytes
+from manim_editor.python_highlight import (
+    TokenKind,
+    highlight_spans,
+    representative_token,
+)
 
 __all__ = ["CodeEditor"]
 
 log = logging.getLogger(__name__)
 
-# Scintilla constants (the bindings expose enums only for a subset).
-SCLEX_PYTHON = 2
+# Scintilla constants (the bindings expose enums only for a subset).  The
+# bundled Scintilla has no compiled lexers, so highlighting is applied through
+# the container-styling API (SCI_STARTSTYLING/SCI_SETSTYLING) from Pygments.
 SC_MARGIN_SYMBOL = 0
 SC_MARGIN_NUMBER = 1
 STYLE_DEFAULT = 32
 STYLE_LINENUMBER = 33
+_STYLE_MASK = 0x1F  # SC_STYLE_MASK: all five style bits
 
-# LexPython style ids.
+# Style ids for our token kinds (Scintilla reserves 0..31 for its own styles).
 PY_COMMENT = 1
 PY_NUMBER = 2
 PY_STRING = 3
-PY_CHARACTER = 4
 PY_KEYWORD = 5
-PY_TRIPLE = 6
-PY_TRIPLEDOUBLE = 7
 PY_CLASSNAME = 8
 PY_DEFNAME = 9
 PY_OPERATOR = 10
 PY_IDENTIFIER = 11
-PY_COMMENTBLOCK = 12
-PY_STRINGEOL = 13
 PY_DECORATOR = 15
+PY_CONSTANT = 16
+PY_BUILTIN = 17
+
+# Pygments style names used to colour each token kind (chrome stays ours).
+_PYGMENTS_DARK = "monokai"
+_PYGMENTS_LIGHT = "friendly"
+
+# Token kind -> Scintilla style id.
+_ROLE_STYLE: dict[TokenKind, int] = {
+    TokenKind.COMMENT: PY_COMMENT,
+    TokenKind.STRING: PY_STRING,
+    TokenKind.NUMBER: PY_NUMBER,
+    TokenKind.KEYWORD: PY_KEYWORD,
+    TokenKind.CONSTANT: PY_CONSTANT,
+    TokenKind.NAME: PY_IDENTIFIER,
+    TokenKind.FUNCTION: PY_DEFNAME,
+    TokenKind.CLASS: PY_CLASSNAME,
+    TokenKind.BUILTIN: PY_BUILTIN,
+    TokenKind.DECORATOR: PY_DECORATOR,
+    TokenKind.OPERATOR: PY_OPERATOR,
+}
 
 MARKER_ERROR = 0
 INDIC_ERROR = 8
@@ -61,6 +86,17 @@ def _colorref(rgb: int) -> int:
     return (blue << 16) | (green << 8) | red
 
 
+def _parse_hex(value: str) -> int | None:
+    """Parse a Pygments colour string (``#rgb``/``rrggbb``) to 0xRRGGBB."""
+    value = value.lstrip("#")
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    try:
+        return int(value, 16)
+    except ValueError:
+        return None
+
+
 class CodeEditor(ScintillaEdit):
     """Python source editor with line numbers, completion, markers and themes."""
 
@@ -74,6 +110,12 @@ class CodeEditor(ScintillaEdit):
         self._completions: tuple[str, ...] = ()
         self._error_line: int | None = None
         self._last_modified = False
+        # Pygments lexes the whole buffer, so coalesce edits into one restyle
+        # per event-loop turn instead of re-lexing on every keystroke.
+        self._restyle_timer = QTimer(self)
+        self._restyle_timer.setSingleShot(True)
+        self._restyle_timer.setInterval(0)
+        self._restyle_timer.timeout.connect(self.restyle)
         self.setAcceptDrops(True)
         self._configure_base()
         self.apply_theme(dark=True)
@@ -84,7 +126,6 @@ class CodeEditor(ScintillaEdit):
     # ------------------------------------------------------------------
 
     def _configure_base(self) -> None:
-        self.lexer = SCLEX_PYTHON  # type: ignore[method-assign, assignment]
         self.setIndent(4)
         self.setTabWidth(4)
         self.setUseTabs(False)
@@ -109,7 +150,7 @@ class CodeEditor(ScintillaEdit):
         self.setZoom(0)
 
     def apply_theme(self, *, dark: bool = True) -> None:
-        """Apply the editor colour theme to the default style and lexer styles."""
+        """Apply the editor chrome and Pygments token colours as Scintilla styles."""
         palette = _DARK if dark else _LIGHT
         family = self._monospace_family()
         try:
@@ -120,17 +161,46 @@ class CodeEditor(ScintillaEdit):
         self.styleSetFore(STYLE_DEFAULT, _colorref(palette["default_fg"]))
         self.styleSetBack(STYLE_DEFAULT, _colorref(palette["default_bg"]))
         self.styleClearAll()
-        for style, color in palette["styles"].items():
-            self.styleSetFore(style, _colorref(color))
-        self.styleSetBold(PY_KEYWORD, True)
-        self.styleSetBold(PY_CLASSNAME, True)
-        self.styleSetItalic(PY_COMMENT, True)
-        self.styleSetItalic(PY_COMMENTBLOCK, True)
+        style = self._pygments_style(dark)
+        for kind, style_id in _ROLE_STYLE.items():
+            info = style.style_for_token(representative_token(kind))
+            colour = _parse_hex(str(info.get("color") or ""))
+            self.styleSetFore(style_id, _colorref(colour or palette["default_fg"]))
+            self.styleSetBold(style_id, bool(info.get("bold")))
+            self.styleSetItalic(style_id, bool(info.get("italic")))
         # Line-number margin.
         self.styleSetFore(STYLE_LINENUMBER, _colorref(palette["line_number_fg"]))
         self.styleSetBack(STYLE_LINENUMBER, _colorref(palette["gutter_bg"]))
         self.setMarginBackN(0, _colorref(palette["gutter_bg"]))
         self.setMarginBackN(1, _colorref(palette["gutter_bg"]))
+        self.restyle()
+
+    @staticmethod
+    def _pygments_style(dark: bool) -> type[Style]:
+        """Resolve the Pygments style object, falling back to ``default``."""
+        name = _PYGMENTS_DARK if dark else _PYGMENTS_LIGHT
+        try:
+            return get_style_by_name(name)
+        except Exception:  # pragma: no cover - unknown style name
+            return get_style_by_name("default")
+
+    def restyle(self) -> None:
+        """Re-tokenise the buffer and push token styles into Scintilla.
+
+        Scintilla styling counts UTF-8 bytes (positions and lengths), while
+        Pygments spans are character offsets, so the gap and run lengths are
+        encoded before being handed to ``setStyling``.
+        """
+        text = self._raw_text()
+        self.startStyling(0, _STYLE_MASK)
+        last = 0
+        for start, end, kind in highlight_spans(text):
+            if start > last:
+                self.setStyling(_byte_length(text, last, start), STYLE_DEFAULT)
+            self.setStyling(_byte_length(text, start, end), _ROLE_STYLE[kind])
+            last = end
+        if last < len(text):
+            self.setStyling(_byte_length(text, last, len(text)), STYLE_DEFAULT)
 
     @staticmethod
     def _monospace_family() -> str:
@@ -152,11 +222,15 @@ class CodeEditor(ScintillaEdit):
 
     def text(self) -> str:
         """Current buffer as a normalised (LF) Python string."""
-        raw = _as_bytes(self.getText(self.textLength())).decode("utf-8", "replace")
-        return raw.replace("\r\n", "\n").replace("\r", "\n")
+        return self._raw_text().replace("\r\n", "\n").replace("\r", "\n")
+
+    def _raw_text(self) -> str:
+        """Buffer contents exactly as stored, preserving line endings."""
+        return _as_bytes(self.getText(self.textLength())).decode("utf-8", "replace")
 
     def set_text(self, text: str) -> None:
         self.setText(text.replace("\r\n", "\n").replace("\r", "\n"))
+        self.restyle()
 
     def load_file(self, path: str | Path) -> None:
         """Read a UTF-8 Python file into the buffer and reset modification state."""
@@ -322,6 +396,10 @@ class CodeEditor(ScintillaEdit):
     # ------------------------------------------------------------------
 
     def _on_modified(self, *_args: Any) -> None:
+        # Scintilla assigns style 0 to inserted text and does not emit
+        # styleNeeded for every edit (e.g. while the completion popup is open),
+        # so restyle ourselves after the edit settles.
+        self._restyle_timer.start()
         modified = self.is_modified()
         if modified != self._last_modified:
             self._last_modified = modified
@@ -343,6 +421,11 @@ class CodeEditor(ScintillaEdit):
             self.trigger_completion()
 
 
+def _byte_length(text: str, start: int, end: int) -> int:
+    """UTF-8 byte length of ``text[start:end]`` (Scintilla styling units)."""
+    return len(text[start:end].encode("utf-8"))
+
+
 def _dedent(lines: list[str]) -> list[str]:
     """Strip the common leading whitespace shared by all non-blank lines."""
     indents = [len(line) - len(line.lstrip()) for line in lines if line.strip()]
@@ -355,22 +438,6 @@ _DARK: dict[str, Any] = {
     "default_bg": 0x1E1E1E,
     "gutter_bg": 0x252526,
     "line_number_fg": 0x858585,
-    "styles": {
-        PY_COMMENT: 0x6A9955,
-        PY_COMMENTBLOCK: 0x6A9955,
-        PY_NUMBER: 0xB5CEA8,
-        PY_STRING: 0xCE9178,
-        PY_CHARACTER: 0xCE9178,
-        PY_TRIPLE: 0xCE9178,
-        PY_TRIPLEDOUBLE: 0xCE9178,
-        PY_KEYWORD: 0x569CD6,
-        PY_CLASSNAME: 0x4EC9B0,
-        PY_DEFNAME: 0xDCDCAA,
-        PY_OPERATOR: 0xD4D4D4,
-        PY_IDENTIFIER: 0x9CDCFE,
-        PY_STRINGEOL: 0xCE9178,
-        PY_DECORATOR: 0xDCDCAA,
-    },
 }
 
 _LIGHT: dict[str, Any] = {
@@ -378,20 +445,4 @@ _LIGHT: dict[str, Any] = {
     "default_bg": 0xFFFFFF,
     "gutter_bg": 0xF3F3F3,
     "line_number_fg": 0x7A7A7A,
-    "styles": {
-        PY_COMMENT: 0x008000,
-        PY_COMMENTBLOCK: 0x008000,
-        PY_NUMBER: 0x098658,
-        PY_STRING: 0xA31515,
-        PY_CHARACTER: 0xA31515,
-        PY_TRIPLE: 0xA31515,
-        PY_TRIPLEDOUBLE: 0xA31515,
-        PY_KEYWORD: 0x0000FF,
-        PY_CLASSNAME: 0x267F99,
-        PY_DEFNAME: 0x795E26,
-        PY_OPERATOR: 0x1F1F1F,
-        PY_IDENTIFIER: 0x001080,
-        PY_STRINGEOL: 0xA31515,
-        PY_DECORATOR: 0x795E26,
-    },
 }

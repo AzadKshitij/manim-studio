@@ -33,6 +33,7 @@ explaining why not.
 | --- | --- | --- |
 | `manim_editor/timeline_model.py` | Pure data model for trace blocks, px/time math, JSON (de)serialization | stdlib only |
 | `manim_editor/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls | stdlib, `timeline_model` |
+| `manim_editor/python_highlight.py` | Pygments-powered Python token spans for the code editor | stdlib, `pygments` |
 | `manim_editor/ipc.py` | JSON-line protocol + binary frame codec | stdlib only |
 | `manim_editor/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
 | `manim_editor/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
