@@ -168,6 +168,7 @@ class HostPeer:
         self.writer: JsonLineWriter | None = None
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self.frames: queue.Queue[Frame] = queue.Queue()
+        self.seen: list[dict[str, Any]] = []
         self._threads: list[threading.Thread] = []
 
     def accept_control(self, timeout: float = 60.0) -> dict[str, Any]:
@@ -231,7 +232,16 @@ class HostPeer:
                 continue
             if predicate(event):
                 return event
+            self.seen.append(event)
         raise TimeoutError("expected event never arrived")
+
+    def drain(self) -> list[dict[str, Any]]:
+        """Move every queued event into ``seen`` and return them."""
+        while True:
+            try:
+                self.seen.append(self.events.get_nowait())
+            except queue.Empty:
+                return self.seen
 
     def wait_frame(self, timeout: float = 60.0) -> Frame:
         try:
@@ -357,6 +367,20 @@ class TestHostIntegration:
         stopped = peer.wait_event(lambda event: event.get("event") == Event.STOPPED)
         assert stopped["user_stopped"] is True
         assert stopped["time"] < 30  # stopped early, not after a full playthrough
+
+    def test_repeated_reloads_are_error_free(self, host_session: Any) -> None:
+        """Regression: reloading while an offscreen frame is bound used to raise
+        GLError 1282 (deleted window_fbo) on every cycle after the first."""
+        peer = host_session[0]
+        peer.drain()
+        for cycle in range(3):
+            peer.send(Command.RELOAD)
+            peer.wait_event(lambda event: event.get("event") == Event.LOG)
+            peer.wait_event(
+                lambda event: event.get("event") == Event.STATUS and event.get("state") == "idle"
+            )
+            errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
+            assert not errors, f"reload cycle {cycle} failed: {errors}"
 
 
 @pytest.mark.gl

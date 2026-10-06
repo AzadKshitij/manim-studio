@@ -60,6 +60,24 @@ TICK_INTERVAL_S = 0.05
 DEFAULT_SIZE = (1280, 720)
 
 
+def _silence_known_noise() -> None:
+    """Hide known-benign import noise so the editor's Live shell stays readable.
+
+    The filters are intentionally narrow: manimgl's pinned ``pkg_resources`` usage,
+    PyOpenGL's missing ``OpenGL_accelerate`` info line, and pydub's escape-sequence
+    SyntaxWarning are all unavoidable third-party artifacts, not signals.
+    """
+    import warnings
+
+    warnings.filterwarnings(
+        "ignore", message=r"pkg_resources is deprecated as an API.*", category=UserWarning
+    )
+    warnings.filterwarnings(
+        "ignore", message=r"invalid escape sequence.*", category=SyntaxWarning, module=r"pydub.*"
+    )
+    logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
+
+
 class TickThrottler:
     """Rate-limits playhead ticks; the clock is injectable for tests."""
 
@@ -311,6 +329,7 @@ class SceneHost:
     ) -> Any:
         if self.scene_class is None:
             raise SceneLoadError("no scene loaded")
+        self._bind_default_framebuffer()
         return make_scene(
             self.scene_class,
             window=self.window,
@@ -321,6 +340,24 @@ class SceneHost:
             end_at_animation_number=end,
             preview_while_skipping=False,
         )
+
+    def _bind_default_framebuffer(self) -> None:
+        """Bind the window's default framebuffer before constructing a scene.
+
+        manimgl's ``Camera.init_fbo`` captures ``ctx.detect_framebuffer()`` as its
+        ``window_fbo``.  If an old offscreen FBO is still bound at that moment (which
+        is exactly what happens on reload), the new scene's ``window_fbo`` aliases the
+        old scene's FBO; releasing the old scene then invalidates it and every blit
+        fails with ``GL_INVALID_OPERATION``.  Binding the default framebuffer first
+        keeps every scene's ``window_fbo`` at 0.
+        """
+        if self.window is None:
+            return
+        screen = getattr(getattr(self.window, "ctx", None), "screen", None)
+        if screen is None:
+            return
+        with contextlib.suppress(Exception):
+            screen.use()
 
     def load(self, path: str | Path | None = None) -> None:
         """(Re)load the scene: import, trace, show the initial frame and notify."""
@@ -424,11 +461,14 @@ class SceneHost:
         camera = getattr(scene, "camera", None)
         if camera is None:
             return
+        window_fbo = getattr(camera, "window_fbo", None)
         for attribute in ("fbo_for_files", "draw_fbo"):
             fbo = getattr(camera, attribute, None)
-            if fbo is not None:
-                with contextlib.suppress(Exception):
-                    fbo.release()
+            # Never release the window framebuffer, even if a scene aliased it.
+            if fbo is None or fbo is window_fbo:
+                continue
+            with contextlib.suppress(Exception):
+                fbo.release()
 
     # ------------------------------------------------------------------
     # Rendering + frames
@@ -686,6 +726,7 @@ class SceneHost:
     # ------------------------------------------------------------------
 
     def run(self) -> int:
+        _silence_known_noise()
         try:
             if self.config.port is not None:
                 self._start_control()
@@ -777,6 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _silence_known_noise()
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
