@@ -41,10 +41,18 @@ class TestBuildExportPlan:
         plan = build_export_plan(_scene_file(tmp_path), quality=quality)
         assert flag in plan.argv
 
-    def test_fps_flag(self, tmp_path: Path) -> None:
+    def test_fps_uses_generated_config_file(self, tmp_path: Path) -> None:
         plan = build_export_plan(_scene_file(tmp_path), fps=60)
-        index = list(plan.argv).index("--fps")
-        assert plan.argv[index + 1] == "60"
+        argv = list(plan.argv)
+        assert "--fps" not in argv  # manimgl 1.7.2 writes a string otherwise
+        index = argv.index("--config_file")
+        config_path = Path(argv[index + 1])
+        assert config_path.is_file()
+        assert "fps: 60" in config_path.read_text(encoding="utf-8")
+
+    def test_fps_out_of_range_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ExportError, match="out of range"):
+            build_export_plan(_scene_file(tmp_path), fps=1000)
 
     def test_explicit_output_derives_dir_and_name(self, tmp_path: Path) -> None:
         scene = _scene_file(tmp_path)
@@ -136,6 +144,7 @@ class TestRealExport:
             "TinyScene",
             output=tmp_path / "tiny.mp4",
             quality="preview",
+            fps=24,
             extra_args=("--resolution", "160x90"),
         )
         result = run_export(plan, timeout=300)
