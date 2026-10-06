@@ -315,6 +315,26 @@ class TestTraceAndTimeline:
         finally:
             window.controller = original  # type: ignore[assignment]
 
+    def test_successful_reload_clears_error_marker(
+        self, window: MainWindow, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "scene.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\nclass Demo(Scene):\n    pass\n",
+            encoding="utf-8",
+        )
+        assert window.open_path(target) is True
+        window.editor.set_error_marker(2, "NameError: boom")
+        assert window.editor.error_line == 2
+
+        window._on_log(SAMPLE_LOG_EVENT)  # a trace succeeded
+        assert window.editor.error_line is None
+
+        # The host-restart path must clear the marker too.
+        window.editor.set_error_marker(2, "NameError: boom")
+        window.reload_preview()
+        assert window.editor.error_line is None
+
     def test_play_toggle(self, window: MainWindow) -> None:
         original = window.controller
         stub = _StubController()

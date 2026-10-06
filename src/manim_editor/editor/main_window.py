@@ -488,10 +488,13 @@ class MainWindow(QMainWindow):
     def reload_preview(self) -> None:
         if self._path is None:
             return
+        # A reload is an explicit "try again": drop the previous error marker in
+        # both paths (restarting a crashed host included), not just when the host
+        # happens to be running.
+        self.editor.clear_error_marker()
         if not self.controller.is_running:
             self._start_preview()
             return
-        self.editor.clear_error_marker()
         # Use `load` with an explicit path and scene name (not `reload`) so renaming
         # the scene class or switching scenes in the combo always takes effect.
         self.controller.load(self._path, self._scene_name())
@@ -679,6 +682,9 @@ class MainWindow(QMainWindow):
             return
         self.timeline.set_log(timeline_log)
         self._total_duration = timeline_log.total_duration
+        # A successful trace means the scene now compiles/runs: clear any marker
+        # left by the previous failure.
+        self.editor.clear_error_marker()
         self.preview_panel.set_cache_status("")
         # The host shows the final frame by default; line the playhead up with it and
         # forget any previously selected block so Play restarts from the beginning.
