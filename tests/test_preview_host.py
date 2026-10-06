@@ -28,6 +28,7 @@ from manim_editor.ipc import (
     decode_message,
 )
 from manim_editor.preview_host import FramePump, TickThrottler, parse_size
+from tests.helpers import FakeScene
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 REPO_ROOT = Path(__file__).parent.parent
@@ -112,6 +113,42 @@ class TestFramePump:
             assert pump.frames_sent == 0
         finally:
             receiver.close()
+
+
+class TestSceneShortcuts:
+    """The live shell must expose the manimgl-style scene API, offline-testable."""
+
+    def _host(self):
+        from manim_editor.preview_host import HostConfig, SceneHost
+
+        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
+        host.scene = FakeScene()
+        return host
+
+    def test_shortcuts_cover_scene_api(self) -> None:
+        shortcuts = self._host()._scene_shortcuts()
+        expected = {
+            "play",
+            "wait",
+            "add",
+            "remove",
+            "clear",
+            "save_state",
+            "undo",
+            "redo",
+            "reload",
+            "checkpoint_paste",
+            "clear_checkpoints",
+        }
+        assert expected <= set(shortcuts)
+        assert shortcuts["self"] is shortcuts["scene"]
+
+    def test_shortcuts_empty_without_scene(self) -> None:
+        from manim_editor.preview_host import HostConfig, SceneHost
+
+        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
+        assert host._scene_shortcuts() == {}
+        host._clear_checkpoints()  # no-op without checkpoints
 
 
 # ---------------------------------------------------------------------------

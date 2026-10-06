@@ -179,6 +179,7 @@ class SceneHost:
         self.frame_pump: FramePump | None = None
         self.tick = TickThrottler()
         self.shell: Any = None
+        self._checkpoints: Any = None
         self._loaded_once = False
 
     # ------------------------------------------------------------------
@@ -585,7 +586,40 @@ class SceneHost:
             "scene": scene,
             "self": scene,
             "reload": self._shell_reload,
+            "checkpoint_paste": self._checkpoint_paste,
+            "clear_checkpoints": self._clear_checkpoints,
         }
+
+    def _checkpoint_paste(
+        self,
+        code: str | None = None,
+        *,
+        skip: bool = False,
+        record: bool = False,
+        progress_bar: bool = True,
+    ) -> None:
+        """Run a code block with manimgl checkpoint semantics.
+
+        A leading ``# comment`` marks a checkpoint: the first call snapshots the
+        scene, later calls with the same comment restore that snapshot first.  With
+        no ``code`` argument the clipboard is used, matching manimgl's embed flow.
+        """
+        from manimlib.scene.scene_embed import CheckpointManager
+
+        if self._checkpoints is None:
+            self._checkpoints = CheckpointManager()
+        if self.shell is None:
+            self.shell = self._make_shell()
+        if code is not None:
+            import pyperclip
+
+            pyperclip.copy(code)
+        with self.scene.temp_config_change(skip, record, progress_bar):
+            self._checkpoints.checkpoint_paste(self.shell, self.scene)
+
+    def _clear_checkpoints(self) -> None:
+        if self._checkpoints is not None:
+            self._checkpoints.clear_checkpoints()
 
     def _shell_reload(self, *args: Any, **kwargs: Any) -> None:
         self.load()

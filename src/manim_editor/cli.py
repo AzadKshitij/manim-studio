@@ -39,6 +39,16 @@ def _print_json(payload: Any) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _ensure_utf8_console() -> None:
+    """Windows consoles default to legacy code pages; never crash on Unicode output."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        with contextlib.suppress(OSError, ValueError):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 @contextlib.contextmanager
 def _capture_scene_output() -> Iterator[io.StringIO]:
     """Keep user/scene prints out of structured CLI output.
@@ -332,6 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_console()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

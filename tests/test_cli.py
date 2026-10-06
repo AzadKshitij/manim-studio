@@ -3,13 +3,37 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
-from manim_editor.cli import main
+from manim_editor.cli import _ensure_utf8_console, main
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
+
+
+class TestConsole:
+    def test_reconfigures_streams_to_utf8(self) -> None:
+        class FakeStream:
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+
+            def reconfigure(self, **kwargs: object) -> None:
+                self.calls.append(kwargs)
+
+        streams = (FakeStream(), FakeStream())
+        original = (sys.stdout, sys.stderr)
+        sys.stdout, sys.stderr = streams  # type: ignore[assignment]
+        try:
+            _ensure_utf8_console()
+        finally:
+            sys.stdout, sys.stderr = original  # type: ignore[assignment]
+        assert all(call.get("encoding") == "utf-8" for stream in streams for call in stream.calls)
+
+    def test_plain_templates_output(self, capsys) -> None:
+        assert main(["templates"]) == 0
+        assert "Circle → Square" in capsys.readouterr().out
 
 
 class TestCheck:
