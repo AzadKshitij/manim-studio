@@ -37,6 +37,7 @@ __all__ = [
     "JsonLineReader",
     "JsonLineWriter",
     "ProtocolError",
+    "as_bytes",
     "decode_message",
     "encode_frame",
     "encode_message",
@@ -102,6 +103,14 @@ def encode_message(message: Mapping[str, Any]) -> bytes:
     except (TypeError, ValueError) as exc:
         raise ProtocolError(f"message is not JSON-serializable: {exc}") from exc
     return text.encode("utf-8") + b"\n"
+
+
+def as_bytes(value: Any) -> bytes:
+    """Normalise Qt-style byte containers (``QByteArray``) and buffers to ``bytes``."""
+    data = value.data() if hasattr(value, "data") else value
+    if isinstance(data, memoryview):
+        return data.tobytes()
+    return bytes(data)
 
 
 def decode_message(line: bytes | str) -> dict[str, Any]:
