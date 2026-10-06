@@ -950,6 +950,9 @@ class SceneHost:
 
     def run(self) -> int:
         _silence_known_noise()
+        from manim_editor.latex import apply_runtime_path
+
+        apply_runtime_path()
         try:
             if self.config.port is not None:
                 self._start_control()

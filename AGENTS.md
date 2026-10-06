@@ -41,6 +41,10 @@ explaining why not.
 | `manim_editor/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
 | `manim_editor/export.py` | Video export via `manimgl -w` subprocess | `subprocess` |
 | `manim_editor/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |
+| `manim_editor/latex.py` | LaTeX detection, runtime env and end-to-end probe | stdlib only |
+| `manim_editor/latex_install.py` | On-demand TinyTeX download/install | stdlib, `latex` |
+| `manim_editor/latex_compat.py` | Runtime fix for manimgl 1.7.2 `-no-pdf`/MiKTeX bug | `manimlib` lazily |
+| `manim_editor/manimgl_launcher.py` | Export entry point (manimgl CLI + LaTeX fix) | `manimlib` lazily |
 | `manim_editor/editor/*` | Qt shell, Scintilla, timeline widget, panels | PySide6 |
 | `manim_editor/cli.py` | Agent-facing CLI (`trace`, `export`, `check`, `new`, `preview`) | everything above |
 

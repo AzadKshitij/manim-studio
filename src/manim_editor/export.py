@@ -1,7 +1,8 @@
 """Video / still export through headless ``manimgl -w``.
 
 The editor never renders exports through its live preview process: exporting shells
-out to ``python -m manimlib`` with writing enabled, which keeps the live GL context
+out to ``python -m manim_editor.manimgl_launcher`` (the manimgl CLI with the LaTeX
+compatibility fix applied) with writing enabled, which keeps the live GL context
 healthy and gives deterministic files.
 """
 
@@ -121,7 +122,7 @@ def build_export_plan(
     argv: list[str] = [
         sys.executable,
         "-m",
-        "manimlib",
+        "manim_editor.manimgl_launcher",
         str(scene_file),
         *([scene_name] if scene_name else []),
         "-w",
@@ -171,6 +172,8 @@ def run_export(
     kills the process and returns ``returncode=-1`` with the log tail.  ``on_line``
     is invoked from a reader thread, so it must be thread-safe.
     """
+    from manim_editor.latex import runtime_env
+
     lines: list[str] = []
     process = subprocess.Popen(
         plan.argv,
@@ -179,6 +182,7 @@ def run_export(
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=runtime_env(),
     )
     assert process.stdout is not None
 

@@ -207,6 +207,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._embedded_action)
         self._add_action(view_menu, "Fit timeline", self.timeline.fit, "Ctrl+0")
 
+        tools_menu = menu_bar.addMenu("&Tools")
+        self._add_action(tools_menu, "LaTeX setup…", self.open_latex_setup)
+
         help_menu = menu_bar.addMenu("&Help")
         self._add_action(help_menu, "About", self.show_about)
 
@@ -248,9 +251,40 @@ class MainWindow(QMainWindow):
         bar = QStatusBar(self)
         self.setStatusBar(bar)
         self._host_state_label = QLabel("preview: off")
+        self._latex_label = QLabel("")
         self._cursor_label = QLabel("Ln 1, Col 1")
         bar.addPermanentWidget(self._cursor_label)
+        bar.addPermanentWidget(self._latex_label)
         bar.addPermanentWidget(self._host_state_label)
+        self.refresh_latex_indicator()
+
+    def refresh_latex_indicator(self) -> None:
+        from manim_editor.latex import latex_status
+
+        try:
+            status = latex_status()
+        except Exception:  # never break window construction for a PATH probe
+            self._latex_label.setText("")
+            return
+        self._latex_label.setText(f"LaTeX: {'ok' if status.ok else 'missing'}")
+
+    def open_latex_setup(self) -> None:
+        from manim_editor.editor.latex_dialog import LatexSetupDialog
+        from manim_editor.latex import latex_status
+
+        before = latex_status()
+        dialog = LatexSetupDialog(self)
+        dialog.exec()
+        after = latex_status()
+        self.refresh_latex_indicator()
+        if self._path is not None and self._auto_preview:
+            newly_ok = after.ok and not before.ok
+            newly_bundled = after.bundled and not before.bundled
+            if newly_ok or newly_bundled:
+                # The running host's PATH predates the install: restart it so the
+                # freshly installed LaTeX is visible to the scene.
+                self._set_status("LaTeX updated — restarting preview")
+                self._start_preview()
 
     def _connect_signals(self) -> None:
         self.editor.saveRequested.connect(self.save_buffer)
@@ -736,7 +770,11 @@ class MainWindow(QMainWindow):
         line = message.get("line")
         if isinstance(line, int):
             self.editor.set_error_marker(line, text)
-        self._set_status(f"preview error: {text}")
+        if "LaTeX" in text or "latex" in text:
+            self.refresh_latex_indicator()
+            self._set_status(f"preview error: {text} — open Tools > LaTeX setup and click Diagnose")
+        else:
+            self._set_status(f"preview error: {text}")
 
     def _on_frame(self, image: QImage) -> None:
         if not self._video_mode:

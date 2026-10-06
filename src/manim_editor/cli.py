@@ -75,7 +75,11 @@ def _parse_size(text: str) -> tuple[int, int]:
 def cmd_check(args: argparse.Namespace) -> int:
     result = check_scene_file(args.file)
     if args.json:
-        _print_json(result.to_dict())
+        from manim_editor.latex import latex_status
+
+        payload = result.to_dict()
+        payload["latex"] = latex_status().to_dict()
+        _print_json(payload)
     else:
         status = "OK" if result.ok else "FAIL"
         print(f"{status} {result.path}")
@@ -228,6 +232,64 @@ def cmd_still(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_latex(args: argparse.Namespace) -> int:
+    from manim_editor import latex_install
+    from manim_editor.latex import install_dir, latex_status, probe_compile
+
+    target = Path(args.dir) if args.dir else None
+    if args.action == "status":
+        status = latex_status(target)
+        if args.json:
+            _print_json(status.to_dict())
+        else:
+            state = "OK" if status.ok else "MISSING"
+            flavor = " (MiKTeX)" if status.miktex else ""
+            print(f"LaTeX: {state}{flavor} (dir {status.install_dir})")
+            if status.latex_path:
+                print(f"  latex: {status.latex_path}")
+            if status.dvisvgm_path:
+                print(f"  dvisvgm: {status.dvisvgm_path}")
+            if status.missing:
+                print(f"  missing: {', '.join(status.missing)}")
+                print("  run 'manim-editor latex install' or use Tools > LaTeX setup.")
+        return 0 if status.ok else 1
+    if args.action == "diagnose":
+        probe = probe_compile()
+        if args.json:
+            _print_json(probe.to_dict())
+        else:
+            print(f"LaTeX probe: {'OK' if probe.ok else 'FAIL'} - {probe.summary}")
+            if probe.detail:
+                print(probe.detail)
+        return 0 if probe.ok else 1
+    if args.action == "uninstall":
+        removed = latex_install.uninstall_latex(target)
+        print(f"removed {install_dir(target)}" if removed else "nothing to remove")
+        return 0
+    # install
+    try:
+        root = latex_install.install_latex(
+            target, on_progress=None if args.json else _latex_progress
+        )
+    except latex_install.InstallError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    status = latex_status(root)
+    if args.json:
+        _print_json({"install_dir": str(root), "latex": status.to_dict()})
+    else:
+        print(f"installed to {root} (ok={status.ok})")
+    return 0 if status.ok else 1
+
+
+def _latex_progress(progress: Any) -> None:
+    if progress.total_bytes:
+        pct = (progress.fraction or 0.0) * 100
+        print(f"latex {progress.stage}: {pct:.0f}%", file=sys.stderr)
+    else:
+        print(f"latex: {progress.stage}…", file=sys.stderr)
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
     from manim_editor.preview_host import HostConfig, SceneHost
 
@@ -340,11 +402,20 @@ def build_parser() -> argparse.ArgumentParser:
     api.add_argument("--json", action="store_true")
     api.set_defaults(func=cmd_api_index)
 
+    latex = subparsers.add_parser("latex", help="check/install/diagnose the LaTeX distribution")
+    latex.add_argument("action", choices=("status", "install", "uninstall", "diagnose"))
+    latex.add_argument("--dir", type=Path, default=None, help="override install location")
+    latex.add_argument("--json", action="store_true")
+    latex.set_defaults(func=cmd_latex)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_console()
+    from manim_editor.latex import apply_runtime_path
+
+    apply_runtime_path()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

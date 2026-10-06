@@ -69,11 +69,18 @@ def format_scene_error(exc: BaseException, scene_path: str | Path | None = None)
     """Turn an exception into a compact editor-friendly payload.
 
     Finds the innermost traceback frame inside the scene file so the editor can put
-    an error marker on the right line.
+    an error marker on the right line.  LaTeX failures get an actionable hint
+    (Tools > LaTeX setup) instead of manimgl's bare "compilation failed".
     """
     import traceback as _traceback
 
+    from manim_editor.latex import latex_hint_for
+
     text = "".join(_traceback.format_exception(type(exc), exc, exc.__traceback__))
+    hint = latex_hint_for(exc)
+    message = f"{type(exc).__name__}: {exc}"
+    if hint is not None:
+        message = f"{message}\n{hint}"
     line: int | None = None
     scene_file: str | None = None
     if scene_path is not None:
@@ -87,7 +94,7 @@ def format_scene_error(exc: BaseException, scene_path: str | Path | None = None)
             except OSError:
                 continue
     return SceneError(
-        message=f"{type(exc).__name__}: {exc}",
+        message=message,
         traceback_text=text,
         line=line,
         scene_file=scene_file,
@@ -291,6 +298,9 @@ def load_scene_module(path: str | Path, *, is_reload: bool = False) -> Any:
     with manimlib_argv_guard():
         from manimlib.module_loader import ModuleLoader
 
+        from manim_editor.latex_compat import patch_manimgl_latex_compat
+
+        patch_manimgl_latex_compat()
         try:
             module = ModuleLoader.get_module(str(resolved), is_during_reload=is_reload)
         except SceneLoadError:
@@ -393,6 +403,9 @@ def run_construct(scene: Any) -> None:
     """
     from manimlib.scene.scene import EndScene
 
+    from manim_editor.latex_compat import patch_manimgl_latex_compat
+
+    patch_manimgl_latex_compat()
     scene.virtual_animation_start_time = 0.0
     scene.real_animation_start_time = time.time()
     try:
@@ -415,6 +428,9 @@ def run_trace(
     Durations are the *requested* run times (skip mode), which is within one frame
     of the frame-quantized render durations and orders of magnitude faster to obtain.
     """
+    from manim_editor.latex import apply_runtime_path
+
+    apply_runtime_path()
     check = check_scene_file(path)
     if not check.ok:
         raise SceneLoadError(check.error or "scene check failed")
@@ -453,6 +469,9 @@ def render_still(
     """
     import tempfile
 
+    from manim_editor.latex import apply_runtime_path
+
+    apply_runtime_path()
     with manimlib_argv_guard():
         scene_class = load_scene_class(path, scene_name)
         scene = make_scene(scene_class, resolution=resolution, skip_animations=True)

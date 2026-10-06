@@ -68,6 +68,9 @@ def run_editor(
         stream=sys.stderr,
     )
     logger = logging.getLogger("manim_editor.editor")
+    from manim_editor.latex import apply_runtime_path
+
+    apply_runtime_path()
     app = create_application()
     from manim_editor.editor.main_window import MainWindow
 

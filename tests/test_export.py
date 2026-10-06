@@ -26,7 +26,7 @@ class TestBuildExportPlan:
         scene = _scene_file(tmp_path)
         plan = build_export_plan(scene, "DemoScene")
         argv = list(plan.argv)
-        assert argv[:3] == [sys.executable, "-m", "manimlib"]
+        assert argv[:3] == [sys.executable, "-m", "manim_editor.manimgl_launcher"]
         assert str(scene) in argv
         assert "DemoScene" in argv
         assert "-w" in argv and "--quiet" in argv
