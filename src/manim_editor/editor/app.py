@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 
 from PySide6.QtGui import QColor, QPalette
@@ -61,10 +62,19 @@ def run_editor(
     preview_size: tuple[int, int] = (1280, 720),
 ) -> int:
     """Create the editor window and run the Qt event loop."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    logger = logging.getLogger("manim_editor.editor")
     app = create_application()
     from manim_editor.editor.main_window import MainWindow
 
     window = MainWindow(path=path, embedded=embedded, preview_size=preview_size)
     window.resize(1500, 950)
     window.show()
-    return app.exec()
+    logger.info("editor started (embedded=%s, file=%s)", embedded, path)
+    exit_code = app.exec()
+    logger.info("editor exited with code %s", exit_code)
+    return exit_code
