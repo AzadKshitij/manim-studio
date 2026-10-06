@@ -376,20 +376,65 @@ def _tlmgr_install(root: Path, packages: tuple[str, ...], cancel: Any = None) ->
     if tlmgr is None:
         raise InstallError("tlmgr not found in the downloaded LaTeX distribution")
     _check_cancelled(cancel)
+    # A fresh TinyTeX often bundles a tlmgr older than the package
+    # repository, in which case every install refuses with "tlmgr itself
+    # needs to be updated".  Self-update first so the install below works.
+    _tlmgr_run(tlmgr, ("update", "--self"), cancel, purpose="tlmgr self-update")
+    _tlmgr_run(tlmgr, ("install", *packages), cancel, purpose="tlmgr install")
+    _tlmgr_verify(tlmgr, packages, cancel)
+
+
+def _tlmgr_run(
+    tlmgr: Path, args: tuple[str, ...], cancel: Any, *, purpose: str, timeout: float = 20 * 60
+) -> str:
+    """Run tlmgr, raising :class:`InstallError` (with the log tail) on failure."""
+    _check_cancelled(cancel)
     env = runtime_env()
     try:
         process = subprocess.run(
-            [str(tlmgr), "install", *packages],
+            [str(tlmgr), *args],
             capture_output=True,
             text=True,
-            timeout=20 * 60,
+            timeout=timeout,
             env=env,
         )
     except Exception as exc:
-        raise InstallError(f"tlmgr failed: {exc}") from exc
+        raise InstallError(f"{purpose} failed: {exc}") from exc
     if process.returncode != 0:
         tail = (process.stderr or process.stdout or "").strip().splitlines()[-10:]
-        raise InstallError("tlmgr install failed: " + " | ".join(tail))
+        raise InstallError(f"{purpose} failed: " + " | ".join(tail))
+    return process.stdout or ""
+
+
+def _tlmgr_verify(tlmgr: Path, packages: tuple[str, ...], cancel: Any = None) -> None:
+    """Confirm tlmgr really installed every package.
+
+    tlmgr can report success while installing nothing (e.g. a pending
+    self-update aborts the run but the wrapper still exits 0), which used to
+    leave a "ready" install that could not compile.  Never trust the exit
+    code alone: ask tlmgr what is actually installed.
+    """
+    output = _tlmgr_run(tlmgr, ("info", *packages), cancel, purpose="tlmgr verify")
+    missing = _missing_from_info(output, packages)
+    if missing:
+        raise InstallError(
+            "tlmgr reported success but these packages are still missing: "
+            + ", ".join(missing)
+            + ". Retry the install or check the package repository."
+        )
+
+
+def _missing_from_info(info_text: str, packages: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse ``tlmgr info`` output into the packages not marked installed."""
+    installed: dict[str, bool] = {}
+    current: str | None = None
+    for line in info_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("package:"):
+            current = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("installed:") and current is not None:
+            installed[current] = stripped.split(":", 1)[1].strip().lower() == "yes"
+    return tuple(name for name in packages if not installed.get(name, False))
 
 
 def _find_tlmgr(root: Path) -> Path | None:

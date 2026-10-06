@@ -81,26 +81,35 @@ DEFAULT_TEX_PREAMBLE = "\n".join(
 
 #: manimgl default-template packages that must exist for ``Tex``/``Brace``.
 #: Maps to TeX Live package names installed via ``tlmgr`` after TinyTeX setup.
+#: NOTE: these are *TeX Live* names, not ``\usepackage`` names — several
+#: differ (amssymb -> amsfonts, pifont -> psnfss, mathrsfs.sty -> jknapltx,
+#: textcomp -> tools, calligra.sty -> fundus-calligra, babel english
+#: option -> babel-english; font sources ship separately from their macro
+#: packages: wasy10.mf -> wasy, rsfs10.mf -> rsfs).  A wrong name sails through ``tlmgr install``
+#: but is caught by the post-install verification in ``latex_install``.
 MANIM_TEX_PACKAGES: tuple[str, ...] = (
     "standalone",
     "preview",
     "amsmath",
-    "amssymb",
+    "amsfonts",
     "babel",
+    "babel-english",
     "latex-fonts",
     "doublestroke",
     "setspace",
     "tipa",
     "relsize",
-    "textcomp",
-    "mathrsfs",
-    "calligra",
+    "tools",
+    "jknapltx",
+    "fundus-calligra",
     "wasysym",
+    "wasy",
+    "rsfs",
     "ragged2e",
     "physics",
     "xcolor",
     "microtype",
-    "pifont",
+    "psnfss",
     "ec",
     "dvisvgm",
 )

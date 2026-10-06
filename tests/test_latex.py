@@ -229,6 +229,60 @@ def test_verify_sha256_rejects_corrupt(tmp_path: Path) -> None:
         latex_install.verify_sha256(payload, "0" * 64)
 
 
+def test_missing_from_info_parsing() -> None:
+    text = "package:     standalone\ninstalled:   No\npackage:     preview\ninstalled:   Yes\n"
+    assert latex_install._missing_from_info(text, ("standalone", "preview")) == ("standalone",)
+    assert latex_install._missing_from_info(text, ("preview",)) == ()
+    assert latex_install._missing_from_info("", ("standalone",)) == ("standalone",)
+
+
+def test_tlmgr_install_self_updates_installs_and_verifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess as _subprocess
+
+    calls: list[tuple[str, ...]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = "package:     standalone\ninstalled:   Yes\n"
+        stderr = ""
+
+    def fake_run(argv: object, **kwargs: object) -> _Result:
+        calls.append(tuple(argv))  # type: ignore[arg-type]
+        return _Result()
+
+    monkeypatch.setattr(_subprocess, "run", fake_run)
+    root = tmp_path / "latex"
+    tlmgr = root / "bin" / "windows" / "tlmgr.bat"
+    tlmgr.parent.mkdir(parents=True)
+    tlmgr.write_text("@echo off\n", encoding="utf-8")
+    latex_install._tlmgr_install(root, ("standalone",))
+    kinds = [call[1:] for call in calls]
+    assert kinds[0][:2] == ("update", "--self")
+    assert kinds[1][:2] == ("install", "standalone")
+    assert kinds[2][0] == "info"
+
+
+def test_tlmgr_verify_fails_when_package_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess as _subprocess
+
+    class _Result:
+        returncode = 0
+        stdout = "package:     standalone\ninstalled:   No\n"
+        stderr = ""
+
+    monkeypatch.setattr(_subprocess, "run", lambda argv, **kwargs: _Result())
+    root = tmp_path / "latex"
+    tlmgr = root / "bin" / "windows" / "tlmgr.bat"
+    tlmgr.parent.mkdir(parents=True)
+    tlmgr.write_text("@echo off\n", encoding="utf-8")
+    with pytest.raises(latex_install.InstallError, match="still missing: standalone"):
+        latex_install._tlmgr_install(root, ("standalone",))
+
+
 def test_download_retries_then_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import urllib.error
 
