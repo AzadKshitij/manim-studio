@@ -115,6 +115,7 @@ class SceneCheckResult:
     scenes: tuple[SceneInfo, ...]
     error: str | None = None
     error_line: int | None = None
+    warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +124,7 @@ class SceneCheckResult:
             "scenes": [scene.to_dict() for scene in self.scenes],
             "error": self.error,
             "error_line": self.error_line,
+            "warnings": list(self.warnings),
         }
 
 
@@ -211,7 +213,48 @@ def check_scene_file(path: str | Path) -> SceneCheckResult:
         return SceneCheckResult(path=str(path), ok=False, scenes=(), error=str(exc))
     ok = bool(scenes)
     error = None if ok else "no Scene class found"
-    return SceneCheckResult(path=str(path), ok=ok, scenes=scenes, error=error)
+    warnings = _scan_color_traps(source) if ok else ()
+    return SceneCheckResult(path=str(path), ok=ok, scenes=scenes, error=error, warnings=warnings)
+
+
+#: manimgl classes whose ``__init__`` forces ``stroke_color=RED``, making the
+#: documented ``color=`` argument affect only the (usually invisible) fill.
+_COLOR_TRAP_CLASSES = {"Circle", "Dot", "Ellipse"}
+
+
+def _scan_color_traps(source: str) -> tuple[str, ...]:
+    """Warn about ``Circle(color=...)``-style calls that manimgl renders red.
+
+    This is a well-known sharp edge in manimgl's geometry classes: ``Circle``,
+    ``Dot`` and ``Ellipse`` default ``stroke_color`` to red and pass it explicitly,
+    so ``color=`` never reaches the visible stroke.  The warning keeps the
+    agent-facing ``check`` command honest without failing otherwise-valid scenes.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ()
+    warnings: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if isinstance(function, ast.Name):
+            name = function.id
+        elif isinstance(function, ast.Attribute):
+            name = function.attr
+        else:
+            continue
+        if name not in _COLOR_TRAP_CLASSES:
+            continue
+        keywords = {keyword.arg for keyword in node.keywords if keyword.arg}
+        if "color" in keywords and not ({"stroke_color", "fill_color"} & keywords):
+            warnings.append(
+                f"line {node.lineno}: {name}(color=...) only sets the fill in manimgl; "
+                f"the visible stroke keeps its default red. Pass stroke_color=... "
+                f"(or fill_color=... for filled shapes)."
+            )
+    return tuple(warnings)
 
 
 def _read_source(path: str | Path) -> str:

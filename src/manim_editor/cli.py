@@ -81,6 +81,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"{status} {result.path}")
         for scene in result.scenes:
             print(f"  scene {scene.name} (line {scene.lineno})")
+        for warning in result.warnings:
+            print(f"  warning: {warning}")
         if result.error:
             print(f"  error: {result.error}")
     return 0 if result.ok else 1

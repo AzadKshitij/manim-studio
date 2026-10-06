@@ -51,7 +51,7 @@ class FeatureShowcase(InteractiveScene):
     def construct(self) -> None:
         # --- static mobjects, text, and add() --------------------------------
         title = Text("Manim Editor", font_size=64).to_edge(UP)
-        circle = Circle(radius=1.1, color=BLUE)
+        circle = Circle(radius=1.1, stroke_color=BLUE)
         square = Square(side_length=1.8, color=YELLOW)
         self.add(title, circle)
 
@@ -82,10 +82,12 @@ class FeatureShowcase(InteractiveScene):
         self.redo()
 
         # --- updaters and always_redraw ----------------------------------------
-        dot = Dot(color=RED, radius=0.08)
+        dot = Dot(fill_color=RED, radius=0.08)
         dot.add_updater(lambda mob, dt: mob.rotate(120 * DEG * dt))
         self.add(dot)
-        clock = always_redraw(lambda: Dot(color=GREEN, radius=0.04).move_to(RIGHT * 2 + UP * 2))
+        clock = always_redraw(
+            lambda: Dot(fill_color=GREEN, radius=0.04).move_to(RIGHT * 2 + UP * 2)
+        )
         self.add(clock)
         self.wait(0.15)
         self.remove(clock)

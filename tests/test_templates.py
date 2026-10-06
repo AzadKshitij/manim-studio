@@ -46,6 +46,13 @@ class TestSceneTemplates:
         for template in SCENE_TEMPLATES:
             assert "self.play(Create(" not in template.code
 
+    def test_scene_templates_avoid_circle_color_trap(self) -> None:
+        # Circle(color=...) renders red in manimgl; templates must teach stroke_color.
+        for template in SCENE_TEMPLATES:
+            assert "Circle(color=" not in template.code
+        snippet = find_template("circle", kind="snippet")
+        assert "Circle(stroke_color=" in snippet.code
+
     @pytest.mark.manim
     @pytest.mark.parametrize("template", SCENE_TEMPLATES, ids=lambda t: t.key)
     def test_template_traces(self, template: Template, tmp_path: Path) -> None:

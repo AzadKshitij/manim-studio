@@ -87,6 +87,42 @@ class TestCheckSceneFile:
         assert not result.ok
         assert result.error == "no Scene class found"
 
+    def test_color_trap_warning_for_circle(self, tmp_path: Path) -> None:
+        source = (
+            "from manimlib import *\n\n\n"
+            "class Trapped(Scene):\n"
+            "    def construct(self):\n"
+            "        circle = Circle(color=BLUE)\n"
+            "        self.add(circle)\n"
+        )
+        result = check_scene_file(_write(tmp_path, "trapped.py", source))
+        assert result.ok
+        assert len(result.warnings) == 1
+        assert "stroke_color" in result.warnings[0]
+
+    def test_no_warning_with_stroke_color(self, tmp_path: Path) -> None:
+        source = (
+            "from manimlib import *\n\n\n"
+            "class Fine(Scene):\n"
+            "    def construct(self):\n"
+            "        circle = Circle(stroke_color=BLUE)\n"
+            "        square = Square(color=YELLOW)\n"
+            "        self.add(circle, square)\n"
+        )
+        result = check_scene_file(_write(tmp_path, "fine.py", source))
+        assert result.ok
+        assert result.warnings == ()
+
+    def test_dot_color_trap_warning(self, tmp_path: Path) -> None:
+        source = (
+            "from manimlib import *\n\n\n"
+            "class Dotty(Scene):\n"
+            "    def construct(self):\n"
+            "        self.add(Dot(color=RED))\n"
+        )
+        result = check_scene_file(_write(tmp_path, "dotty.py", source))
+        assert result.ok and result.warnings
+
     def test_missing_file_is_reported(self, tmp_path: Path) -> None:
         result = check_scene_file(tmp_path / "nope.py")
         assert not result.ok and result.error

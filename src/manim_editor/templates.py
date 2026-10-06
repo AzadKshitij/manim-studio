@@ -81,7 +81,9 @@ class {scene_name}(Scene):
 
 class {scene_name}(Scene):
     def construct(self) -> None:
-        circle = Circle(color=BLUE)
+        # manimgl note: Circle strokes default to red and `color=` only sets the
+        # invisible fill, so the visible colour needs stroke_color.
+        circle = Circle(stroke_color=BLUE)
         square = Square(color=YELLOW)
 
         self.play(ShowCreation(circle), run_time=1.5)
@@ -133,7 +135,7 @@ SNIPPET_TEMPLATES: tuple[Template, ...] = (
         key="circle",
         title="Show a circle",
         description="Add a circle to the scene.",
-        code="circle = Circle(color=BLUE)\nself.add(circle)\n",
+        code="circle = Circle(stroke_color=BLUE)\nself.add(circle)\n",
     ),
     Template(
         key="square",

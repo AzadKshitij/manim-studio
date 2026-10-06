@@ -50,6 +50,22 @@ rotations", the trace must contain three `Rotate` blocks.
 - 3D: `ThreeDAxes`, `Sphere`, `Surface`, `Cube`.
 - Updaters: `mob.add_updater(lambda m, dt: ...)`, `always_redraw(lambda: ...)`.
 
+### Sharp edge: `Circle(color=...)` renders red
+
+In manimgl, `Circle`, `Dot` and `Ellipse` default `stroke_color` to red and pass it
+explicitly, so `Circle(color=YELLOW)` only sets the invisible fill — the visible
+stroke stays red. Always colour those classes with `stroke_color=` (or `set_color()`):
+
+```python
+circle = Circle(stroke_color=BLUE)      # correct
+dot = Dot(fill_color=RED)               # Dot is filled; use fill_color
+circle = Circle(color=BLUE)             # WRONG: renders with a red stroke
+```
+
+`manim-editor check` detects this pattern and prints a warning on the offending line.
+Other shapes (`Square`, `Rectangle`, `Line`, `Arrow`, `RegularPolygon`, `Text`) pass
+`color=` through normally.
+
 ## Scene structure that traces well
 
 ```python
