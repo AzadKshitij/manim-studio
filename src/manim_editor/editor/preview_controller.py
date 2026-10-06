@@ -31,10 +31,11 @@ class PreviewController(QObject):
     helloReceived = Signal(dict)
     logReceived = Signal(dict)
     statusChanged = Signal(str, dict)
-    tickReceived = Signal(float, int)
+    tickReceived = Signal(float, int, bool)  # time, index, scrubbing
     stoppedReceived = Signal(dict)
     errorReceived = Signal(dict)
     execResultReceived = Signal(dict)
+    filmstripReceived = Signal(dict)
     frameReceived = Signal(QImage)
     hostLogReceived = Signal(str)
     stateChanged = Signal(str)  # starting | running | stopped | crashed
@@ -262,21 +263,32 @@ class PreviewController(QObject):
         data = ipc.as_bytes(self._frames.readAll())
         if not data:
             return
+        image = self.decode_latest_frame(data)
+        if image is not None:
+            self.frameReceived.emit(image)
+
+    def decode_latest_frame(self, data: bytes) -> QImage | None:
+        """Parse a burst of frame bytes and return only the newest frame.
+
+        Building (and dispatching) every intermediate QImage would make the GUI
+        thread stutter during fast scrubbing; only the latest state matters.
+        """
         try:
             frames = self._frame_parser.feed(data)
         except ipc.ProtocolError as exc:
             log.warning("frame protocol error: %s", exc)
             self._frame_parser.reset()
-            return
-        for frame in frames:
-            image = QImage(
-                frame.rgba,
-                frame.width,
-                frame.height,
-                frame.width * 4,
-                QImage.Format.Format_RGBA8888,
-            ).copy()
-            self.frameReceived.emit(image)
+            return None
+        if not frames:
+            return None
+        frame = frames[-1]
+        return QImage(
+            frame.rgba,
+            frame.width,
+            frame.height,
+            frame.width * 4,
+            QImage.Format.Format_RGBA8888,
+        ).copy()
 
     def _dispatch(self, message: dict[str, Any]) -> None:
         event = message.get("event")
@@ -285,13 +297,19 @@ class PreviewController(QObject):
         elif event == Event.STATUS:
             self.statusChanged.emit(str(message.get("state", "unknown")), message)
         elif event == Event.TICK:
-            self.tickReceived.emit(float(message.get("time", 0.0)), int(message.get("index", -1)))
+            self.tickReceived.emit(
+                float(message.get("time", 0.0)),
+                int(message.get("index", -1)),
+                bool(message.get("scrubbing", False)),
+            )
         elif event == Event.STOPPED:
             self.stoppedReceived.emit(message)
         elif event == Event.ERROR:
             self.errorReceived.emit(message)
         elif event == Event.EXEC_RESULT:
             self.execResultReceived.emit(message)
+        elif event == Event.FILMSTRIP:
+            self.filmstripReceived.emit(message)
         elif event == Event.PONG:
             pass
         else:

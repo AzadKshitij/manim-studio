@@ -57,7 +57,7 @@ class TestEditorLiveHost:
             # 3. Continuous scrub poses the scene at an exact time and streams a frame.
             scrub_ticks: list[tuple[float, int]] = []
             window.controller.tickReceived.connect(
-                lambda seconds, index: scrub_ticks.append((seconds, index))
+                lambda seconds, index, scrubbing: scrub_ticks.append((seconds, index))
             )
             before_image = window.preview_panel.current_image
             frames_before = len(frames)
@@ -72,6 +72,13 @@ class TestEditorLiveHost:
             # Mid-animation content must differ from the final frame shown on load.
             assert bytes(scrubbed_image.bits()) != bytes(before_image.bits())
             assert not errors, f"scrub produced errors: {errors}"
+
+            # 4. The filmstrip fills in the background and reports progress.
+            filmstrip: list[dict] = []
+            window.controller.filmstripReceived.connect(filmstrip.append)
+            qtbot.waitUntil(lambda: any(m.get("done") for m in filmstrip), timeout=120000)
+            assert window.preview_panel.cache_status.startswith("cache: ")
+            assert int(filmstrip[-1]["frames"]) >= 50
 
             # 4. An external file change triggers a watcher-driven reload with no errors.
             logs.clear()

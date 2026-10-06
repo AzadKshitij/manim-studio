@@ -34,6 +34,8 @@ explaining why not.
 | `manim_editor/timeline_model.py` | Pure data model for trace blocks, px/time math, JSON (de)serialization | stdlib only |
 | `manim_editor/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls | stdlib, `timeline_model` |
 | `manim_editor/ipc.py` | JSON-line protocol + binary frame codec | stdlib only |
+| `manim_editor/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
+| `manim_editor/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
 | `manim_editor/templates.py` | Scene + prefab templates | stdlib only |
 | `manim_editor/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
 | `manim_editor/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
@@ -50,8 +52,9 @@ wire protocol and `docs/adr/` for architectural decisions.
 
 Hard dependency rules:
 
-1. Pure modules (`timeline_model`, `tracer`, `ipc`, `templates`, `api_index`) must never
-   import Qt, `manimlib`, or `moderngl`. They are the fully-tested core.
+1. Pure modules (`timeline_model`, `tracer`, `ipc`, `filmstrip`, `templates`,
+   `api_index`) must never import Qt, `manimlib`, or `moderngl`. They are the
+   fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.
 3. GL lives in `preview_host` and nothing else. **One context, one thread.** The Qt GUI
@@ -87,6 +90,10 @@ Protocol details live in `docs/protocol.md`. Any change to the protocol bumps
   time is posed by replaying the scene in skip mode and interpolating the containing
   block's animations to the exact alpha, so `always_redraw`/updaters keep working.
   The host coalesces scrub requests (latest wins) so drags never queue replays.
+- Smoothness: an in-memory **filmstrip cache** (`filmstrip.py`, ADR 0003) is filled
+  by a block-granular crawler that renders each frame at O(1) per frame; scrub
+  requests are served cache-first and fall back to a replay pose on a miss. The
+  cache is replaced on every load/reload, so cached frames are never stale.
 
 ## 5. Code style
 

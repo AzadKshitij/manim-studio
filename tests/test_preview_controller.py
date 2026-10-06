@@ -55,3 +55,22 @@ class TestPreviewControllerIntegration:
         controller = PreviewController()
         assert controller.send("ping") is False
         assert controller.is_running is False
+
+    def test_decode_latest_frame_keeps_only_newest(self) -> None:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        from manim_editor import ipc
+
+        QApplication.instance() or QApplication([])
+        controller = PreviewController()
+        first = bytes([10, 10, 10, 255] * 4)  # 2x2
+        second = bytes([200, 200, 200, 255] * 4)
+        data = ipc.encode_frame(2, 2, first) + ipc.encode_frame(2, 2, second)
+        image = controller.decode_latest_frame(data)
+        assert image is not None
+        assert image.pixelColor(0, 0).red() == 200
+        # A partial burst produces no image and keeps parser state.
+        assert controller.decode_latest_frame(b"") is None

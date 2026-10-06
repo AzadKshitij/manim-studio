@@ -33,7 +33,7 @@ The frames channel is only opened in `--embedded` mode.
 | `play` | `from?` (block index, default 0) | replay in real time from a block |
 | `stop` | — | interrupt playback at the current frame |
 | `seek` | `index` | jump to the state at the *end* of block `index` |
-| `scrub` | `time` | pose the scene at an exact time (continuous scrub) |
+| `scrub` | `time` | show the scene at an exact time (filmstrip-first, replay on miss) |
 | `exec` | `code` | run Python in the live scene namespace (IPython) |
 | `ping` | — | liveness check |
 | `quit` | — | clean shutdown |
@@ -42,12 +42,13 @@ The frames channel is only opened in `--embedded` mode.
 
 | `event` | Fields | Meaning |
 | --- | --- | --- |
-| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name` | runtime trace finished |
+| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps` | runtime trace finished |
 | `status` | `state` (`idle`/`playing`/`seeking`/`error`/`closed`), `index?`, `note?` | lifecycle |
-| `tick` | `time`, `index`, `scrubbing?` | playhead update during playback/scrub (≤20 Hz) |
+| `tick` | `time`, `index`, `scrubbing?`, `cached?` | playhead update during playback/scrub (≤20 Hz) |
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |
 | `error` | `message`, `traceback`, `line?`, `scene_file?`, `context` | user-scene or command failure |
 | `exec_result` | `ok`, `stdout`, `stderr`, `result`, `error` | reply to `exec` |
+| `filmstrip` | `trace_id`, `frames`, `done`, `capped`, `fps` | background frame-cache progress |
 | `pong` | `t` | reply to `ping` |
 
 `log.blocks` is the spec `log.json` shape:

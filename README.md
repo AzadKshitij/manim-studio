@@ -8,8 +8,9 @@ scenes — Windows, macOS and Ubuntu 24+.
 - **Right:** realtime preview — embedded frame streaming (default) or an external
   GL window — plus a live IPython shell wired to the running scene.
 - **Bottom:** real timeline built from a runtime trace of `play()`/`wait()` — drag
-  to scrub the live scene at any point, wheel to pan, Ctrl+wheel to zoom, arrows to
-  step one frame, plus a rendered-video scrub slider.
+  to scrub the live scene smoothly, wheel to pan, Ctrl+wheel to zoom, arrows to
+  step one frame, plus a rendered-video scrub slider. A background filmstrip cache
+  makes scrubbing feel like a video while staying fresh after every edit.
 - **One click:** export MP4 (up to 4K/60) or a still via headless `manimgl -w`.
 
 Everything is also drivable without the GUI, so AI agents can create, validate,

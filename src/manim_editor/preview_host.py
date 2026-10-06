@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from manim_editor import ipc
+from manim_editor.filmstrip import Filmstrip
 from manim_editor.ipc import (
     Channel,
     Command,
@@ -45,10 +46,11 @@ from manim_editor.scene_runner import (
     format_scene_error,
     load_scene_module,
     make_scene,
+    manimlib_argv_guard,
     run_construct,
     select_scene_class,
 )
-from manim_editor.scrub import ScrubEngine, ScrubError
+from manim_editor.scrub import FilmstripCrawler, ScrubEngine, ScrubError, read_upright_rgba
 from manim_editor.timeline_model import TimelineBlock
 from manim_editor.tracer import TraceEvent, TraceRecorder
 
@@ -99,11 +101,12 @@ class TickThrottler:
 
 
 class FramePump:
-    """Latest-frame-wins RGBA streamer.
+    """Latest-frame-wins streamer.
 
-    ``offer()`` is called from the GL thread and never blocks; compression and the
-    blocking send happen on the pump thread.  When the transport cannot keep up,
-    frames are dropped instead of queued.
+    Callers hand over already-encoded payloads (``offer_encoded``); ``offer`` is a
+    convenience that encodes raw RGBA first.  Sending happens on the pump thread,
+    so the GL thread never blocks on the socket.  When the transport cannot keep
+    up, frames are dropped instead of queued.
     """
 
     def __init__(self, sock: socket.socket, *, level: int = 1) -> None:
@@ -112,7 +115,7 @@ class FramePump:
         self.frames_sent = 0
         self.frames_dropped = 0
         self._cond = threading.Condition()
-        self._slot: tuple[bytes, int, int] | None = None
+        self._slot: bytes | None = None
         self._running = True
         self._started = False
         self._thread = threading.Thread(target=self._loop, name="frame-pump", daemon=True)
@@ -122,12 +125,17 @@ class FramePump:
         self._thread.start()
 
     def offer(self, rgba: bytes, width: int, height: int) -> None:
+        """Encode raw upright RGBA and queue it (latest wins)."""
+        self.offer_encoded(ipc.encode_frame(width, height, rgba, level=self.level))
+
+    def offer_encoded(self, blob: bytes) -> None:
+        """Queue a complete encoded frame payload (latest wins)."""
         with self._cond:
             if not self._running:
                 return
             if self._slot is not None:
                 self.frames_dropped += 1
-            self._slot = (rgba, width, height)
+            self._slot = blob
             self._cond.notify()
 
     def _loop(self) -> None:
@@ -137,12 +145,11 @@ class FramePump:
                     self._cond.wait(0.5)
                 if not self._running:
                     return
-                item = self._slot
+                blob = self._slot
                 self._slot = None
-            assert item is not None
-            rgba, width, height = item
+            assert blob is not None
             try:
-                self._sock.sendall(ipc.encode_frame(width, height, rgba, level=self.level))
+                self._sock.sendall(blob)
             except OSError:
                 with self._cond:
                     self._running = False
@@ -203,6 +210,11 @@ class SceneHost:
         self._shutdown_started = False
         self._scrub_engine: ScrubEngine | None = None
         self._pending_scrub: float | None = None
+        self._filmstrip: Filmstrip | None = None
+        self._crawler: FilmstripCrawler | None = None
+        self._crawler_engine: ScrubEngine | None = None
+        self._trace_id = 0
+        self._fps = 30
 
     # ------------------------------------------------------------------
     # IPC plumbing
@@ -305,7 +317,10 @@ class SceneHost:
     # ------------------------------------------------------------------
 
     def _create_window(self) -> None:
-        from manimlib.window import Window
+        # manimgl parses sys.argv on first import; embedding the host in a process
+        # with its own CLI arguments (tests, tools) must not feed it those.
+        with manimlib_argv_guard():
+            from manimlib.window import Window
 
         width, height = self.config.size
         self.window = Window(size=(width, height))
@@ -397,6 +412,9 @@ class SceneHost:
         self.log.info("loaded %s (%s)", scene_class.__name__, scene_path)
 
         self._dispose_scrub_engine()
+        self._dispose_filmstrip()
+        self._trace_id += 1
+        self._filmstrip = Filmstrip()
         self._trace(scene_path)
         self._show_initial_frame()
         self._refresh_shell_namespace()
@@ -415,6 +433,7 @@ class SceneHost:
         self.blocks = snapshot.blocks
         self.stats = snapshot.stats
         self.events = snapshot.events
+        self._fps = int(getattr(scene.camera, "fps", 30)) or 30
         total = self.blocks[-1].end if self.blocks else 0.0
         self.log.info(
             "trace: %d blocks, %.3fs, %.2fs wall",
@@ -431,6 +450,8 @@ class SceneHost:
             trace_seconds=time.perf_counter() - started,
             scene=str(scene_path),
             scene_name=type(scene).__name__,
+            trace_id=self._trace_id,
+            fps=self._fps,
         )
 
     def _show_initial_frame(self) -> None:
@@ -496,6 +517,53 @@ class SceneHost:
             self._release_scene(self._scrub_engine.scene)
             self._scrub_engine = None
             self._pending_scrub = None
+
+    def _dispose_filmstrip(self) -> None:
+        """Drop the cache and the crawler that fills it (reload/shutdown)."""
+        if self._crawler_engine is not None:
+            self._release_scene(self._crawler_engine.scene)
+        self._crawler = None
+        self._crawler_engine = None
+        self._filmstrip = None
+
+    def _ensure_crawler(self) -> None:
+        """Lazily start filling the filmstrip in the background."""
+        if (
+            self._filmstrip is None
+            or self._crawler is not None
+            or not self.blocks
+            or not self.config.embedded
+            or self.frame_pump is None
+        ):
+            return
+        scene = self._make_scene(skip_animations=True)
+        scene.camera.use_window_fbo(False)
+        engine = ScrubEngine(scene, self.blocks)
+        self._crawler_engine = engine
+        self._crawler = FilmstripCrawler(
+            engine, self._filmstrip, self._fps, on_progress=self._on_crawl_progress
+        )
+        self.log.info("filmstrip: crawl started (%d blocks)", len(self.blocks))
+
+    def _on_crawl_progress(self, frames: int, done: bool, capped: bool) -> None:
+        self.emit(
+            Event.FILMSTRIP,
+            trace_id=self._trace_id,
+            frames=frames,
+            done=done,
+            capped=capped,
+            fps=self._fps,
+        )
+        if done:
+            self.log.info("filmstrip: %d frames ready (capped=%s)", frames, capped)
+
+    def _block_at(self, time_seconds: float) -> TimelineBlock | None:
+        if not self.blocks:
+            return None
+        for block in self.blocks:
+            if block.start <= time_seconds < block.end:
+                return block
+        return self.blocks[0] if time_seconds < self.blocks[0].start else self.blocks[-1]
 
     @staticmethod
     def _release_scene(scene: Any) -> None:
@@ -667,15 +735,34 @@ class SceneHost:
         self.emit_status("idle", index=index)
 
     def _cmd_scrub_time(self, time_seconds: float) -> None:
-        """Pose the scene at an arbitrary time and stream one frame.
+        """Show the scene at an arbitrary time, cache first.
 
-        Uses a dedicated replay scene so scrubbing never disturbs the scene that
-        playback/seeks use.  Short replays are coalesced upstream: while this
-        method runs, newer scrub requests replace each other in
-        ``self._pending_scrub`` instead of queueing up.
+        A filmstrip hit is sent directly with no GL work at all (smooth, like a
+        video seek but always fresh).  On a miss the scene is posed by replay and
+        the rendered frame is added to the filmstrip for the next visit.  Newer
+        scrub requests replace each other in ``self._pending_scrub`` while this
+        runs, so drags never build a backlog.
         """
         if not self.blocks:
             return
+        fps = self._fps
+        index = round(float(time_seconds) * fps)
+        if self._filmstrip is not None and self.frame_pump is not None:
+            blob = self._filmstrip.get(index)
+            if blob is None:
+                blob = self._filmstrip.nearest(index, max_distance=3)
+            if blob is not None:
+                self.frame_pump.offer_encoded(blob)
+                block = self._block_at(time_seconds)
+                self.emit(
+                    Event.TICK,
+                    time=round(float(time_seconds), 4),
+                    index=block.index if block is not None else 0,
+                    scrubbing=True,
+                    cached=True,
+                )
+                return
+
         if self._scrub_engine is None:
             scene = self._make_scene(skip_animations=True)
             if self.config.embedded:
@@ -689,21 +776,24 @@ class SceneHost:
             return
         scene = engine.scene
         scene.update_frame(dt=0, force_draw=True)
-        self.push_current_frame(scene)
-        index = block.index if block is not None else 0
-        self.log.info(
-            "scrub %.3fs -> %d mobjects, %d groups, fbo=%s",
-            time_seconds,
-            len(scene.mobjects),
-            len(scene.render_groups),
-            getattr(scene.camera.fbo, "glo", "?"),
-        )
+        blob = self._grab_frame_blob(scene.camera)
+        if self._filmstrip is not None:
+            self._filmstrip.put(index, blob)
+        if self.frame_pump is not None:
+            self.frame_pump.offer_encoded(blob)
         self.emit(
             Event.TICK,
             time=round(float(time_seconds), 4),
-            index=index,
+            index=block.index if block is not None else 0,
             scrubbing=True,
+            cached=False,
         )
+
+    @staticmethod
+    def _grab_frame_blob(camera: Any) -> bytes:
+        """Read one frame and return the complete encoded payload."""
+        rgba, width, height = read_upright_rgba(camera)
+        return ipc.encode_frame(width, height, rgba)
 
     def _cmd_exec(self, message: dict[str, Any]) -> None:
         code = str(message.get("code", ""))
@@ -847,6 +937,10 @@ class SceneHost:
             if pending_scrub is not None:
                 self._cmd_scrub_time(pending_scrub)
                 continue
+            self._ensure_crawler()
+            if self._crawler is not None and not self._crawler.done:
+                self._crawler.step()
+                continue
             if self.window is not None and getattr(self.window, "is_closing", False):
                 break
             if self.window is not None and not self.config.embedded:
@@ -857,6 +951,7 @@ class SceneHost:
     def _shutdown(self) -> None:
         self._shutdown_started = True
         self._dispose_scrub_engine()
+        self._dispose_filmstrip()
         if self.frame_pump is not None:
             self.frame_pump.close()
             self.frame_pump = None

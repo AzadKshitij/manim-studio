@@ -464,6 +464,37 @@ class TestHostIntegration:
         errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
         assert not errors, errors
 
+    def test_filmstrip_serves_cached_scrubs(self, host_session: Any) -> None:
+        """Once the crawl is done, scrubbing is served from the cache (no replay)."""
+        peer = host_session[0]
+        peer.drain()
+        peer.send(Command.RELOAD)
+        log = peer.wait_event(
+            lambda event: event.get("event") == Event.LOG and event.get("trace_id") is not None
+        )
+        trace_id = log["trace_id"]
+        peer.wait_event(
+            lambda event: (
+                event.get("event") == Event.FILMSTRIP
+                and event.get("trace_id") == trace_id
+                and event.get("done") is True
+            ),
+            timeout=180,
+        )
+        peer.drain()
+        peer.send(Command.SCRUB, time=1.0)
+        tick = peer.wait_event(
+            lambda event: (
+                event.get("event") == Event.TICK
+                and event.get("scrubbing") is True
+                and event.get("cached") is True
+            ),
+            timeout=30,
+        )
+        assert tick["time"] == pytest.approx(1.0)
+        errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
+        assert not errors, errors
+
     def test_load_switches_scene_name(self, host_session: Any, tmp_path: Path) -> None:
         """Renaming the scene class must not leave the host stuck on the old name."""
         peer = host_session[0]
@@ -514,3 +545,67 @@ class TestHostLiveness:
                 process.kill()
                 process.wait()
             peer.close()
+
+
+class _NullPump:
+    """Frame pump double for in-process host tests."""
+
+    def __init__(self) -> None:
+        self.offered: list[bytes] = []
+        self.frames_sent = 0
+        self.frames_dropped = 0
+
+    def offer(self, rgba: bytes, width: int, height: int) -> None:
+        from manim_editor.ipc import encode_frame
+
+        self.offered.append(encode_frame(width, height, rgba))
+
+    def offer_encoded(self, blob: bytes) -> None:
+        self.offered.append(blob)
+
+    def close(self) -> None:
+        pass
+
+
+def _frame_from_blob(blob: bytes) -> Frame:
+    frames = FrameParser().feed(blob)
+    assert len(frames) == 1
+    return frames[0]
+
+
+@pytest.mark.gl
+class TestFilmstripCrawlerInProcess:
+    """Deterministic crawler/invalidation tests without the socket harness."""
+
+    def test_crawl_fills_cache_and_reload_invalidates(self) -> None:
+        from manim_editor.preview_host import HostConfig, SceneHost
+
+        host = SceneHost(HostConfig(scene_path=SCENE_FILE, embedded=True, size=(320, 180)))
+        host._create_window()
+        host.frame_pump = _NullPump()
+        try:
+            host.load()
+            assert host._filmstrip is not None and host._filmstrip.is_empty
+            host._ensure_crawler()
+            assert host._crawler is not None
+            for _ in range(5000):
+                if host._crawler.done:
+                    break
+                host._crawler.step()
+            assert host._crawler.done and not host._crawler.capped
+            strip = host._filmstrip
+            assert strip.frames >= 50
+
+            # Block 0 is ShowCreation over 0.3s at 30fps: index 5 is mid-arc,
+            # index 9 is the completed circle.
+            partial = _frame_from_blob(strip.get(5) or strip.nearest(5, 3) or b"")
+            complete = _frame_from_blob(strip.get(9) or strip.nearest(9, 3) or b"")
+            assert 0 < _content_pixels(partial) < _content_pixels(complete)
+            assert partial.width == 320 and partial.height == 180
+
+            # Reloading replaces the cache immediately (freshness guarantee).
+            host.load()
+            assert host._filmstrip is not None and host._filmstrip.is_empty
+            assert host._crawler is None
+        finally:
+            host._shutdown()

@@ -39,11 +39,15 @@ class PreviewPanel(QWidget):
         self._state_label.setObjectName("previewState")
         self._mode_label = QLabel("embedded")
         self._mode_label.setObjectName("previewMode")
+        self._cache_label = QLabel("")
+        self._cache_label.setObjectName("previewCache")
+        self._cache_label.setStyleSheet("color: #888888;")
         self._time_label = QLabel("0.0s")
         self._time_label.setObjectName("previewTime")
 
         header = QHBoxLayout()
         header.addWidget(self._mode_label)
+        header.addWidget(self._cache_label)
         header.addStretch(1)
         header.addWidget(self._time_label)
         header.addSpacing(8)
@@ -109,6 +113,10 @@ class PreviewPanel(QWidget):
     def current_image(self) -> QImage | None:
         return self._image
 
+    @property
+    def cache_status(self) -> str:
+        return self._cache_label.text().lstrip(" ·")
+
     def set_frame(self, image: QImage) -> None:
         self._image = image
         self._rescale()
@@ -124,6 +132,10 @@ class PreviewPanel(QWidget):
             "crashed": "#FF8080",
         }.get(state, "#CCCCCC")
         self._state_label.setStyleSheet(f"color: {color};")
+
+    def set_cache_status(self, text: str) -> None:
+        """Small filmstrip indicator ('cache: 312 frames…')."""
+        self._cache_label.setText(f" · {text}" if text else "")
 
     def set_time(self, seconds: float, total: float | None = None) -> None:
         if total is None:

@@ -270,6 +270,7 @@ class MainWindow(QMainWindow):
         self.controller.stoppedReceived.connect(self._on_stopped)
         self.controller.errorReceived.connect(self._on_error)
         self.controller.execResultReceived.connect(self._on_exec_result)
+        self.controller.filmstripReceived.connect(self._on_filmstrip)
         self.controller.frameReceived.connect(self._on_frame)
         self.controller.hostLogReceived.connect(self._append_shell_output)
         self.controller.stateChanged.connect(self._on_host_state)
@@ -678,6 +679,7 @@ class MainWindow(QMainWindow):
             return
         self.timeline.set_log(timeline_log)
         self._total_duration = timeline_log.total_duration
+        self.preview_panel.set_cache_status("")
         # The host shows the final frame by default; line the playhead up with it and
         # forget any previously selected block so Play restarts from the beginning.
         self.timeline.set_playhead(self._total_duration if self._initial_frame == "end" else 0.0)
@@ -693,11 +695,26 @@ class MainWindow(QMainWindow):
         self.preview_panel.set_status(state, note)
         self.timeline.set_playing(self._playing)
 
-    def _on_tick(self, time_seconds: float, _index: int) -> None:
+    def _on_tick(self, time_seconds: float, _index: int, scrubbing: bool = False) -> None:
+        # While the user is dragging, the widget already owns the playhead: applying
+        # host ticks here would fight the pointer and make it jitter (ticks for
+        # older positions can arrive after the pointer has moved on).
+        if scrubbing:
+            return
         if self._video_mode:
             return
         self.timeline.set_playhead(time_seconds)
         self.preview_panel.set_time(time_seconds, self._total_duration)
+
+    def _on_filmstrip(self, message: dict[str, Any]) -> None:
+        frames = int(message.get("frames", 0))
+        done = bool(message.get("done", False))
+        capped = bool(message.get("capped", False))
+        if done:
+            text = f"cache: {frames} frames" + (" (capped)" if capped else "")
+        else:
+            text = f"cache: {frames} frames…"
+        self.preview_panel.set_cache_status(text)
 
     def _on_stopped(self, message: dict[str, Any]) -> None:
         self.timeline.set_playing(False)

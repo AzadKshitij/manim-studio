@@ -311,7 +311,7 @@ class TestTraceAndTimeline:
 
     def test_tick_moves_playhead(self, window: MainWindow) -> None:
         window._on_log(SAMPLE_LOG_EVENT)
-        window._on_tick(1.25, 1)
+        window._on_tick(1.25, 1, False)
         assert window.timeline.playhead_time == pytest.approx(1.25)
 
     def test_malformed_log_is_ignored(self, window: MainWindow) -> None:

@@ -89,6 +89,7 @@ class Event:
     STOPPED: Final = "stopped"
     ERROR: Final = "error"
     EXEC_RESULT: Final = "exec_result"
+    FILMSTRIP: Final = "filmstrip"
     PONG: Final = "pong"
 
 
