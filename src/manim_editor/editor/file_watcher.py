@@ -46,7 +46,13 @@ class DebounceGate:
 
 
 class FileWatcher(QObject):
-    """Debounced, self-save-aware watcher for one scene file."""
+    """Debounced, self-save-aware watcher for one scene file.
+
+    ``QFileSystemWatcher`` is the fast path; a low-frequency signature poll
+    (mtime + size) is the safety net.  Windows' ``ReadDirectoryChangesW`` can drop
+    events (buffer overflow, network shares, editors that replace files), and a
+    missed auto-reload is much worse than a 2-second worst-case latency.
+    """
 
     file_changed = Signal(str)
     file_missing = Signal(str)
@@ -56,6 +62,7 @@ class FileWatcher(QObject):
         *,
         delay_ms: int = 500,
         suppress_ms: int = 750,
+        poll_ms: int = 2000,
         parent: QObject | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -71,7 +78,11 @@ class FileWatcher(QObject):
         self._timer.setSingleShot(True)
         self._timer.setInterval(delay_ms)
         self._timer.timeout.connect(self._fire)
+        self._poll = QTimer(self)
+        self._poll.setInterval(poll_ms)
+        self._poll.timeout.connect(self._check_signature)
         self._path: Path | None = None
+        self._signature: tuple[int, int] | None = None
         self._suppress_until = 0.0
 
     @property
@@ -84,20 +95,50 @@ class FileWatcher(QObject):
         target = Path(path).resolve()
         self._path = target
         self._gate.reset()
+        self._signature = self._file_signature(target)
         self._attach(target)
+        self._poll.start()
 
     def stop(self) -> None:
         self._timer.stop()
+        self._poll.stop()
         self._detach()
         self._path = None
+        self._signature = None
         self._gate.reset()
 
     def note_save(self) -> None:
         """Call right after the editor writes the file to suppress the echo."""
         self._suppress_until = self._clock() + self.suppress_ms / 1000.0
         self._gate.reset()
+        if self._path is not None:
+            self._signature = self._file_signature(self._path)
 
     # -- internals ---------------------------------------------------------
+
+    @staticmethod
+    def _file_signature(target: Path) -> tuple[int, int] | None:
+        try:
+            stat = target.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _check_signature(self) -> None:
+        if self._path is None:
+            return
+        signature = self._file_signature(self._path)
+        if signature == self._signature:
+            return
+        self._signature = signature
+        if signature is None:
+            # Deletion is reported by the filesystem watcher; the poll only needs to
+            # notice when the file comes back or changes.
+            return
+        if self._clock() < self._suppress_until:
+            return
+        self._gate.note()
+        self._timer.start(self.delay_ms)
 
     def _attach(self, target: Path) -> None:
         files = [str(target)] if target.exists() else []
@@ -117,12 +158,14 @@ class FileWatcher(QObject):
         if self._clock() < self._suppress_until:
             return
         if not self._path.exists():
+            self._signature = None
             # Atomic replace: keep watching the directory and re-attach the file.
             self._attach(self._path)
             if self._timer.isActive():
                 self._timer.stop()
             self.file_missing.emit(str(self._path))
             return
+        self._signature = self._file_signature(self._path)
         self._gate.note()
         self._timer.start(self.delay_ms)
 
@@ -131,5 +174,6 @@ class FileWatcher(QObject):
             return
         self._gate.reset()
         self._attach(self._path)  # re-arm in case of atomic replace
+        self._signature = self._file_signature(self._path)
         if self._path.exists():
             self.file_changed.emit(str(self._path))

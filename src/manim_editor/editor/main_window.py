@@ -342,12 +342,17 @@ class MainWindow(QMainWindow):
         self.editor.load_file(target)
         self._path = target.resolve()
         self.watcher.watch(self._path)
+        # Repopulating the scene combo must not look like a user selection; otherwise
+        # every open would immediately send a redundant `load` to the freshly started
+        # preview host.
         self._scene_combo.blockSignals(True)
-        self._scene_combo.clear()
-        self._scene_combo.addItems([scene.name for scene in check.scenes])
-        self._scene_combo.blockSignals(False)
-        if check.scenes:
-            self._scene_combo.setCurrentIndex(0)
+        try:
+            self._scene_combo.clear()
+            self._scene_combo.addItems([scene.name for scene in check.scenes])
+            if check.scenes:
+                self._scene_combo.setCurrentIndex(0)
+        finally:
+            self._scene_combo.blockSignals(False)
         self._update_title()
         self._set_status(f"opened {self._path.name} ({len(check.scenes)} scene(s))")
         if self._auto_reload:

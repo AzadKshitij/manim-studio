@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from manim_editor.editor.file_watcher import DebounceGate, FileWatcher
@@ -69,6 +70,18 @@ class TestFileWatcher:
         watcher.watch(target)
         with qtbot.waitSignal(watcher.file_missing, timeout=8000):
             target.unlink()
+
+    def test_signature_poll_catches_missed_fs_events(self, qtbot, tmp_path: Path) -> None:
+        """Even if QFileSystemWatcher drops an event, the poll must reload."""
+        target = tmp_path / "scene.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        watcher = FileWatcher(delay_ms=50, poll_ms=150)
+        watcher.watch(target)
+        watcher._on_fs_event = lambda _path: None  # type: ignore[method-assign]
+        with qtbot.waitSignal(watcher.file_changed, timeout=8000):
+            target.write_text("x = 2\n", encoding="utf-8")
+            stat = target.stat()
+            os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
 
     def test_watch_replaces_previous(self, qtbot, tmp_path: Path) -> None:
         first = tmp_path / "a.py"

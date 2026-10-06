@@ -11,6 +11,22 @@ from manim_editor.editor.main_window import MainWindow
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 
+
+class _StubController:
+    """Records `load` commands so tests can assert what the window sends."""
+
+    def __init__(self) -> None:
+        self.loads: list[tuple[str, str | None]] = []
+        self.is_running = True
+
+    def load(self, path, scene_name: str | None = None) -> bool:
+        self.loads.append((str(path), scene_name))
+        return True
+
+    def shutdown(self) -> None:
+        pass
+
+
 SAMPLE_LOG_EVENT = {
     "event": "log",
     "blocks": [
@@ -53,6 +69,26 @@ class TestOpenAndSave:
         assert window._scene_combo.currentText() == "FeatureShowcase"
         assert "FeatureShowcase" in window.editor.text()
         assert window.watcher.path == SCENE_FILE.resolve()
+
+    def test_open_does_not_send_redundant_load(self, window: MainWindow, tmp_path: Path) -> None:
+        """Populating the scene combo must not look like a user scene switch."""
+        target = tmp_path / "two.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\n"
+            "class Alpha(Scene):\n    pass\n\n\n"
+            "class Beta(Scene):\n    pass\n",
+            encoding="utf-8",
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            assert window.open_path(target) is True
+            assert stub.loads == []
+            window._scene_combo.setCurrentIndex(1)  # a real user switch does send load
+            assert stub.loads and stub.loads[-1][1] == "Beta"
+        finally:
+            window.controller = original  # type: ignore[assignment]
 
     def test_open_broken_file_rejected(self, window: MainWindow, tmp_path: Path) -> None:
         broken = tmp_path / "broken.py"
