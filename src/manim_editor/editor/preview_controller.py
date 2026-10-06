@@ -188,6 +188,10 @@ class PreviewController(QObject):
     def seek(self, index: int) -> bool:
         return self.send(Command.SEEK, index=int(index))
 
+    def scrub(self, time_seconds: float) -> bool:
+        """Pose the scene at an arbitrary time (coalesced host-side)."""
+        return self.send(Command.SCRUB, time=float(time_seconds))
+
     def exec_code(self, code: str) -> bool:
         return self.send(Command.EXEC, code=code)
 

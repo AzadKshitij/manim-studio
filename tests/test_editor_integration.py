@@ -54,7 +54,26 @@ class TestEditorLiveHost:
             assert window.preview_panel.current_image is not None
             assert window.preview_panel.current_image.width() == 320
 
-            # 3. An external file change triggers a watcher-driven reload with no errors.
+            # 3. Continuous scrub poses the scene at an exact time and streams a frame.
+            scrub_ticks: list[tuple[float, int]] = []
+            window.controller.tickReceived.connect(
+                lambda seconds, index: scrub_ticks.append((seconds, index))
+            )
+            before_image = window.preview_panel.current_image
+            frames_before = len(frames)
+            window.scrub_to_time(0.15)
+            qtbot.waitUntil(
+                lambda: any(abs(seconds - 0.15) < 1e-6 for seconds, _ in scrub_ticks),
+                timeout=60000,
+            )
+            qtbot.waitUntil(lambda: len(frames) > frames_before, timeout=30000)
+            scrubbed_image = window.preview_panel.current_image
+            assert scrubbed_image is not None and before_image is not None
+            # Mid-animation content must differ from the final frame shown on load.
+            assert bytes(scrubbed_image.bits()) != bytes(before_image.bits())
+            assert not errors, f"scrub produced errors: {errors}"
+
+            # 4. An external file change triggers a watcher-driven reload with no errors.
             logs.clear()
             scene_copy.write_text(
                 scene_copy.read_text(encoding="utf-8") + "\n# touched externally\n",

@@ -48,6 +48,7 @@ from manim_editor.scene_runner import (
     run_construct,
     select_scene_class,
 )
+from manim_editor.scrub import ScrubEngine, ScrubError
 from manim_editor.timeline_model import TimelineBlock
 from manim_editor.tracer import TraceEvent, TraceRecorder
 
@@ -200,6 +201,8 @@ class SceneHost:
         self._checkpoints: Any = None
         self._loaded_once = False
         self._shutdown_started = False
+        self._scrub_engine: ScrubEngine | None = None
+        self._pending_scrub: float | None = None
 
     # ------------------------------------------------------------------
     # IPC plumbing
@@ -393,6 +396,7 @@ class SceneHost:
         self._loaded_once = True
         self.log.info("loaded %s (%s)", scene_class.__name__, scene_path)
 
+        self._dispose_scrub_engine()
         self._trace(scene_path)
         self._show_initial_frame()
         self._refresh_shell_namespace()
@@ -455,12 +459,20 @@ class SceneHost:
     def _install_hooks(self, scene: Any) -> None:
         from manimlib.scene.scene import EndScene
 
+        # Tracks whether the most recent update_frame actually drew.  emit_frame()
+        # is called after every play/wait step, including in skip-animations mode
+        # where update_frame returns before rendering; pushing those would stream
+        # blank (never-drawn) frames.
+        drew = {"value": False}
+
         original_update = scene.update_frame
 
         def update_frame(dt: float = 0, force_draw: bool = False) -> Any:
             if self.stop_event.is_set():
                 raise EndScene()
-            return original_update(dt, force_draw)
+            result = original_update(dt, force_draw)
+            drew["value"] = bool(force_draw) or not bool(getattr(scene, "skip_animations", False))
+            return result
 
         scene.update_frame = update_frame
 
@@ -468,7 +480,8 @@ class SceneHost:
 
         def emit_frame() -> Any:
             result = original_emit()
-            self._on_rendered_frame(scene)
+            if drew["value"]:
+                self._on_rendered_frame(scene)
             return result
 
         scene.emit_frame = emit_frame
@@ -477,6 +490,12 @@ class SceneHost:
         if self.scene is not None:
             self._release_scene(self.scene)
             self.scene = None
+
+    def _dispose_scrub_engine(self) -> None:
+        if self._scrub_engine is not None:
+            self._release_scene(self._scrub_engine.scene)
+            self._scrub_engine = None
+            self._pending_scrub = None
 
     @staticmethod
     def _release_scene(scene: Any) -> None:
@@ -511,19 +530,27 @@ class SceneHost:
                 index=int(scene.num_plays),
             )
 
-    def push_current_frame(self) -> None:
+    def push_current_frame(self, scene: Any | None = None) -> None:
         """Read back the current offscreen frame and hand it to the pump.
 
         Frames are flipped to upright RGBA so the editor can build a ``QImage``
         without per-pixel work.
         """
-        if self.frame_pump is None or self.scene is None:
+        target = scene if scene is not None else self.scene
+        if self.frame_pump is None or target is None:
             return
         import numpy as np
 
-        camera = self.scene.camera
+        camera = target.camera
         width, height = (int(v) for v in camera.default_pixel_shape)
         raw = camera.get_raw_fbo_data()
+        self.log.debug(
+            "push %dx%d fbo=%s head=%s",
+            width,
+            height,
+            getattr(camera.fbo, "glo", "?"),
+            raw[:12].hex(),
+        )
         array = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 4)[::-1]
         self.frame_pump.offer(array.tobytes(), width, height)
 
@@ -546,6 +573,10 @@ class SceneHost:
                 self._cmd_play(message)
             elif command == Command.SEEK:
                 self._cmd_seek(message)
+            elif command == Command.SCRUB:
+                # Scrubbing arrives at pointer rate; keep only the newest request
+                # and let the idle loop execute it (replay + render coalescing).
+                self._pending_scrub = max(0.0, float(message.get("time") or 0.0))
             elif command == Command.STOP:
                 pass  # handled by the fast path
             elif command == Command.EXEC:
@@ -634,6 +665,45 @@ class SceneHost:
         block = self.blocks[index]
         self.emit(Event.TICK, time=block.end, index=index)
         self.emit_status("idle", index=index)
+
+    def _cmd_scrub_time(self, time_seconds: float) -> None:
+        """Pose the scene at an arbitrary time and stream one frame.
+
+        Uses a dedicated replay scene so scrubbing never disturbs the scene that
+        playback/seeks use.  Short replays are coalesced upstream: while this
+        method runs, newer scrub requests replace each other in
+        ``self._pending_scrub`` instead of queueing up.
+        """
+        if not self.blocks:
+            return
+        if self._scrub_engine is None:
+            scene = self._make_scene(skip_animations=True)
+            if self.config.embedded:
+                scene.camera.use_window_fbo(False)
+            self._scrub_engine = ScrubEngine(scene, self.blocks)
+        engine = self._scrub_engine
+        try:
+            block = engine.pose(time_seconds)
+        except ScrubError as exc:
+            self.emit_error(exc, context="scrub")
+            return
+        scene = engine.scene
+        scene.update_frame(dt=0, force_draw=True)
+        self.push_current_frame(scene)
+        index = block.index if block is not None else 0
+        self.log.info(
+            "scrub %.3fs -> %d mobjects, %d groups, fbo=%s",
+            time_seconds,
+            len(scene.mobjects),
+            len(scene.render_groups),
+            getattr(scene.camera.fbo, "glo", "?"),
+        )
+        self.emit(
+            Event.TICK,
+            time=round(float(time_seconds), 4),
+            index=index,
+            scrubbing=True,
+        )
 
     def _cmd_exec(self, message: dict[str, Any]) -> None:
         code = str(message.get("code", ""))
@@ -773,6 +843,10 @@ class SceneHost:
     def _idle_loop(self) -> None:
         while not self.quit_event.is_set():
             self._drain_commands()
+            pending_scrub, self._pending_scrub = self._pending_scrub, None
+            if pending_scrub is not None:
+                self._cmd_scrub_time(pending_scrub)
+                continue
             if self.window is not None and getattr(self.window, "is_closing", False):
                 break
             if self.window is not None and not self.config.embedded:
@@ -782,6 +856,7 @@ class SceneHost:
 
     def _shutdown(self) -> None:
         self._shutdown_started = True
+        self._dispose_scrub_engine()
         if self.frame_pump is not None:
             self.frame_pump.close()
             self.frame_pump = None

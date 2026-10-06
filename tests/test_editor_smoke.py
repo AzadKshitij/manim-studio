@@ -7,20 +7,41 @@ from pathlib import Path
 import pytest
 from PySide6.QtGui import QImage
 
+from manim_editor.editor import main_window as main_window_module
 from manim_editor.editor.main_window import MainWindow
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 
 
 class _StubController:
-    """Records `load` commands so tests can assert what the window sends."""
+    """Records commands so tests can assert what the window sends."""
 
     def __init__(self) -> None:
         self.loads: list[tuple[str, str | None]] = []
+        self.scrubs: list[float] = []
+        self.seeks: list[int] = []
+        self.plays: list[int] = []
+        self.stops = 0
         self.is_running = True
 
     def load(self, path, scene_name: str | None = None) -> bool:
         self.loads.append((str(path), scene_name))
+        return True
+
+    def scrub(self, time_seconds: float) -> bool:
+        self.scrubs.append(float(time_seconds))
+        return True
+
+    def seek(self, index: int) -> bool:
+        self.seeks.append(int(index))
+        return True
+
+    def play(self, from_index: int = 0) -> bool:
+        self.plays.append(int(from_index))
+        return True
+
+    def stop_playback(self) -> bool:
+        self.stops += 1
         return True
 
     def shutdown(self) -> None:
@@ -162,6 +183,87 @@ class TestOpenAndSave:
         assert window.open_path(target) is True
         assert window._scene_combo.currentText() == "MyIntro"
 
+    def test_create_scene_with_explicit_name(self, window: MainWindow, tmp_path: Path) -> None:
+        target = window.create_scene_file(
+            tmp_path / "my_intro.py", "circle_to_square", "CustomName"
+        )
+        assert target is not None
+        assert "class CustomName(Scene):" in target.read_text(encoding="utf-8")
+
+
+def _drive_new_scene(
+    monkeypatch: pytest.MonkeyPatch,
+    save_path: Path,
+    name_replies: list[tuple[str, bool]],
+    template_key: str = "circle_to_square",
+) -> tuple[list[str], list[str]]:
+    """Run ``new_scene_dialog`` with scripted dialog replies.
+
+    Returns the recorded warnings and the suggested save locations, in order.
+    """
+    warnings: list[str] = []
+    suggestions: list[str] = []
+    replies = list(name_replies)
+
+    class _InputDialog:
+        @staticmethod
+        def getItem(*args: object, **kwargs: object) -> tuple[str, bool]:
+            return f"{template_key} — scripted", True
+
+        @staticmethod
+        def getText(*args: object, **kwargs: object) -> tuple[str, bool]:
+            return replies.pop(0)
+
+    class _FileDialog:
+        @staticmethod
+        def getSaveFileName(*args: object, **kwargs: object) -> tuple[str, str]:
+            suggestions.append(str(args[2]))
+            return str(save_path), "Python files (*.py)"
+
+    class _MessageBox:
+        @staticmethod
+        def warning(parent: object, title: str, text: str, *args: object) -> None:
+            warnings.append(text)
+
+    monkeypatch.setattr(main_window_module, "QInputDialog", _InputDialog)
+    monkeypatch.setattr(main_window_module, "QFileDialog", _FileDialog)
+    monkeypatch.setattr(main_window_module, "QMessageBox", _MessageBox)
+    return warnings, suggestions
+
+
+class TestNewSceneDialog:
+    def test_uses_chosen_scene_name(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "picked.py"
+        warnings, suggestions = _drive_new_scene(monkeypatch, target, [("IntroAnimation", True)])
+        window.new_scene_dialog()
+        assert warnings == []
+        assert target.is_file()
+        assert "class IntroAnimation(Scene):" in target.read_text(encoding="utf-8")
+        assert suggestions and suggestions[0].endswith("intro_animation.py")
+        assert window.current_path == target.resolve()
+        assert window._scene_combo.currentText() == "IntroAnimation"
+
+    def test_invalid_names_warn_and_retry(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "retry.py"
+        replies = [("not a name", True), ("class", True), ("SecondTry", True)]
+        warnings, _ = _drive_new_scene(monkeypatch, target, replies)
+        window.new_scene_dialog()
+        assert len(warnings) == 2
+        assert "class SecondTry(Scene):" in target.read_text(encoding="utf-8")
+
+    def test_cancel_at_name_prompt_creates_nothing(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "cancelled.py"
+        _drive_new_scene(monkeypatch, target, [("Whatever", False)])
+        window.new_scene_dialog()
+        assert not target.exists()
+        assert window.current_path is None
+
 
 class TestTraceAndTimeline:
     def test_log_event_populates_timeline(self, window: MainWindow) -> None:
@@ -175,10 +277,37 @@ class TestTraceAndTimeline:
         window.seek_to_block(2)
         assert window.timeline.playhead_time == pytest.approx(3.5)
 
-    def test_scrub_snaps_to_block(self, window: MainWindow) -> None:
-        window._on_log(SAMPLE_LOG_EVENT)
-        window.scrub_to_time(0.3)
-        assert window.timeline.playhead_time == pytest.approx(1.0)  # end of block 0
+    def test_scrub_is_continuous(self, window: MainWindow) -> None:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            window.open_path(SCENE_FILE)
+            window._on_log(SAMPLE_LOG_EVENT)
+            window.scrub_to_time(0.3)  # inside block 0, not snapped to a boundary
+            assert stub.scrubs[-1] == pytest.approx(0.3)
+            assert window.timeline.playhead_time == pytest.approx(0.3)
+            assert window._play_from_index == 0
+            window.scrub_to_time(99.0)  # clamped to total
+            assert stub.scrubs[-1] == pytest.approx(3.5)
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_play_toggle(self, window: MainWindow) -> None:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            window.open_path(SCENE_FILE)
+            window._on_log(SAMPLE_LOG_EVENT)
+            window._playing = False
+            window._toggle_play()
+            assert stub.plays == [0]
+            window._playing = True
+            window._toggle_play()
+            assert stub.stops == 1
+        finally:
+            window.controller = original  # type: ignore[assignment]
 
     def test_tick_moves_playhead(self, window: MainWindow) -> None:
         window._on_log(SAMPLE_LOG_EVENT)

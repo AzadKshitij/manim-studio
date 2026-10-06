@@ -6,7 +6,9 @@ the file watcher and the rendered-preview transport, and routes every event.
 
 from __future__ import annotations
 
+import keyword
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +83,7 @@ class MainWindow(QMainWindow):
         self._auto_preview = auto_preview
         self._restore_settings = restore_settings
         self._video_mode = False
+        self._playing = False
         self._play_from_index: int | None = None
         self._total_duration = 0.0
         self._preview_process: QProcess | None = None
@@ -259,8 +262,8 @@ class MainWindow(QMainWindow):
         self.preview_panel.reloadRequested.connect(self.reload_preview)
         self.preview_panel.playRequested.connect(self.request_play)
         self.preview_panel.stopRequested.connect(self.request_stop)
-        self.timeline.blockActivated.connect(self.seek_to_block)
         self.timeline.scrubRequested.connect(self.scrub_to_time)
+        self.timeline.playToggleRequested.connect(self._toggle_play)
         self.controller.logReceived.connect(self._on_log)
         self.controller.statusChanged.connect(self._on_status)
         self.controller.tickReceived.connect(self._on_tick)
@@ -388,15 +391,46 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
         template_key = key.split(" — ", 1)[0]
-        default_name = f"{template_key}.py"
+        suggested = _scene_name_from_path(Path(f"{template_key}.py"))
+        scene_name = self._prompt_scene_name(suggested)
+        if scene_name is None:
+            return
+        default_name = f"{_snake_case(scene_name)}.py"
         path, _ = QFileDialog.getSaveFileName(
             self, "Create scene", str(Path.cwd() / default_name), "Python files (*.py)"
         )
         if not path:
             return
-        target = self.create_scene_file(path, template_key)
+        target = self.create_scene_file(path, template_key, scene_name)
         if target is not None:
             self.open_path(target)
+
+    def _prompt_scene_name(self, default: str) -> str | None:
+        """Ask for the scene class name until it is a usable Python identifier.
+
+        Returns ``None`` when the user cancels; otherwise a validated name.
+        """
+        candidate = default
+        while True:
+            name, accepted = QInputDialog.getText(
+                self,
+                "New scene",
+                "Scene class name:",
+                QLineEdit.EchoMode.Normal,
+                candidate,
+            )
+            if not accepted:
+                return None
+            name = name.strip()
+            if _is_valid_scene_name(name):
+                return name
+            QMessageBox.warning(
+                self,
+                "New scene",
+                f"{name or '(empty)'!r} is not a valid scene name.\n"
+                "Use a Python identifier that is not a keyword, e.g. MyScene.",
+            )
+            candidate = name or candidate
 
     def create_scene_file(
         self, path: str | Path, template_key: str, scene_name: str | None = None
@@ -473,7 +507,14 @@ class MainWindow(QMainWindow):
     def request_stop(self) -> None:
         self.controller.stop_playback()
 
+    def _toggle_play(self) -> None:
+        if self._playing:
+            self.request_stop()
+        else:
+            self.request_play()
+
     def seek_to_block(self, index: int) -> None:
+        """Jump to the end state of a block (used by menus/tests; drag uses scrub)."""
         self._video_mode = False
         self._play_from_index = index
         block = self.timeline.log.block_by_index(index)
@@ -483,9 +524,16 @@ class MainWindow(QMainWindow):
         self.controller.seek(index)
 
     def scrub_to_time(self, time: float) -> None:
-        index = self.timeline.log.index_at(time)
-        if index is not None:
-            self.seek_to_block(index)
+        """Continuous scrub: pose the live scene at exactly this time."""
+        if self._path is None or not self.controller.is_running:
+            return
+        self._video_mode = False
+        limit = max(self._total_duration, 0.0)
+        position = min(max(float(time), 0.0), limit)
+        self._play_from_index = self.timeline.log.index_at(position)
+        self.timeline.set_playhead(position)
+        self.preview_panel.set_time(position, self._total_duration)
+        self.controller.scrub(position)
 
     # ------------------------------------------------------------------
     # Export / preview video
@@ -641,8 +689,9 @@ class MainWindow(QMainWindow):
 
     def _on_status(self, state: str, message: dict[str, Any]) -> None:
         note = str(message.get("note", ""))
+        self._playing = state == "playing"
         self.preview_panel.set_status(state, note)
-        self.timeline.set_playing(state == "playing")
+        self.timeline.set_playing(self._playing)
 
     def _on_tick(self, time_seconds: float, _index: int) -> None:
         if self._video_mode:
@@ -780,3 +829,13 @@ class MainWindow(QMainWindow):
 def _scene_name_from_path(path: Path) -> str:
     name = "".join(part.capitalize() for part in path.stem.replace("-", "_").split("_"))
     return name if name.isidentifier() else "MyScene"
+
+
+def _snake_case(name: str) -> str:
+    """``MyIntroScene`` -> ``my_intro_scene``, for a suggested file name."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _is_valid_scene_name(name: str) -> bool:
+    """True when ``name`` can be used as the generated scene class name."""
+    return bool(name) and name.isidentifier() and not keyword.iskeyword(name)

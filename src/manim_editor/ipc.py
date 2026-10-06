@@ -72,6 +72,7 @@ class Command:
     PLAY: Final = "play"
     STOP: Final = "stop"
     SEEK: Final = "seek"
+    SCRUB: Final = "scrub"
     RESIZE: Final = "resize"
     EXEC: Final = "exec"
     PING: Final = "ping"

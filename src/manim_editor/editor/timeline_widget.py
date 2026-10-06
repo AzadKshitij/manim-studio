@@ -1,8 +1,9 @@
 """Interactive timeline strip.
 
-v2 behavior (per ManimEditorDoc.md): wheel zoom, drag pan, click a block to jump
-the live preview, drag the playhead to scrub.  The widget is paint-only and talks
-to the rest of the application exclusively through signals.
+A real timeline: continuous drag scrubbing (the preview follows the pointer),
+click-to-position, wheel panning, Ctrl+wheel zooming, zoom-to-block on
+double-click, hover highlighting and keyboard nudging.  The widget is paint-only
+and talks to the application exclusively through signals.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFontMetrics,
+    QKeyEvent,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -29,6 +31,7 @@ __all__ = ["TimelineWidget"]
 RULER_HEIGHT = 22.0
 MIN_BLOCK_LABEL_WIDTH = 44.0
 CLICK_SLOP_PX = 4.0
+FRAME_STEP = 1.0 / 30.0
 
 
 def block_color(name: str) -> QColor:
@@ -47,10 +50,10 @@ def hash_name(name: str) -> int:
 
 
 class TimelineWidget(QWidget):
-    """Custom-painted timeline strip with zoom/pan/seek interactions."""
+    """Custom-painted timeline with continuous scrubbing and zoom/pan."""
 
-    blockActivated = Signal(int)  # click on a block: jump the live preview there
-    scrubRequested = Signal(float)  # drag release: scene time to show
+    scrubRequested = Signal(float)  # scene time under the pointer (continuous)
+    playToggleRequested = Signal()
     viewChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -59,15 +62,18 @@ class TimelineWidget(QWidget):
         self._view = TimelineView(total=1.0, width=float(max(self.width(), 1)))
         self._playhead = 0.0
         self._playing = False
-        self._dragging_playhead = False
-        self._panning = False
+        self._hover_index: int | None = None
+        self._mode: str | None = None  # "scrub" | "pan"
         self._press_pos: QPoint | None = None
         self._last_mouse_x = 0.0
-        self.setMinimumHeight(92)
+        self.setMinimumHeight(96)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setToolTip("Wheel: zoom · Shift+wheel / middle-drag: pan · Click: jump · Drag: scrub")
+        self.setToolTip(
+            "Drag: scrub · Wheel: pan · Ctrl+wheel: zoom · Double-click: zoom to block\n"
+            "←/→: step one frame · Shift+←/→: one second · Home/End · Space: play"
+        )
 
     # ------------------------------------------------------------------
     # State
@@ -81,12 +87,17 @@ class TimelineWidget(QWidget):
     def playhead_time(self) -> float:
         return self._playhead
 
+    @property
+    def playing(self) -> bool:
+        return self._playing
+
     def set_log(self, log: TimelineLog) -> None:
         self._log = log
         self._view = TimelineView(
             total=max(log.total_duration, 0.01), width=float(max(self.width(), 1))
         )
         self._playhead = min(self._playhead, log.total_duration)
+        self._hover_index = None
         self.update()
 
     def set_playhead(self, seconds: float) -> None:
@@ -94,7 +105,7 @@ class TimelineWidget(QWidget):
         self.update()
 
     def set_playing(self, playing: bool) -> None:
-        self._playing = playing
+        self._playing = bool(playing)
         self.update()
 
     def view(self) -> TimelineView:
@@ -105,8 +116,22 @@ class TimelineWidget(QWidget):
         self.update()
         self.viewChanged.emit()
 
+    def zoom_to_block(self, index: int) -> None:
+        block = self._log.block_by_index(index)
+        if block is None:
+            return
+        span = max(block.duration, 0.05) * 1.15
+        self._view = TimelineView(
+            total=self._view.total,
+            width=float(max(self.width(), 1)),
+            start=block.start - 0.05 * block.duration,
+            span=span,
+        )
+        self.update()
+        self.viewChanged.emit()
+
     # ------------------------------------------------------------------
-    # Qt events
+    # Interactions
     # ------------------------------------------------------------------
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -118,15 +143,22 @@ class TimelineWidget(QWidget):
         )
         super().resizeEvent(event)
 
+    def _request_scrub(self, x: float) -> None:
+        time = self._view.x_to_time(x)
+        self._playhead = time
+        self.update()
+        self.scrubRequested.emit(time)
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.angleDelta().y() == 0:
             return
         steps = event.angleDelta().y() / 120.0
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-            self._view = self._view.pan_px(-steps * 60.0)
-        else:
+        zoom_modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        if event.modifiers() & zoom_modifiers:
             factor = 1.25**steps if steps > 0 else 0.8 ** (-steps)
             self._view = self._view.zoom_at(event.position().x(), factor)
+        else:
+            self._view = self._view.pan_px(-steps * 60.0)
         self.update()
         self.viewChanged.emit()
         event.accept()
@@ -139,43 +171,78 @@ class TimelineWidget(QWidget):
             event.button() == Qt.MouseButton.LeftButton
             and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
         ):
-            self._panning = True
+            self._mode = "pan"
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging_playhead = True
-            time = self._view.x_to_time(event.position().x())
-            self.set_playhead(time)
+            self._mode = "scrub"
+            self._request_scrub(event.position().x())
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._panning:
+        if self._mode == "pan":
             delta = self._last_mouse_x - event.position().x()
             self._view = self._view.pan_px(delta)
             self._last_mouse_x = event.position().x()
             self.update()
             self.viewChanged.emit()
             return
-        if self._dragging_playhead:
-            self.set_playhead(self._view.x_to_time(event.position().x()))
+        block = self._log.block_at(self._view.x_to_time(event.position().x()))
+        hover = block.index if block is not None else None
+        if hover != self._hover_index:
+            self._hover_index = hover
+            if block is not None:
+                self.setToolTip(
+                    f"{block.name}  ·  #{block.index}  ·  "
+                    f"{format_duration(block.start)} - {format_duration(block.end)}"
+                )
+            self.update()
+        if self._mode == "scrub":
+            self._request_scrub(event.position().x())
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        was_panning, self._panning = self._panning, False
-        dragged, self._dragging_playhead = self._dragging_playhead, False
+        was_scrubbing, self._mode = self._mode, None
         press, self._press_pos = self._press_pos, None
-        if was_panning or press is None:
-            return
-        moved = (event.position().toPoint() - press).manhattanLength()
-        if dragged and moved <= CLICK_SLOP_PX:
-            block = self._block_at_x(event.position().x())
-            if block is not None:
-                self.blockActivated.emit(block.index)
-            event.accept()
-            return
-        if dragged:
-            self.scrubRequested.emit(self._view.x_to_time(event.position().x()))
-            event.accept()
+        if was_scrubbing == "scrub" and press is not None:
+            self._request_scrub(event.position().x())
+        event.accept()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        self.fit()
+        block = self._log.block_at(self._view.x_to_time(event.position().x()))
+        if block is not None:
+            self.zoom_to_block(block.index)
+        else:
+            self.fit()
+        event.accept()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        step = FRAME_STEP
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            step = 1.0
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            delta = -step if event.key() == Qt.Key.Key_Left else step
+            self._request_scrub(self._view.time_to_x(self._playhead + delta))
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Home:
+            self._request_scrub(0.0)
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_End:
+            self._request_scrub(self.width())
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Space:
+            self.playToggleRequested.emit()
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+            self._view = self._view.zoom_at(self.width() / 2, 1.25)
+        elif event.key() == Qt.Key.Key_Minus:
+            self._view = self._view.zoom_at(self.width() / 2, 0.8)
+        else:
+            super().keyPressEvent(event)
+            return
+        self.update()
+        self.viewChanged.emit()
         event.accept()
 
     # ------------------------------------------------------------------
@@ -198,8 +265,17 @@ class TimelineWidget(QWidget):
             )
         else:
             metrics = QFontMetrics(self.font())
+            current = self._log.index_at(self._playhead)
             for block in self._log.blocks:
-                self._draw_block(painter, block, track_top, track_height, metrics)
+                self._draw_block(
+                    painter,
+                    block,
+                    track_top,
+                    track_height,
+                    metrics,
+                    hovered=block.index == self._hover_index,
+                    current=block.index == current,
+                )
         self._draw_playhead(painter, height)
         painter.end()
 
@@ -223,6 +299,9 @@ class TimelineWidget(QWidget):
         track_top: float,
         track_height: float,
         metrics: QFontMetrics,
+        *,
+        hovered: bool,
+        current: bool,
     ) -> None:
         left = self._view.time_to_x(block.start)
         right = self._view.time_to_x(block.end)
@@ -235,6 +314,12 @@ class TimelineWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(color.lighter(125) if playing else color)
         painter.drawRoundedRect(rect, 4, 4)
+        if hovered or current:
+            pen = QPen(QColor(0xFF, 0xFF, 0xFF) if hovered else QColor(0x7F, 0xC6, 0xFF))
+            pen.setWidthF(1.5)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect, 4, 4)
         if width >= MIN_BLOCK_LABEL_WIDTH:
             painter.setPen(QColor(0x10, 0x10, 0x10))
             text = metrics.elidedText(block.name, Qt.TextElideMode.ElideRight, int(width - 8))
@@ -244,13 +329,29 @@ class TimelineWidget(QWidget):
         x = self._view.time_to_x(self._playhead)
         if x < -2 or x > self.width() + 2:
             return
-        pen = QPen(QColor(0xE6, 0x5A, 0x4C) if self._playing else QColor(0xFF, 0xFF, 0xFF))
+        color = QColor(0xE6, 0x5A, 0x4C) if self._playing else QColor(0xFF, 0xFF, 0xFF)
+        pen = QPen(color)
         pen.setWidthF(2.0)
         painter.setPen(pen)
         painter.drawLine(int(x), 0, int(x), height)
-        painter.setBrush(pen.color())
+        # Grab handle
+        painter.setBrush(color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QRectF(x - 4, 0, 8, 8))
+        # Time chip
+        chip_text = format_duration(self._playhead)
+        metrics = QFontMetrics(self.font())
+        text_width = metrics.horizontalAdvance(chip_text) + 8
+        chip = QRectF(
+            min(max(x - text_width / 2, 2), self.width() - text_width - 2), 10, text_width, 16
+        )
+        painter.setBrush(QColor(0x2D, 0x2D, 0x30))
+        painter.setPen(QPen(QColor(0x55, 0x55, 0x55)))
+        painter.drawRoundedRect(chip, 3, 3)
+        painter.setPen(QColor(0xDD, 0xDD, 0xDD))
+        painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, chip_text)
+        painter.setPen(QPen(color))
+        painter.drawLine(int(x), 26, int(x), 30)
 
     @staticmethod
     def _nice_step(span: float, width: int) -> float:

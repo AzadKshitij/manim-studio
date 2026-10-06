@@ -164,6 +164,35 @@ class TestSceneShortcuts:
         assert scene.embed() is None
 
 
+def _drain_frames(peer: HostPeer) -> None:
+    while True:
+        try:
+            peer.frames.get_nowait()
+        except queue.Empty:
+            return
+
+
+def _content_pixels(frame: Frame) -> int:
+    """Count pixels that are not the #333333 background (stroke coverage)."""
+    count = 0
+    rgba = frame.rgba
+    for index in range(0, len(rgba), 4):
+        distance = abs(rgba[index] - 51) + abs(rgba[index + 1] - 51) + abs(rgba[index + 2] - 51)
+        if distance > 60:
+            count += 1
+    return count
+
+
+def _top_colors(frame: Frame, limit: int = 4) -> list[tuple[int, tuple[int, int, int]]]:
+    """Dominant RGB colours, for diagnostic messages."""
+    counts: dict[tuple[int, int, int], int] = {}
+    rgba = frame.rgba
+    for index in range(0, len(rgba), 4):
+        pixel = (rgba[index], rgba[index + 1], rgba[index + 2])
+        counts[pixel] = counts.get(pixel, 0) + 1
+    return sorted(((n, rgb) for rgb, n in counts.items()), reverse=True)[:limit]
+
+
 # ---------------------------------------------------------------------------
 # End-to-end integration against a spawned host
 # ---------------------------------------------------------------------------
@@ -280,7 +309,7 @@ class HostPeer:
                 "--scene-name",
                 "FeatureShowcase",
                 "--log-level",
-                "WARNING",
+                "INFO",
                 *extra,
             ],
             cwd=REPO_ROOT,
@@ -394,6 +423,46 @@ class TestHostIntegration:
             )
             errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
             assert not errors, f"reload cycle {cycle} failed: {errors}"
+
+    def test_scrub_poses_between_blocks(self, host_session: Any) -> None:
+        """Scrubbing mid-block must render an intermediate state (half-drawn circle)."""
+        peer = host_session[0]
+        peer.drain()
+
+        def scrub_to(time_seconds: float) -> Frame:
+            # Frames are latest-wins by design, so a scrub frame can be dropped when
+            # the transport is busy; retry until one arrives.  Draining before each
+            # request discards late frames from earlier requests.
+            for _ in range(6):
+                _drain_frames(peer)
+                peer.send(Command.SCRUB, time=time_seconds)
+                peer.wait_event(
+                    lambda event: (
+                        event.get("event") == Event.TICK
+                        and event.get("scrubbing") is True
+                        and abs(float(event.get("time", -1.0)) - time_seconds) < 1e-6
+                    )
+                )
+                try:
+                    return peer.wait_frame(timeout=5)
+                except TimeoutError:
+                    continue
+            raise TimeoutError(f"no scrub frame arrived for t={time_seconds}")
+
+        partial = scrub_to(0.15)  # mid ShowCreation (block 0 spans 0.0-0.3)
+        complete = scrub_to(0.30)  # start of Wait => creation finished
+        later = scrub_to(0.60)  # still fully drawn (Rotate block)
+        partial_pixels = _content_pixels(partial)
+        complete_pixels = _content_pixels(complete)
+        later_pixels = _content_pixels(later)
+        assert 0 < partial_pixels < complete_pixels, (
+            f"partial={partial_pixels} complete={complete_pixels} later={later_pixels} "
+            f"partial_top={_top_colors(partial)} complete_top={_top_colors(complete)}\n"
+            f"host stderr:\n{peer.host_stderr()[-1500:]}"
+        )
+        assert abs(later_pixels - complete_pixels) < 0.35 * complete_pixels
+        errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
+        assert not errors, errors
 
     def test_load_switches_scene_name(self, host_session: Any, tmp_path: Path) -> None:
         """Renaming the scene class must not leave the host stuck on the old name."""

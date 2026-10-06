@@ -33,6 +33,7 @@ The frames channel is only opened in `--embedded` mode.
 | `play` | `from?` (block index, default 0) | replay in real time from a block |
 | `stop` | — | interrupt playback at the current frame |
 | `seek` | `index` | jump to the state at the *end* of block `index` |
+| `scrub` | `time` | pose the scene at an exact time (continuous scrub) |
 | `exec` | `code` | run Python in the live scene namespace (IPython) |
 | `ping` | — | liveness check |
 | `quit` | — | clean shutdown |
@@ -43,7 +44,7 @@ The frames channel is only opened in `--embedded` mode.
 | --- | --- | --- |
 | `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name` | runtime trace finished |
 | `status` | `state` (`idle`/`playing`/`seeking`/`error`/`closed`), `index?`, `note?` | lifecycle |
-| `tick` | `time`, `index` | playhead update during playback (≤20 Hz) |
+| `tick` | `time`, `index`, `scrubbing?` | playhead update during playback/scrub (≤20 Hz) |
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |
 | `error` | `message`, `traceback`, `line?`, `scene_file?`, `context` | user-scene or command failure |
 | `exec_result` | `ok`, `stdout`, `stderr`, `result`, `error` | reply to `exec` |
@@ -65,7 +66,9 @@ offset 20  payload zlib-compressed, upright RGBA8888
 Backpressure rule: the host keeps at most one frame in flight per channel. If the
 sender is still busy, `offer()` replaces the pending frame and increments
 `frames_dropped`; preview freshness beats completeness. The editor must therefore
-treat frames as a stream of latest states, never as a queue.
+treat frames as a stream of latest states, never as a queue.  Scrub commands follow
+the same rule: while a replay is running, newer `scrub` requests replace each other
+in a single pending slot, so pointer-rate drags never build a backlog.
 
 ## Timeouts and liveness
 

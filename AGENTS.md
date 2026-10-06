@@ -80,10 +80,13 @@ Protocol details live in `docs/protocol.md`. Any change to the protocol bumps
 
 - Timeline data comes from a **runtime trace** (not static AST), so loops/branches are
   correct: `log.json` is a list of `{name, start, duration, index}` blocks.
-- v1: read-only strip + transport slider bound to a low-quality mp4 (`QMediaPlayer`).
-- v2: interactive strip — wheel zoom, scroll, click block to jump (`seek` command),
-  drag playhead.
-- v3 (live scrub) is explicitly deferred: it breaks with `always_redraw`/updaters.
+- v1: transport slider bound to a low-quality mp4 (`QMediaPlayer`) for video review.
+- v2: interactive strip — wheel pan, Ctrl+wheel zoom, click/drag to position the
+  playhead, zoom-to-block, hover info, arrow-key frame stepping.
+- v3: **implemented** as replay-based scrubbing (`scrub.py`, ADR 0002): the target
+  time is posed by replaying the scene in skip mode and interpolating the containing
+  block's animations to the exact alpha, so `always_redraw`/updaters keep working.
+  The host coalesces scrub requests (latest wins) so drags never queue replays.
 
 ## 5. Code style
 
