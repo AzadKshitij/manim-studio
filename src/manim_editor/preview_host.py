@@ -213,6 +213,7 @@ class SceneHost:
         self._filmstrip: Filmstrip | None = None
         self._crawler: FilmstripCrawler | None = None
         self._crawler_engine: ScrubEngine | None = None
+        self._crawl_disabled = False
         self._trace_id = 0
         self._fps = 30
 
@@ -344,12 +345,14 @@ class SceneHost:
         skip_animations: bool,
         start: int | None = None,
         end: int | None = None,
+        scene_class: type | None = None,
     ) -> Any:
-        if self.scene_class is None:
+        target_class = scene_class if scene_class is not None else self.scene_class
+        if target_class is None:
             raise SceneLoadError("no scene loaded")
         self._bind_default_framebuffer()
         scene = make_scene(
-            self.scene_class,
+            target_class,
             window=self.window,
             resolution=self.config.size,
             fps=self.config.fps,
@@ -396,7 +399,14 @@ class SceneHost:
             screen.use()
 
     def load(self, path: str | Path | None = None) -> None:
-        """(Re)load the scene: import, trace, show the initial frame and notify."""
+        """(Re)load the scene atomically: import, trace, build, then commit.
+
+        Nothing in the live host changes until the user's scene has been imported,
+        traced and successfully constructed.  A broken edit therefore leaves the
+        previous scene, timeline and filmstrip fully intact — and, crucially, never
+        leaves a new scene class paired with a stale block list for the crawler to
+        trip over.
+        """
         if path is not None:
             self.config.scene_path = Path(path)
         scene_path = self.config.scene_path
@@ -406,68 +416,80 @@ class SceneHost:
 
         module = load_scene_module(scene_path, is_reload=self._loaded_once)
         scene_class = select_scene_class(module, self.config.scene_name, path=scene_path)
+
+        # ---- staged (failure-prone) phase: live state untouched -----------------
+        snapshot, trace_seconds = self._trace_scene_class(scene_class, scene_path)
+        initial_scene = self._build_initial_scene(scene_class)
+
+        # ---- commit -------------------------------------------------------------
         self.module = module
         self.scene_class = scene_class
         self._loaded_once = True
-        self.log.info("loaded %s (%s)", scene_class.__name__, scene_path)
-
-        self._dispose_scrub_engine()
-        self._dispose_filmstrip()
-        self._trace_id += 1
-        self._filmstrip = Filmstrip()
-        self._trace(scene_path)
-        self._show_initial_frame()
-        self._refresh_shell_namespace()
-
-    def _trace(self, scene_path: Path) -> None:
-        scene = self._make_scene(skip_animations=True)
-        recorder = TraceRecorder(record_events=True)
-        recorder.attach(scene)
-        started = time.perf_counter()
-        try:
-            run_construct(scene)
-            snapshot = recorder.snapshot()
-        finally:
-            recorder.detach()
-            self._release_scene(scene)
         self.blocks = snapshot.blocks
         self.stats = snapshot.stats
         self.events = snapshot.events
-        self._fps = int(getattr(scene.camera, "fps", 30)) or 30
+        self._fps = int(getattr(initial_scene.camera, "fps", 30)) or 30
+        self._trace_id += 1
+        self._dispose_scrub_engine()
+        self._dispose_filmstrip()
+        self._filmstrip = Filmstrip()
+        self._crawl_disabled = False
+        self.log.info("loaded %s (%s)", scene_class.__name__, scene_path)
+
         total = self.blocks[-1].end if self.blocks else 0.0
-        self.log.info(
-            "trace: %d blocks, %.3fs, %.2fs wall",
-            len(self.blocks),
-            total,
-            time.perf_counter() - started,
-        )
         self.emit(
             Event.LOG,
             blocks=[block.to_dict() for block in self.blocks],
             stats=self.stats,
             events=[event.to_dict() for event in self.events],
             total_duration=total,
-            trace_seconds=time.perf_counter() - started,
+            trace_seconds=trace_seconds,
             scene=str(scene_path),
-            scene_name=type(scene).__name__,
+            scene_name=scene_class.__name__,
             trace_id=self._trace_id,
             fps=self._fps,
         )
-
-    def _show_initial_frame(self) -> None:
-        if self.config.initial_frame == "end":
-            scene = self._make_scene(skip_animations=True)
-        else:
-            scene = self._make_scene(skip_animations=True, end=0)
-        self._activate_scene(scene)
+        self._activate_scene(initial_scene)
         self.stop_event.clear()
-        # The scene must actually *run* before rendering: ``construct()`` is what adds
-        # mobjects (and with ``end=0`` it stops right before the first play).  Skipping
-        # this left every load/reload showing an unconstructed, empty scene.
-        run_construct(scene)
         self._render_current_frame()
         self.push_current_frame()
         self.emit_status("idle", index=0)
+        self._refresh_shell_namespace()
+
+    def _trace_scene_class(self, scene_class: type, scene_path: Path) -> tuple[Any, float]:
+        """Run the scene once in skip mode and return (snapshot, wall seconds)."""
+        scene = self._make_scene(skip_animations=True, scene_class=scene_class)
+        recorder = TraceRecorder(record_events=True)
+        recorder.attach(scene)
+        started = time.perf_counter()
+        try:
+            run_construct(scene)
+            snapshot = recorder.snapshot()
+            elapsed = time.perf_counter() - started
+        finally:
+            recorder.detach()
+            self._release_scene(scene)
+        total = snapshot.blocks[-1].end if snapshot.blocks else 0.0
+        self.log.info(
+            "trace: %d blocks, %.3fs, %.2fs wall",
+            len(snapshot.blocks),
+            total,
+            elapsed,
+        )
+        return snapshot, elapsed
+
+    def _build_initial_scene(self, scene_class: type) -> Any:
+        """Create and *run* the scene that shows the initial state.
+
+        Running ``construct()`` here (before anything is committed) is what makes
+        a broken scene abort the load instead of replacing the working preview.
+        """
+        if self.config.initial_frame == "end":
+            scene = self._make_scene(skip_animations=True, scene_class=scene_class)
+        else:
+            scene = self._make_scene(skip_animations=True, end=0, scene_class=scene_class)
+        run_construct(scene)
+        return scene
 
     def _activate_scene(self, scene: Any) -> None:
         self._dispose_current_scene()
@@ -531,6 +553,7 @@ class SceneHost:
         if (
             self._filmstrip is None
             or self._crawler is not None
+            or self._crawl_disabled
             or not self.blocks
             or not self.config.embedded
             or self.frame_pump is None
@@ -544,6 +567,21 @@ class SceneHost:
             engine, self._filmstrip, self._fps, on_progress=self._on_crawl_progress
         )
         self.log.info("filmstrip: crawl started (%d blocks)", len(self.blocks))
+
+    def _step_crawler(self) -> None:
+        """Advance the crawl, never letting user-code errors kill the host."""
+        if self._crawler is None or self._crawler.done:
+            return
+        try:
+            self._crawler.step()
+        except Exception as exc:  # the host must survive anything
+            cause: BaseException = exc.__cause__ if exc.__cause__ is not None else exc
+            self.emit_error(cause, context="filmstrip")
+            self._crawl_disabled = True
+            self._crawler = None
+            if self._crawler_engine is not None:
+                self._release_scene(self._crawler_engine.scene)
+                self._crawler_engine = None
 
     def _on_crawl_progress(self, frames: int, done: bool, capped: bool) -> None:
         self.emit(
@@ -939,7 +977,7 @@ class SceneHost:
                 continue
             self._ensure_crawler()
             if self._crawler is not None and not self._crawler.done:
-                self._crawler.step()
+                self._step_crawler()
                 continue
             if self.window is not None and getattr(self.window, "is_closing", False):
                 break

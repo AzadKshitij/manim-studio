@@ -577,6 +577,14 @@ def _frame_from_blob(blob: bytes) -> Frame:
 class TestFilmstripCrawlerInProcess:
     """Deterministic crawler/invalidation tests without the socket harness."""
 
+    BROKEN_SCENE = (
+        "from manimlib import *\n\n\n"
+        "class Broken(Scene):\n"
+        "    def construct(self):\n"
+        "        first = Circle()\n"
+        "        self.play(Transform(first, second))\n"
+    )
+
     def test_crawl_fills_cache_and_reload_invalidates(self) -> None:
         from manim_editor.preview_host import HostConfig, SceneHost
 
@@ -609,3 +617,68 @@ class TestFilmstripCrawlerInProcess:
             assert host._crawler is None
         finally:
             host._shutdown()
+
+    def test_failed_load_keeps_last_good_state(self, tmp_path: Path) -> None:
+        """A broken edit must not replace the working scene/timeline/filmstrip."""
+        from manim_editor.preview_host import HostConfig, SceneHost
+
+        broken = tmp_path / "broken.py"
+        broken.write_text(self.BROKEN_SCENE, encoding="utf-8")
+        host = SceneHost(HostConfig(scene_path=SCENE_FILE, embedded=True, size=(160, 90)))
+        host._create_window()
+        host.frame_pump = _NullPump()
+        try:
+            host.load()
+            class_before = host.scene_class
+            blocks_before = host.blocks
+            strip_before = host._filmstrip
+            assert class_before is not None and strip_before is not None
+
+            with pytest.raises(NameError):
+                host.load(broken)
+
+            # Nothing was committed: class, blocks, cache and display scene intact.
+            assert host.scene_class is class_before
+            assert host.blocks == blocks_before
+            assert host._filmstrip is strip_before
+            assert host.scene is not None
+
+            # And the host recovers on the next good load.
+            host.load(SCENE_FILE)
+            assert host.blocks
+        finally:
+            host._shutdown()
+
+
+class _RaisingCrawler:
+    """Stands in for a crawler whose scene fails mid-replay."""
+
+    done = False
+
+    def step(self) -> int:
+        from manim_editor.scrub import ScrubError
+
+        cause = ValueError("first")
+        raise ScrubError("ValueError: first") from cause
+
+
+class TestCrawlerGuard:
+    """The idle loop must survive a scene error raised during a crawl."""
+
+    def test_crawler_failure_disables_crawl_but_keeps_cache(self) -> None:
+        from manim_editor.filmstrip import Filmstrip
+        from manim_editor.preview_host import HostConfig, SceneHost
+
+        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
+        filmstrip = Filmstrip()
+        host._filmstrip = filmstrip
+        host._crawler = _RaisingCrawler()  # type: ignore[assignment]
+
+        host._step_crawler()  # must not raise
+
+        assert host._crawler is None
+        assert host._crawl_disabled is True
+        assert host._filmstrip is filmstrip  # already-cached frames are kept
+        # A disabled crawl is not restarted by the idle loop.
+        host._ensure_crawler()
+        assert host._crawler is None

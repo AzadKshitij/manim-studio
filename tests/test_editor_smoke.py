@@ -190,6 +190,28 @@ class TestOpenAndSave:
         assert target is not None
         assert "class CustomName(Scene):" in target.read_text(encoding="utf-8")
 
+    def test_syntax_error_then_recovery(self, window: MainWindow, tmp_path: Path) -> None:
+        """A broken save must not wedge the editor, and fixing it must recover."""
+        target = tmp_path / "scene.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\nclass Demo(Scene):\n    pass\n",
+            encoding="utf-8",
+        )
+        assert window.open_path(target) is True
+        assert window._scene_combo.currentText() == "Demo"
+
+        target.write_text("def broken(:\n", encoding="utf-8")
+        window._on_file_changed(str(target))  # must not raise
+        assert window._scene_combo.count() == 0
+        assert "def broken(:" in window.editor.text()
+
+        target.write_text(
+            "from manimlib import Scene\n\n\nclass Fixed(Scene):\n    pass\n",
+            encoding="utf-8",
+        )
+        window._on_file_changed(str(target))
+        assert window._scene_combo.currentText() == "Fixed"
+
 
 def _drive_new_scene(
     monkeypatch: pytest.MonkeyPatch,
