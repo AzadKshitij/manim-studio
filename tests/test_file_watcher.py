@@ -83,6 +83,20 @@ class TestFileWatcher:
             stat = target.stat()
             os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
 
+    def test_early_timer_fire_rearms(self, qtbot, tmp_path: Path) -> None:
+        """A timer that fires before the quiet period must re-arm, not drop the event."""
+        target = tmp_path / "scene.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        clock = FakeClock()
+        watcher = FileWatcher(delay_ms=500, clock=clock)
+        watcher.watch(target)
+        watcher._gate.note()
+        watcher._fire()  # fires too early: due() is False
+        assert watcher._timer.isActive()  # re-armed rather than swallowed
+        clock.advance(1.0)
+        with qtbot.waitSignal(watcher.file_changed, timeout=3000):
+            watcher._fire()
+
     def test_watch_replaces_previous(self, qtbot, tmp_path: Path) -> None:
         first = tmp_path / "a.py"
         second = tmp_path / "b.py"

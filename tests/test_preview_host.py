@@ -150,6 +150,19 @@ class TestSceneShortcuts:
         assert host._scene_shortcuts() == {}
         host._clear_checkpoints()  # no-op without checkpoints
 
+    def test_embed_is_neutralized(self) -> None:
+        """scene.embed() would launch a blocking terminal inside the host."""
+        from manim_editor.preview_host import HostConfig, SceneHost
+
+        class EmbedScene:
+            def embed(self, *args: object, **kwargs: object) -> str:
+                return "terminal"
+
+        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
+        scene = EmbedScene()
+        host._neutralize_embed(scene)
+        assert scene.embed() is None
+
 
 # ---------------------------------------------------------------------------
 # End-to-end integration against a spawned host
@@ -381,6 +394,35 @@ class TestHostIntegration:
             )
             errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
             assert not errors, f"reload cycle {cycle} failed: {errors}"
+
+    def test_load_switches_scene_name(self, host_session: Any, tmp_path: Path) -> None:
+        """Renaming the scene class must not leave the host stuck on the old name."""
+        peer = host_session[0]
+        two_scenes = tmp_path / "two_scenes.py"
+        two_scenes.write_text(
+            "from manimlib import Scene\n\n\n"
+            "class Alpha(Scene):\n"
+            "    def construct(self):\n"
+            "        self.wait(0.1)\n\n\n"
+            "class Beta(Scene):\n"
+            "    def construct(self):\n"
+            "        self.wait(0.2)\n",
+            encoding="utf-8",
+        )
+        peer.drain()
+        peer.send(Command.LOAD, path=str(two_scenes), scene_name="Beta")
+        log = peer.wait_event(
+            lambda event: event.get("event") == Event.LOG and event.get("scene_name") == "Beta"
+        )
+        assert len(log["blocks"]) == 1
+
+        # Leave the shared host back on the showcase scene.
+        peer.send(Command.LOAD, path=str(SCENE_FILE), scene_name="FeatureShowcase")
+        peer.wait_event(
+            lambda event: (
+                event.get("event") == Event.LOG and event.get("scene_name") == "FeatureShowcase"
+            )
+        )
 
 
 @pytest.mark.gl

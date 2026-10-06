@@ -170,7 +170,13 @@ class FileWatcher(QObject):
         self._timer.start(self.delay_ms)
 
     def _fire(self) -> None:
-        if self._path is None or not self._gate.due():
+        if self._path is None:
+            return
+        if not self._gate.due():
+            # The single-shot timer can fire a hair before the quiet period has
+            # elapsed (timer resolution vs. time.monotonic); re-arm instead of
+            # dropping the event, which would swallow the reload entirely.
+            self._timer.start(50)
             return
         self._gate.reset()
         self._attach(self._path)  # re-arm in case of atomic replace

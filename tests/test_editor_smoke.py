@@ -90,6 +90,51 @@ class TestOpenAndSave:
         finally:
             window.controller = original  # type: ignore[assignment]
 
+    def test_reload_sends_explicit_scene_name(self, window: MainWindow, tmp_path: Path) -> None:
+        target = tmp_path / "two.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\n"
+            "class Alpha(Scene):\n    pass\n\n\n"
+            "class Beta(Scene):\n    pass\n",
+            encoding="utf-8",
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            window.open_path(target)
+            window.reload_preview()
+            assert stub.loads[-1] == (str(target.resolve()), "Alpha")
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_scene_rename_falls_back_to_first(self, window: MainWindow, tmp_path: Path) -> None:
+        target = tmp_path / "rename.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\n"
+            "class Alpha(Scene):\n    pass\n\n\n"
+            "class Beta(Scene):\n    pass\n",
+            encoding="utf-8",
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            window.open_path(target)
+            assert window._scene_combo.currentText() == "Alpha"
+            target.write_text(
+                "from manimlib import Scene\n\n\n"
+                "class Gamma(Scene):\n    pass\n\n\n"
+                "class Beta(Scene):\n    pass\n",
+                encoding="utf-8",
+            )
+            window._refresh_scene_list(target)
+            assert window._scene_combo.currentText() == "Gamma"
+            window.reload_preview()
+            assert stub.loads[-1][1] == "Gamma"
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
     def test_open_broken_file_rejected(self, window: MainWindow, tmp_path: Path) -> None:
         broken = tmp_path / "broken.py"
         broken.write_text("def f(:\n", encoding="utf-8")

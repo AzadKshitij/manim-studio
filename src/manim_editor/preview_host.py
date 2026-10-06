@@ -330,7 +330,7 @@ class SceneHost:
         if self.scene_class is None:
             raise SceneLoadError("no scene loaded")
         self._bind_default_framebuffer()
-        return make_scene(
+        scene = make_scene(
             self.scene_class,
             window=self.window,
             resolution=self.config.size,
@@ -340,6 +340,24 @@ class SceneHost:
             end_at_animation_number=end,
             preview_while_skipping=False,
         )
+        self._neutralize_embed(scene)
+        return scene
+
+    def _neutralize_embed(self, scene: Any) -> None:
+        """Stop ``scene.embed()`` from launching a terminal shell inside the host.
+
+        manimgl's embed opens a blocking ``InteractiveShellEmbed`` on stdin — in a
+        background process that wedges the preview forever (the editor never writes
+        to the host's stdin).  The editor's Live shell provides the same experience,
+        so ``embed()`` becomes a logged no-op for every scene, tracing included.
+        """
+
+        def embed(*_args: Any, **_kwargs: Any) -> None:
+            self.log.info("scene.embed() ignored in the live preview; use the editor's Live shell")
+            self.emit_status("idle", note="embed() ignored — use the Live shell")
+
+        with contextlib.suppress(Exception):
+            scene.embed = embed
 
     def _bind_default_framebuffer(self) -> None:
         """Bind the window's default framebuffer before constructing a scene.
@@ -537,6 +555,9 @@ class SceneHost:
             elif command in (Command.LOAD, Command.RELOAD):
                 self.stop_event.clear()
                 path = message.get("path")
+                scene_name = message.get("scene_name")
+                if scene_name:
+                    self.config.scene_name = str(scene_name)
                 self.load(Path(path) if path else None)
                 self.emit_status("idle", index=0)
             elif command == Command.QUIT:

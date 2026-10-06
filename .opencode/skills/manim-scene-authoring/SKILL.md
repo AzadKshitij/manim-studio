@@ -66,6 +66,14 @@ circle = Circle(color=BLUE)             # WRONG: renders with a red stroke
 Other shapes (`Square`, `Rectangle`, `Line`, `Arrow`, `RegularPolygon`, `Text`) pass
 `color=` through normally.
 
+### `self.embed()` is ignored in the preview
+
+The editor runs scenes in a background host process; a terminal IPython embed would
+block it forever (it reads stdin, which the editor never writes to). `scene.embed()`
+is therefore a logged no-op — use the editor's **Live shell** dock (Ctrl+`) instead,
+which exposes the same scene API (`play`, `wait`, `add`, `remove`, `undo`, ...,
+plus `checkpoint_paste`).
+
 ## Scene structure that traces well
 
 ```python

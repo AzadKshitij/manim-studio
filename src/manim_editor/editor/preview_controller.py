@@ -174,7 +174,10 @@ class PreviewController(QObject):
     def load(self, path: str | Path, scene_name: str | None = None) -> bool:
         if scene_name is not None:
             self.scene_name = scene_name
-        return self.send(Command.LOAD, path=str(Path(path).resolve()))
+        payload: dict[str, Any] = {"path": str(Path(path).resolve())}
+        if scene_name is not None:
+            payload["scene_name"] = scene_name
+        return self.send(Command.LOAD, **payload)
 
     def play(self, from_index: int = 0) -> bool:
         return self.send(Command.PLAY, **{"from": int(from_index)})

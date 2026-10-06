@@ -345,22 +345,34 @@ class MainWindow(QMainWindow):
         self.editor.load_file(target)
         self._path = target.resolve()
         self.watcher.watch(self._path)
-        # Repopulating the scene combo must not look like a user selection; otherwise
-        # every open would immediately send a redundant `load` to the freshly started
-        # preview host.
-        self._scene_combo.blockSignals(True)
-        try:
-            self._scene_combo.clear()
-            self._scene_combo.addItems([scene.name for scene in check.scenes])
-            if check.scenes:
-                self._scene_combo.setCurrentIndex(0)
-        finally:
-            self._scene_combo.blockSignals(False)
+        self._refresh_scene_list(self._path)
         self._update_title()
         self._set_status(f"opened {self._path.name} ({len(check.scenes)} scene(s))")
         if self._auto_reload:
             self._start_preview()
         return True
+
+    def _refresh_scene_list(self, path: Path) -> tuple[str, ...]:
+        """Repopulate the scene combo from the file without impersonating a user.
+
+        Keeps the current selection when it still exists (so a reload after edits
+        keeps the same scene) and falls back to the first scene when the selected
+        class was renamed or removed.
+        """
+        check = check_scene_file(path)
+        names = tuple(scene.name for scene in check.scenes)
+        current = self._scene_combo.currentText()
+        self._scene_combo.blockSignals(True)
+        try:
+            self._scene_combo.clear()
+            self._scene_combo.addItems(names)
+            if current in names:
+                self._scene_combo.setCurrentIndex(names.index(current))
+            elif names:
+                self._scene_combo.setCurrentIndex(0)
+        finally:
+            self._scene_combo.blockSignals(False)
+        return names
 
     def new_scene_dialog(self) -> None:
         template_keys = [template.key for template in SCENE_TEMPLATES]
@@ -445,7 +457,9 @@ class MainWindow(QMainWindow):
             self._start_preview()
             return
         self.editor.clear_error_marker()
-        self.controller.reload()
+        # Use `load` with an explicit path and scene name (not `reload`) so renaming
+        # the scene class or switching scenes in the combo always takes effect.
+        self.controller.load(self._path, self._scene_name())
 
     def request_play(self) -> None:
         if not self.controller.is_running:
@@ -670,10 +684,11 @@ class MainWindow(QMainWindow):
         if self.editor.is_modified():
             self._set_status("file changed on disk — save (Ctrl+S) to overwrite, or reopen")
             return
-        # External change with a clean buffer: refresh the editor text as well, so
-        # the buffer and the (about to reload) preview never disagree.
+        # External change with a clean buffer: refresh the editor text, the scene
+        # list (a class may have been renamed) and the preview, so all three agree.
         self._set_status("file changed on disk — reloading editor and preview")
         self.editor.load_file(path)
+        self._refresh_scene_list(Path(path))
         self.reload_preview()
 
     # ------------------------------------------------------------------
