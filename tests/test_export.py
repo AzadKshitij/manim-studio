@@ -112,3 +112,33 @@ class TestRunExport:
             self._plan("print('\\n'.join(str(i) for i in range(100)))"), log_tail_size=5
         )
         assert len(result.log_tail) == 5
+
+
+@pytest.mark.slow
+@pytest.mark.manim
+class TestRealExport:
+    """Actually renders a tiny mp4 through manimgl + ffmpeg."""
+
+    SCENE_SOURCE = (
+        "from manimlib import *\n\n\n"
+        "class TinyScene(Scene):\n"
+        "    def construct(self):\n"
+        "        dot = Dot()\n"
+        "        self.play(ShowCreation(dot), run_time=0.2)\n"
+        "        self.wait(0.2)\n"
+    )
+
+    def test_mp4_written(self, tmp_path: Path) -> None:
+        scene = tmp_path / "tiny_scene.py"
+        scene.write_text(self.SCENE_SOURCE, encoding="utf-8")
+        plan = build_export_plan(
+            scene,
+            "TinyScene",
+            output=tmp_path / "tiny.mp4",
+            quality="preview",
+            extra_args=("--resolution", "160x90"),
+        )
+        result = run_export(plan, timeout=300)
+        assert result.ok, result.log_tail
+        assert plan.output_path.is_file()
+        assert plan.output_path.stat().st_size > 0
