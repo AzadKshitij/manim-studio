@@ -329,6 +329,11 @@ class MainWindow(QMainWindow):
         self.timeline.blockActivated.connect(self._on_block_activated)
         self.timeline.blockDurationEditRequested.connect(self._edit_block_duration)
         self.timeline.rangeChanged.connect(self._on_range_changed)
+        self.timeline.blockPlayRequested.connect(self._play_block)
+        self.timeline.blockLoopRequested.connect(self._loop_block)
+        self.timeline.blockExportRangeRequested.connect(self._export_block_range)
+        self.timeline.blockResetTimingRequested.connect(self._reset_block_timing)
+        self.timeline.blockStillRequested.connect(self._render_block_still)
         self.timeline.undoRequested.connect(self._undo_timing)
         self.timeline.redoRequested.connect(self._redo_timing)
         self.transport_bar.playPauseRequested.connect(self._toggle_play)
@@ -647,6 +652,50 @@ class MainWindow(QMainWindow):
     def _on_range_changed(self, start: float, end: float) -> None:
         self._set_status(f"range {format_duration(start)} - {format_duration(end)}")
 
+    def _play_block(self, index: int) -> None:
+        """Context menu: replay from this block."""
+        if self._path is None or not self.controller.is_running:
+            return
+        self.events.play_from_index = index
+        self.request_play()
+
+    def _loop_block(self, index: int) -> None:
+        """Context menu: select the block, turn looping on and play it."""
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        self.timeline.set_range(block.start, block.end)
+        self.events.play_from_index = index
+        self.transport_bar.set_loop(True)  # emits loopToggled -> enables looping
+        if self.controller.is_running:
+            self.request_play()
+
+    def _export_block_range(self, index: int) -> None:
+        """Context menu: preselect this block as the export range."""
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        self.timeline.set_range(block.start, block.end)
+        self.export_dialog(initial_range=(index, index))
+
+    def _reset_block_timing(self, index: int) -> None:
+        """Context menu: drop this block's retime override."""
+        if self._timing.reset_block(index):
+            self._push_timing()
+            self._set_status(f"block {index} timing reset")
+        else:
+            self._set_status(f"block {index} was not retimed")
+
+    def _render_block_still(self, index: int) -> None:
+        """Context menu: render the frame at the end of this block."""
+        if self._path is None:
+            self._set_status("open a scene first")
+            return
+        output = self._path.parent / ".manim-studio" / f"{self._path.stem}_block{index}.png"
+        self.exports.export_still(
+            self._path, self._scene_name(), output, animation_range=(0, index + 1)
+        )
+
     def _on_stopped_loop(self, message: dict[str, Any]) -> None:
         """Repeat the loop range when playback ends on its own."""
         if not self._loop or message.get("user_stopped"):
@@ -820,7 +869,12 @@ class MainWindow(QMainWindow):
             self._path, self._scene_name(), scene_files.preview_video_path(self._path)
         )
 
-    def export_dialog(self, *, still: bool = False) -> None:
+    def export_dialog(
+        self,
+        *,
+        still: bool = False,
+        initial_range: tuple[int, int] | None = None,
+    ) -> None:
         if self._path is None:
             self._set_status("open a scene first")
             return
@@ -833,6 +887,7 @@ class MainWindow(QMainWindow):
             block_count=self.timeline.log.num_blocks,
             settings=self._settings,
             initial_still=still,
+            initial_range=initial_range,
             controller=self.exports,
         )
         dialog.exec()

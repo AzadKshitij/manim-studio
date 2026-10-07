@@ -16,6 +16,7 @@ import colorsys
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QContextMenuEvent,
     QFontMetrics,
     QKeyEvent,
     QMouseEvent,
@@ -25,7 +26,7 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QSizePolicy, QWidget
+from PySide6.QtWidgets import QMenu, QSizePolicy, QWidget
 
 from manim_studio.timeline_model import (
     TimelineBlock,
@@ -74,6 +75,11 @@ class TimelineWidget(QWidget):
     blockActivated = Signal(int)  # Ctrl+double-click: jump to the block's source line
     blockDurationEditRequested = Signal(int)  # double-click: type an exact duration
     rangeChanged = Signal(float, float)  # loop/export range [start, end] seconds
+    blockPlayRequested = Signal(int)
+    blockLoopRequested = Signal(int)
+    blockExportRangeRequested = Signal(int)
+    blockResetTimingRequested = Signal(int)
+    blockStillRequested = Signal(int)
     undoRequested = Signal()
     redoRequested = Signal()
 
@@ -89,6 +95,8 @@ class TimelineWidget(QWidget):
         self._fps = 1.0 / FRAME_STEP
         self._range: tuple[float, float] | None = None  # loop / export range
         self._range_anchor = 0.0
+        self._timing_clipboard: float | None = None
+        self._context_menu: QMenu | None = None  # kept for tests
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
         self._press_pos: QPoint | None = None
         self._last_mouse_x = 0.0
@@ -153,6 +161,62 @@ class TimelineWidget(QWidget):
         if self._range is not None:
             self._range = None
             self.update()
+
+    # -- context menu ------------------------------------------------------
+
+    @property
+    def timing_clipboard(self) -> float | None:
+        """The copied block duration (seconds), or ``None``."""
+        return self._timing_clipboard
+
+    def context_menu(self, index: int | None) -> QMenu:
+        """Build the block context menu; ``index`` is the right-clicked block."""
+        menu = QMenu(self)
+        if index is None:
+            menu.addAction("Fit timeline").triggered.connect(self.fit)
+            if self._range is not None:
+                menu.addAction("Clear selection").triggered.connect(self.clear_range)
+            return menu
+        menu.addAction("Play this block").triggered.connect(
+            lambda: self.blockPlayRequested.emit(index)
+        )
+        menu.addAction("Loop this block").triggered.connect(
+            lambda: self.blockLoopRequested.emit(index)
+        )
+        menu.addSeparator()
+        menu.addAction("Set as export range").triggered.connect(
+            lambda: self.blockExportRangeRequested.emit(index)
+        )
+        menu.addAction("Render still at block end").triggered.connect(
+            lambda: self.blockStillRequested.emit(index)
+        )
+        menu.addSeparator()
+        menu.addAction("Copy timing").triggered.connect(lambda: self._copy_timing(index))
+        paste = menu.addAction("Paste timing")
+        paste.setEnabled(self._timing_clipboard is not None)
+        paste.triggered.connect(lambda: self._paste_timing(index))
+        menu.addAction("Reset retime").triggered.connect(
+            lambda: self.blockResetTimingRequested.emit(index)
+        )
+        menu.addSeparator()
+        menu.addAction("Jump to code").triggered.connect(lambda: self.blockActivated.emit(index))
+        menu.addAction("Zoom to block").triggered.connect(lambda: self.zoom_to_block(index))
+        return menu
+
+    def _copy_timing(self, index: int) -> None:
+        block = self._log.block_by_index(index)
+        if block is not None:
+            self._timing_clipboard = block.duration
+
+    def _paste_timing(self, index: int) -> None:
+        if self._timing_clipboard is not None:
+            self.blockResized.emit(index, self._timing_clipboard)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        block = self._log.block_at(self._view.x_to_time(event.pos().x()))
+        menu = self.context_menu(block.index if block is not None else None)
+        self._context_menu = menu
+        menu.exec(event.globalPos())
 
     @property
     def snapping(self) -> bool:

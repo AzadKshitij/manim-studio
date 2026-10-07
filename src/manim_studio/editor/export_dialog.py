@@ -72,6 +72,7 @@ class ExportDialog(QDialog):
         block_count: int = 0,
         settings: QSettings | None = None,
         initial_still: bool = False,
+        initial_range: tuple[int, int] | None = None,
         controller: ExportController | None = None,
         plan_builder: Callable[..., ExportPlan] = build_export_plan,
     ) -> None:
@@ -91,7 +92,7 @@ class ExportDialog(QDialog):
         self._succeeded = False
         self._cancelled = False
 
-        self._build_ui(initial_still=initial_still)
+        self._build_ui(initial_still=initial_still, initial_range=initial_range)
         self._connect_signals()
         self._refresh()
 
@@ -99,7 +100,7 @@ class ExportDialog(QDialog):
     # UI construction
     # ------------------------------------------------------------------
 
-    def _build_ui(self, *, initial_still: bool) -> None:
+    def _build_ui(self, *, initial_still: bool, initial_range: tuple[int, int] | None) -> None:
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
@@ -172,6 +173,12 @@ class ExportDialog(QDialog):
         self._range_widget.setLayout(range_row)
         self._range_widget.setEnabled(self._block_count > 1)
         form.addRow("Animation range:", self._range_widget)
+        if initial_range is not None and self._block_count > 1:
+            start = max(0, min(int(initial_range[0]), self._block_count - 1))
+            end = max(start, min(int(initial_range[1]), self._block_count - 1))
+            self._whole_scene_check.setChecked(False)
+            self._from_spin.setValue(start)
+            self._to_spin.setValue(end)
 
         path_row = QHBoxLayout()
         self._path_edit = QLineEdit(self)

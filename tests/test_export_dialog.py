@@ -47,6 +47,35 @@ def _format_combo(dlg: ExportDialog) -> QComboBox:
     return dlg._format_combo  # type: ignore[no-any-return]
 
 
+class TestInitialRange:
+    def test_initial_range_preselects_the_blocks(self, qtbot, tmp_path: Path) -> None:
+        scene = _scene_file(tmp_path)
+        dlg = ExportDialog(
+            scene_path=scene,
+            scene_names=("DemoScene",),
+            current_scene="DemoScene",
+            block_count=6,
+            settings=None,
+            initial_range=(2, 3),
+        )
+        qtbot.addWidget(dlg)
+        assert dlg._whole_scene_check.isChecked() is False
+        assert dlg._animation_range() == (2, 3)
+
+    def test_initial_range_is_clamped(self, qtbot, tmp_path: Path) -> None:
+        scene = _scene_file(tmp_path)
+        dlg = ExportDialog(
+            scene_path=scene,
+            scene_names=("DemoScene",),
+            current_scene="DemoScene",
+            block_count=3,
+            settings=None,
+            initial_range=(5, 9),
+        )
+        qtbot.addWidget(dlg)
+        assert dlg._animation_range() == (2, 2)
+
+
 class TestDefaults:
     def test_defaults(self, dialog: ExportDialog, tmp_path: Path) -> None:
         assert dialog._scene_combo.currentText() == "DemoScene"

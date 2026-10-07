@@ -124,8 +124,6 @@ def build_export_plan(
         start, end = (int(value) for value in animation_range)
         if not 0 <= start <= end:
             raise ExportError(f"invalid animation range {animation_range!r}; expected start <= end")
-        if still:
-            raise ExportError("animation range is not applicable when exporting a still")
 
     requested = Path(output) if output is not None else None
     if requested is not None:

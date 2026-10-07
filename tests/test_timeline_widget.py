@@ -289,6 +289,70 @@ class TestRange:
         assert timeline.range() is None
 
 
+class TestContextMenu:
+    @staticmethod
+    def _action(menu, text: str):
+        for action in menu.actions():
+            if action.text() == text:
+                return action
+        raise AssertionError(f"no action {text!r} in {[a.text() for a in menu.actions()]}")
+
+    def test_block_menu_lists_the_actions(self, timeline: TimelineWidget) -> None:
+        texts = [a.text() for a in timeline.context_menu(1).actions() if a.text()]
+        assert texts == [
+            "Play this block",
+            "Loop this block",
+            "Set as export range",
+            "Render still at block end",
+            "Copy timing",
+            "Paste timing",
+            "Reset retime",
+            "Jump to code",
+            "Zoom to block",
+        ]
+
+    def test_play_and_loop_and_export_signals(self, timeline: TimelineWidget) -> None:
+        play = QSignalSpy(timeline.blockPlayRequested)
+        loop = QSignalSpy(timeline.blockLoopRequested)
+        export = QSignalSpy(timeline.blockExportRangeRequested)
+        still = QSignalSpy(timeline.blockStillRequested)
+        menu = timeline.context_menu(2)
+        self._action(menu, "Play this block").trigger()
+        self._action(menu, "Loop this block").trigger()
+        self._action(menu, "Set as export range").trigger()
+        self._action(menu, "Render still at block end").trigger()
+        assert [play.at(0)[0], loop.at(0)[0], export.at(0)[0], still.at(0)[0]] == [2, 2, 2, 2]
+
+    def test_jump_and_reset_signals(self, timeline: TimelineWidget) -> None:
+        jump = QSignalSpy(timeline.blockActivated)
+        reset = QSignalSpy(timeline.blockResetTimingRequested)
+        menu = timeline.context_menu(1)
+        self._action(menu, "Jump to code").trigger()
+        self._action(menu, "Reset retime").trigger()
+        assert jump.at(0)[0] == 1
+        assert reset.at(0)[0] == 1
+
+    def test_copy_enables_paste_and_paste_retimes(self, timeline: TimelineWidget) -> None:
+        assert self._action(timeline.context_menu(0), "Paste timing").isEnabled() is False
+        self._action(timeline.context_menu(0), "Copy timing").trigger()
+        assert timeline.timing_clipboard == pytest.approx(1.0)
+        menu = timeline.context_menu(2)
+        paste = self._action(menu, "Paste timing")
+        assert paste.isEnabled() is True
+        resized = QSignalSpy(timeline.blockResized)
+        paste.trigger()
+        assert resized.count() == 1
+        assert resized.at(0)[0] == 2
+        assert resized.at(0)[1] == pytest.approx(1.0)
+
+    def test_zoom_to_block_action_frames_the_block(self, timeline: TimelineWidget) -> None:
+        self._action(timeline.context_menu(2), "Zoom to block").trigger()
+        assert timeline.view().span < 4.0
+
+    def test_empty_area_menu_offers_fit(self, timeline: TimelineWidget) -> None:
+        assert [a.text() for a in timeline.context_menu(None).actions()] == ["Fit timeline"]
+
+
 class TestKeyboard:
     def test_arrow_steps_one_frame(self, timeline: TimelineWidget, qtbot) -> None:
         spy = QSignalSpy(timeline.scrubRequested)

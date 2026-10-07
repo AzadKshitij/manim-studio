@@ -110,9 +110,16 @@ class TestBuildExportPlan:
         with pytest.raises(ExportError, match="range"):
             build_export_plan(_scene_file(tmp_path), animation_range=(5, 2))
 
-    def test_animation_range_rejected_for_still(self, tmp_path: Path) -> None:
-        with pytest.raises(ExportError, match="not applicable"):
-            build_export_plan(_scene_file(tmp_path), still=True, animation_range=(0, 1))
+    def test_still_with_animation_range(self, tmp_path: Path) -> None:
+        plan = build_export_plan(
+            _scene_file(tmp_path),
+            output=tmp_path / "frame.png",
+            still=True,
+            animation_range=(0, 2),
+        )
+        assert plan.still
+        assert "-s" in plan.argv
+        assert "-n" in plan.argv and "0,2" in plan.argv
 
     def test_unknown_quality_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ExportError, match="unknown quality"):

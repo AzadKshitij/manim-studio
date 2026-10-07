@@ -742,6 +742,97 @@ class TestTransport:
             self._restore(window)
 
 
+class _StubExports:
+    def __init__(self) -> None:
+        self.stills: list[tuple[str, str | None, str, tuple[int, int] | None]] = []
+
+    def export_still(self, path, scene_name, output, *, animation_range=None) -> bool:
+        self.stills.append((str(path), scene_name, str(output), animation_range))
+        return True
+
+
+class TestBlockContextMenu:
+    """The window actions behind the timeline's block context menu."""
+
+    def _stub(self, window: MainWindow) -> _StubController:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window._original_controller = original  # type: ignore[attr-defined]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(SAMPLE_LOG_EVENT)
+        window._on_trace_log(SAMPLE_LOG_EVENT)
+        return stub
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_play_block_starts_at_that_block(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._play_block(2)
+            assert stub.plays[-1] == 2
+        finally:
+            self._restore(window)
+
+    def test_loop_block_selects_and_plays_the_block(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._loop_block(1)
+            assert window.timeline.range() == pytest.approx((1.0, 1.5))
+            assert window.transport_bar.loop_enabled() is True
+            assert stub.plays[-1] == 1
+            assert stub.play_args[-1][0] == 1  # bounded to block 1
+        finally:
+            self._restore(window)
+
+    def test_reset_block_timing_restores_the_base(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            window._on_block_resized(1, 2.0)
+            assert window.timeline.log.block_by_index(1).duration == pytest.approx(2.0)
+            window._reset_block_timing(1)
+            assert window.timeline.log.block_by_index(1).duration == pytest.approx(0.5)
+        finally:
+            self._restore(window)
+
+    def test_render_block_still_targets_the_block_end(self, window: MainWindow) -> None:
+        self._stub(window)
+        original = window.exports
+        stub = _StubExports()
+        window.exports = stub  # type: ignore[assignment]
+        try:
+            window._render_block_still(1)
+            assert len(stub.stills) == 1
+            _path, _scene, output, animation_range = stub.stills[-1]
+            assert output.endswith("feature_showcase_block1.png")
+            assert animation_range == (0, 2)
+        finally:
+            window.exports = original  # type: ignore[assignment]
+            self._restore(window)
+
+    def test_export_block_range_preselects_the_block(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub(window)
+        captured: dict = {}
+
+        class _Dialog:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                captured.update(kwargs)
+
+            def exec(self) -> int:
+                return 0
+
+        monkeypatch.setattr(main_window_module, "ExportDialog", _Dialog)
+        try:
+            window._export_block_range(1)
+            assert window.timeline.range() == pytest.approx((1.0, 1.5))
+            assert captured["initial_range"] == (1, 1)
+        finally:
+            self._restore(window)
+
+
 class TestFramesAndPreview:
     def test_frame_updates_panel(self, window: MainWindow) -> None:
         image = QImage(32, 24, QImage.Format.Format_RGBA8888)

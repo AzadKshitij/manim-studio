@@ -88,12 +88,25 @@ class ExportController(QObject):
         )
         return self.export_plan(plan)
 
-    def export_still(self, scene_path: Path, scene_name: str | None, output: str | Path) -> bool:
-        """Export a single frame; False when an export is already running."""
+    def export_still(
+        self,
+        scene_path: Path,
+        scene_name: str | None,
+        output: str | Path,
+        *,
+        animation_range: tuple[int, int] | None = None,
+    ) -> bool:
+        """Export a single frame; False when an export is already running.
+
+        ``animation_range`` (inclusive block indexes) saves the frame at the end
+        of that range instead of the scene's final frame.
+        """
         if self._is_running(self._export_process):
             self.statusChanged.emit("export already running")
             return False
-        plan = build_export_plan(scene_path, scene_name, output=output, still=True)
+        plan = build_export_plan(
+            scene_path, scene_name, output=output, still=True, animation_range=animation_range
+        )
         return self.export_plan(plan)
 
     def export_plan(self, plan: ExportPlan) -> bool:
