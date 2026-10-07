@@ -911,11 +911,20 @@ class SceneHost:
             return
         start = int(message.get("from") or 0)
         start = max(0, min(start, len(self.blocks) - 1))
+        # ``to`` (inclusive block index) bounds playback to a range for looping.
+        to = message.get("to")
+        end = None
+        if to is not None:
+            end = max(start, min(int(to), len(self.blocks) - 1)) + 1
+        # ``rate`` is a review-speed multiplier (0.25x..2x); 2x plays twice as fast.
+        rate = float(message.get("rate") or 1.0)
+        if rate <= 0:
+            rate = 1.0
         self.stop_event.clear()
-        scene = self._make_scene(skip_animations=False, start=start)
+        scene = self._make_scene(skip_animations=False, start=start, end=end)
         self._activate_scene(scene)
-        if self._timing_factors:
-            TimingScaler(scene, self._timing_factors)
+        if self._timing_factors or rate != 1.0:
+            TimingScaler(scene, self._timing_factors, speed=rate)
         self.emit_status("playing", index=start)
         self.tick.reset()
         error: BaseException | None = None

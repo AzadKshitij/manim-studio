@@ -292,22 +292,29 @@ class TimingScaler:
     duration) so playback reproduces the timeline the user edited, without
     touching the scene source.  Block indexes come from ``scene.num_plays`` at
     call entry — exactly the value the tracer records.
+
+    ``speed`` is an extra global multiplier for a review-speed control: ``2.0``
+    plays at double speed (run times halved), ``0.5`` at half speed.  It composes
+    with the per-block retiming factors.
     """
 
-    def __init__(self, scene: Any, factors: Mapping[int, float]) -> None:
+    def __init__(self, scene: Any, factors: Mapping[int, float], *, speed: float = 1.0) -> None:
         self._scene = scene
         self._factors = dict(factors)
+        self._speed = float(speed) if float(speed) > 0 else 1.0
         self._orig_play = scene.play
         self._orig_wait = scene.wait
         scene.play = self._play
         scene.wait = self._wait
 
     def _factor(self) -> float:
+        base = 1.0
         try:
             index = int(self._scene.num_plays)
+            base = float(self._factors.get(index, 1.0))
         except (AttributeError, TypeError, ValueError):
-            return 1.0
-        return float(self._factors.get(index, 1.0))
+            base = 1.0
+        return base / self._speed
 
     def _play(self, *args: Any, **kwargs: Any) -> Any:
         factor = self._factor()

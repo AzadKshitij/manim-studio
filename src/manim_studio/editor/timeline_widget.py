@@ -73,6 +73,7 @@ class TimelineWidget(QWidget):
     blockResized = Signal(int, float)  # block index, requested duration (seconds)
     blockActivated = Signal(int)  # Ctrl+double-click: jump to the block's source line
     blockDurationEditRequested = Signal(int)  # double-click: type an exact duration
+    rangeChanged = Signal(float, float)  # loop/export range [start, end] seconds
     undoRequested = Signal()
     redoRequested = Signal()
 
@@ -86,6 +87,8 @@ class TimelineWidget(QWidget):
         self._active_index: int | None = None  # block under the editor caret
         self._snapping = True
         self._fps = 1.0 / FRAME_STEP
+        self._range: tuple[float, float] | None = None  # loop / export range
+        self._range_anchor = 0.0
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
         self._press_pos: QPoint | None = None
         self._last_mouse_x = 0.0
@@ -130,6 +133,27 @@ class TimelineWidget(QWidget):
             self._active_index = index
             self.update()
 
+    # -- loop / export range ----------------------------------------------
+
+    def range(self) -> tuple[float, float] | None:
+        """The selected ``(start, end)`` range in seconds, or ``None``."""
+        return self._range
+
+    def set_range(self, start: float, end: float) -> None:
+        """Set the loop/export range (times clamped to ``>= 0``)."""
+        lo, hi = sorted((max(0.0, float(start)), max(0.0, float(end))))
+        if hi - lo < 1e-3:
+            hi = lo + 1e-3
+        self._range = (lo, hi)
+        self.update()
+        self.rangeChanged.emit(lo, hi)
+
+    def clear_range(self) -> None:
+        """Drop the loop/export range."""
+        if self._range is not None:
+            self._range = None
+            self.update()
+
     @property
     def snapping(self) -> bool:
         """Whether scrubbing/retiming snaps to frames, 0.1s and block edges."""
@@ -148,6 +172,11 @@ class TimelineWidget(QWidget):
         if value > 0:
             self._fps = value
 
+    @property
+    def frame_step(self) -> float:
+        """Duration of one frame (``1/fps``) for single-frame stepping."""
+        return 1.0 / self._fps
+
     def set_log(self, log: TimelineLog, *, keep_view: bool = False) -> None:
         self._log = log
         if not keep_view or self._view.total <= 0:
@@ -157,6 +186,7 @@ class TimelineWidget(QWidget):
         self._playhead = min(self._playhead, log.total_duration)
         self._hover_index = None
         self._active_index = None
+        self._range = None
         if self._mode == "resize":
             self._mode = None
         self._resize_index = None
@@ -273,6 +303,17 @@ class TimelineWidget(QWidget):
         self.setFocus()
         self._press_pos = event.position().toPoint()
         self._last_mouse_x = event.position().x()
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+            and event.position().y() <= RULER_HEIGHT
+        ):
+            # Shift-drag on the ruler selects a loop/export range.
+            self._mode = "range"
+            self._range_anchor = self._view.x_to_time(event.position().x())
+            self._range = (self._range_anchor, self._range_anchor)
+            self.update()
+            return
         if event.button() == Qt.MouseButton.MiddleButton or (
             event.button() == Qt.MouseButton.LeftButton
             and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
@@ -292,6 +333,11 @@ class TimelineWidget(QWidget):
             self._request_scrub(event.position().x())
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._mode == "range":
+            current = self._view.x_to_time(event.position().x())
+            self._range = tuple(sorted((self._range_anchor, current)))  # type: ignore[assignment]
+            self.update()
+            return
         if self._mode == "pan":
             delta = self._last_mouse_x - event.position().x()
             self._view = self._view.pan_px(delta)
@@ -332,6 +378,16 @@ class TimelineWidget(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         was, self._mode = self._mode, None
         press, self._press_pos = self._press_pos, None
+        if was == "range":
+            if self._range is not None:
+                start, end = self._range
+                if end - start < 1e-3:
+                    self._range = None
+                else:
+                    self.rangeChanged.emit(start, end)
+            self.update()
+            event.accept()
+            return
         if was == "resize" and self._resize_index is not None:
             index, duration = self._resize_index, self._resize_duration
             self._resize_index = None
@@ -435,8 +491,28 @@ class TimelineWidget(QWidget):
                     current=block.index == current,
                     active=block.index == self._active_index,
                 )
+        self._draw_range(painter, width, height)
         self._draw_playhead(painter, height)
         painter.end()
+
+    def _draw_range(self, painter: QPainter, width: int, height: int) -> None:
+        """Draw the selected loop/export range as a band with edge markers."""
+        if self._range is None:
+            return
+        start, end = self._range
+        left = self._view.time_to_x(start)
+        right = self._view.time_to_x(end)
+        if right < -2 or left > width + 2:
+            return
+        band = QRectF(left, 0.0, max(1.0, right - left), float(height))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0x5F, 0xE3, 0xC8, 36))
+        painter.drawRect(band)
+        pen = QPen(QColor(0x5F, 0xE3, 0xC8))
+        pen.setWidthF(1.5)
+        painter.setPen(pen)
+        painter.drawLine(int(left), 0, int(left), height)
+        painter.drawLine(int(right), 0, int(right), height)
 
     def _draw_ruler(self, painter: QPainter, width: int) -> None:
         painter.setPen(QColor(0x55, 0x55, 0x55))

@@ -258,6 +258,37 @@ class TestViewNavigation:
         assert timeline.view().start == 0.0
 
 
+class TestRange:
+    def test_set_and_clear_range(self, timeline: TimelineWidget) -> None:
+        spy = QSignalSpy(timeline.rangeChanged)
+        timeline.set_range(1.0, 2.0)
+        assert timeline.range() == pytest.approx((1.0, 2.0))
+        assert spy.count() == 1
+        timeline.clear_range()
+        assert timeline.range() is None
+
+    def test_shift_drag_on_the_ruler_sets_a_range(self, timeline: TimelineWidget, qtbot) -> None:
+        qtbot.mousePress(
+            timeline,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.ShiftModifier,
+            pos=QPoint(150, 5),
+        )
+        qtbot.mouseMove(timeline, QPoint(300, 5))
+        qtbot.mouseRelease(
+            timeline,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.ShiftModifier,
+            pos=QPoint(300, 5),
+        )
+        assert timeline.range() == pytest.approx((1.0, 2.0), abs=0.05)
+
+    def test_set_log_clears_the_range(self, timeline: TimelineWidget) -> None:
+        timeline.set_range(0.5, 1.5)
+        timeline.set_log(make_log())
+        assert timeline.range() is None
+
+
 class TestKeyboard:
     def test_arrow_steps_one_frame(self, timeline: TimelineWidget, qtbot) -> None:
         spy = QSignalSpy(timeline.scrubRequested)

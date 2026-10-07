@@ -189,8 +189,14 @@ class PreviewController(QObject):
             payload["scene_name"] = scene_name
         return self.send(Command.LOAD, **payload)
 
-    def play(self, from_index: int = 0) -> bool:
-        return self.send(Command.PLAY, **{"from": int(from_index)})
+    def play(self, from_index: int = 0, to_index: int | None = None, rate: float = 1.0) -> bool:
+        """Play from ``from_index`` (optionally bounded by ``to_index``) at ``rate``."""
+        payload: dict[str, Any] = {"from": int(from_index)}
+        if to_index is not None:
+            payload["to"] = int(to_index)
+        if rate != 1.0:
+            payload["rate"] = float(rate)
+        return self.send(Command.PLAY, **payload)
 
     def stop_playback(self) -> bool:
         return self.send(Command.STOP)

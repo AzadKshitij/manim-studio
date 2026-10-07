@@ -28,6 +28,7 @@ class _StubController:
         self.scrubs: list[float] = []
         self.seeks: list[int] = []
         self.plays: list[int] = []
+        self.play_args: list[tuple[int | None, float]] = []
         self.timings: list[tuple[list[dict[str, float]], float]] = []
         self.stops = 0
         self.is_running = True
@@ -48,8 +49,9 @@ class _StubController:
         self.seeks.append(int(index))
         return True
 
-    def play(self, from_index: int = 0) -> bool:
+    def play(self, from_index: int = 0, to_index: int | None = None, rate: float = 1.0) -> bool:
         self.plays.append(int(from_index))
+        self.play_args.append((to_index, float(rate)))
         return True
 
     def stop_playback(self) -> bool:
@@ -645,6 +647,97 @@ class TestNumericDuration:
             window.timeline.blockDurationEditRequested.emit(1)
             assert window.timeline.log.block_by_index(1).duration == pytest.approx(before)
             assert stub.timings == []
+        finally:
+            self._restore(window)
+
+
+class TestTransport:
+    """The transport toolbar drives scrubbing, loop ranges and playback speed."""
+
+    def _stub(self, window: MainWindow) -> _StubController:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window._original_controller = original  # type: ignore[attr-defined]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(SAMPLE_LOG_EVENT)
+        window._on_trace_log(SAMPLE_LOG_EVENT)
+        return stub
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_step_moves_one_frame(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.scrub_to_time(1.0)
+            window._on_transport_step(1)
+            assert stub.scrubs[-1] == pytest.approx(1.0 + window.timeline.frame_step)
+            window._on_transport_step(-1)
+            assert stub.scrubs[-1] == pytest.approx(1.0)
+        finally:
+            self._restore(window)
+
+    def test_jump_start_and_end(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_transport_jump("start")
+            assert stub.scrubs[-1] == pytest.approx(0.0)
+            window._on_transport_jump("end")
+            assert stub.scrubs[-1] == pytest.approx(3.5)
+        finally:
+            self._restore(window)
+
+    def test_speed_is_sent_with_play(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_transport_speed(2.0)
+            window.request_play()
+            assert stub.play_args[-1][1] == pytest.approx(2.0)
+        finally:
+            self._restore(window)
+
+    def test_loop_bounds_over_a_selection(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            window.timeline.set_range(1.0, 1.5)
+            assert window._loop_bounds() == (1, 1)
+        finally:
+            self._restore(window)
+
+    def test_loop_bounds_default_to_the_whole_scene(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            assert window._loop_bounds() == (0, 2)
+        finally:
+            self._restore(window)
+
+    def test_loop_play_sends_a_bounded_range(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_range(1.0, 1.5)
+            window._on_transport_loop(True)
+            window.request_play()
+            assert stub.plays[-1] == 1
+            assert stub.play_args[-1][0] == 1  # to_index bounded to block 1
+        finally:
+            self._restore(window)
+
+    def test_loop_replays_when_playback_finishes(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window._on_stopped_loop({"user_stopped": False})
+            assert stub.plays
+        finally:
+            self._restore(window)
+
+    def test_user_stop_does_not_loop(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window._on_stopped_loop({"user_stopped": True})
+            assert stub.plays == []
         finally:
             self._restore(window)
 

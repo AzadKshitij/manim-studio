@@ -30,7 +30,7 @@ The frames channel is only opened in `--embedded` mode.
 | --- | --- | --- |
 | `load` | `path` | import and trace a (new) scene file, show the initial frame |
 | `reload` | `path?` | re-import the current file (deep-reloads user imports) |
-| `play` | `from?` (block index, default 0) | replay in real time from a block |
+| `play` | `from?` (block index, default 0), `to?` (inclusive end block), `rate?` (speed, default 1.0) | replay in real time from a block; `to` bounds it to a range (looping) and `rate` is a review-speed multiplier (v3, additive) |
 | `stop` | — | interrupt playback at the current frame |
 | `seek` | `index` | jump to the state at the *end* of block `index` |
 | `scrub` | `time` | show the scene at an exact time (filmstrip-first, replay on miss) |

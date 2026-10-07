@@ -100,3 +100,35 @@ class TestTimingScaler:
         assert scene.num_plays == 0
         scene.play(_FakeAnimation(1.0))
         assert scene.calls[-1] == ("play", [2.0])
+
+
+class TestTimingScalerSpeed:
+    def test_speed_double_halves_run_time(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=2.0)
+        scene.play(_FakeAnimation(1.0))
+        assert scene.calls[-1] == ("play", [0.5])
+
+    def test_half_speed_doubles_run_time(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=0.5)
+        scene.play(_FakeAnimation(1.0))
+        assert scene.calls[-1] == ("play", [2.0])
+
+    def test_speed_composes_with_a_block_factor(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {0: 2.0}, speed=2.0)  # 2.0 / 2.0 -> unchanged
+        scene.play(_FakeAnimation(1.0))
+        assert scene.calls[-1] == ("play", [1.0])
+
+    def test_speed_scales_waits(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=0.5)
+        scene.wait(1.0)
+        assert scene.calls[-1] == ("wait", 2.0)
+
+    def test_non_positive_speed_is_treated_as_normal(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=0.0)
+        scene.play(_FakeAnimation(1.0))
+        assert scene.calls[-1] == ("play", [1.0])

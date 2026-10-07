@@ -108,6 +108,21 @@ class MediaTransport(QObject):
             return
         self._player.setPosition(max(0, int(seconds * 1000)))
 
+    def set_rate(self, rate: float) -> None:
+        """Set playback speed (1.0 = normal) for the rendered video."""
+        try:
+            self._player.setPlaybackRate(float(rate))
+        except Exception:  # pragma: no cover - backend may not support rates
+            log.debug("playback rate %s unsupported", rate)
+
+    def set_looping(self, enabled: bool) -> None:
+        """Loop the rendered video forever (or play once)."""
+        loops = QMediaPlayer.Loops.Infinite if enabled else 1
+        try:
+            self._player.setLoops(loops)
+        except Exception:  # pragma: no cover - backend may not support loops
+            log.debug("looping unsupported")
+
     # ------------------------------------------------------------------
 
     def _on_video_frame(self, frame: Any) -> None:

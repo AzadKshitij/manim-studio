@@ -43,6 +43,7 @@ from manim_studio.editor.preview_panel import PreviewPanel
 from manim_studio.editor.shell_panel import ShellPanel
 from manim_studio.editor.stats_controller import StatsController
 from manim_studio.editor.timeline_controller import MediaTransport
+from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.scene_runner import check_scene_file
@@ -84,6 +85,8 @@ class MainWindow(QMainWindow):
         # Timing edits (timeline right-edge drag) are kept separately from the
         # code editor's undo stack; the keyboard handler is focus-scoped.
         self._timing = TimingOverrides(TimelineLog(()))
+        self._loop = False
+        self._speed = 1.0
 
         self.editor = CodeEditor(self)
         self.timings = TimingStats()
@@ -147,6 +150,8 @@ class MainWindow(QMainWindow):
         bottom = QWidget(self)
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
+        self.transport_bar = TimelineTransport(self)
+        bottom_layout.addWidget(self.transport_bar)
         bottom_layout.addWidget(self.timeline)
 
         self._scrub_slider = QSlider(Qt.Orientation.Horizontal, self)
@@ -323,8 +328,18 @@ class MainWindow(QMainWindow):
         self.timeline.blockResized.connect(self._on_block_resized)
         self.timeline.blockActivated.connect(self._on_block_activated)
         self.timeline.blockDurationEditRequested.connect(self._edit_block_duration)
+        self.timeline.rangeChanged.connect(self._on_range_changed)
         self.timeline.undoRequested.connect(self._undo_timing)
         self.timeline.redoRequested.connect(self._redo_timing)
+        self.transport_bar.playPauseRequested.connect(self._toggle_play)
+        self.transport_bar.stepRequested.connect(self._on_transport_step)
+        self.transport_bar.jumpRequested.connect(self._on_transport_jump)
+        self.transport_bar.loopToggled.connect(self._on_transport_loop)
+        self.transport_bar.speedChanged.connect(self._on_transport_speed)
+        self.controller.statusChanged.connect(
+            lambda state, _message: self.transport_bar.set_playing(state == "playing")
+        )
+        self.controller.stoppedReceived.connect(self._on_stopped_loop)
         self.controller.logReceived.connect(self._on_trace_log)
         self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
         self.controller.execResultReceived.connect(self.shell.append_exec_result)
@@ -592,8 +607,69 @@ class MainWindow(QMainWindow):
             return
         self.video.exit()
         index = self._play_start_index()
+        to_index: int | None = None
+        if self._loop:
+            bounds = self._loop_bounds()
+            if bounds is not None:
+                index, to_index = bounds
         self._announce_play_start(index)
-        self.controller.play(from_index=index)
+        self.controller.play(from_index=index, to_index=to_index, rate=self._speed)
+
+    # ------------------------------------------------------------------
+    # Transport toolbar
+    # ------------------------------------------------------------------
+
+    def _on_transport_step(self, direction: int) -> None:
+        if self._path is None or not self.controller.is_running:
+            return
+        self.scrub_to_time(self.timeline.playhead_time + direction * self.timeline.frame_step)
+
+    def _on_transport_jump(self, where: str) -> None:
+        if self._path is None or not self.controller.is_running:
+            return
+        self.scrub_to_time(0.0 if where == "start" else self.events.total_duration)
+
+    def _on_transport_loop(self, enabled: bool) -> None:
+        self._loop = bool(enabled)
+        self.transport.set_looping(self._loop)
+        self._set_status("loop on" if self._loop else "loop off")
+
+    def _on_transport_speed(self, speed: float) -> None:
+        self._speed = float(speed) if float(speed) > 0 else 1.0
+        self.transport.set_rate(self._speed)
+        if self.events.playing:
+            # The host honours the rate at play time; restart so it applies now.
+            self.request_stop()
+            self.request_play()
+        else:
+            self._set_status(f"playback speed {self._speed:g}x")
+
+    def _on_range_changed(self, start: float, end: float) -> None:
+        self._set_status(f"range {format_duration(start)} - {format_duration(end)}")
+
+    def _on_stopped_loop(self, message: dict[str, Any]) -> None:
+        """Repeat the loop range when playback ends on its own."""
+        if not self._loop or message.get("user_stopped"):
+            return
+        if self.controller.is_running:
+            self.request_play()
+
+    def _loop_bounds(self) -> tuple[int, int] | None:
+        """Inclusive ``(first, last)`` block indexes to loop, or ``None``."""
+        log = self.timeline.log
+        if log.is_empty:
+            return None
+        selection = self.timeline.range()
+        if selection is None:
+            return (0, log.num_blocks - 1)
+        start, end = selection
+        first = log.index_at(start)
+        last = log.index_at(max(0.0, end - 1e-6))
+        if first is None or last is None:
+            return (0, log.num_blocks - 1)
+        if last < first:
+            first, last = last, first
+        return (first, last)
 
     def _play_start_index(self) -> int:
         """Block that playback resumes from.
