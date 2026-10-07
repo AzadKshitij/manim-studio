@@ -6,8 +6,8 @@ button signals.  Orchestration lives in :class:`~manim_studio.editor.main_window
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QPixmap, QResizeEvent
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QImage, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -31,6 +31,9 @@ class PreviewPanel(QWidget):
     playRequested = Signal()
     stopRequested = Signal()
 
+    #: How long after the last streamed frame the viewport re-scales smoothly.
+    SETTLE_MS = 150
+
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -41,6 +44,13 @@ class PreviewPanel(QWidget):
         self._image: QImage | None = None
         self._embedded = True
         self.timings = timings if timings is not None else TimingStats()
+        # Streaming frames scale with a fast (nearest) filter — the eye cannot
+        # resolve detail in motion — and a short settle timer re-renders the last
+        # frame smoothly once the stream pauses, so stills stay crisp.
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.setInterval(self.SETTLE_MS)
+        self._settle_timer.timeout.connect(self._settle)
 
         self._state_label = QLabel("idle")
         self._state_label.setObjectName("previewState")
@@ -111,6 +121,8 @@ class PreviewPanel(QWidget):
         self._embedded = embedded
         self._mode_label.setText("embedded" if embedded else "external window")
         self._stack.setCurrentWidget(self._viewport if embedded else self._placeholder)
+        if embedded:
+            self._rescale(fast=False)
 
     @property
     def is_embedded(self) -> bool:
@@ -126,7 +138,17 @@ class PreviewPanel(QWidget):
 
     def set_frame(self, image: QImage) -> None:
         self._image = image
-        self._rescale()
+        if not self._viewport.isVisible():
+            # Off screen (minimised or another page): keep the frame but defer the
+            # pixmap conversion and scale until the viewport is shown again.
+            self._settle_timer.stop()
+            return
+        self._rescale(fast=True)
+        self._settle_timer.start()
+
+    def _settle(self) -> None:
+        """Re-render the last streamed frame smoothly now that it has paused."""
+        self._rescale(fast=False)
 
     def set_status(self, state: str, detail: str = "") -> None:
         text = state if not detail else f"{state} — {detail}"
@@ -151,21 +173,35 @@ class PreviewPanel(QWidget):
             self._time_label.setText(f"{format_duration(seconds)} / {format_duration(total)}")
 
     def clear_frame(self) -> None:
+        self._settle_timer.stop()
         self._image = None
         self._viewport.clear()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        self._rescale()
+        # A real resize must re-scale regardless of streaming state; do it smoothly
+        # and let the next streamed frame take over in fast mode.
+        self._settle_timer.stop()
+        self._rescale(fast=False)
         super().resizeEvent(event)
 
-    def _rescale(self) -> None:
+    def showEvent(self, event: QShowEvent) -> None:
+        # A frame that arrived while hidden was stored but never scaled.
+        self._rescale(fast=False)
+        super().showEvent(event)
+
+    def _rescale(self, *, fast: bool) -> None:
         if self._image is None:
             return
+        mode = (
+            Qt.TransformationMode.FastTransformation
+            if fast
+            else Qt.TransformationMode.SmoothTransformation
+        )
         with self.timings.phase("scale"):
             pixmap = QPixmap.fromImage(self._image)
             scaled = pixmap.scaled(
                 self._viewport.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+                mode,
             )
         self._viewport.setPixmap(scaled)

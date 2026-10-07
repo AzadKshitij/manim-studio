@@ -152,3 +152,21 @@ matching wire traffic. It does **not** change `render` (still ~23 ms/frame), so
 the realtime ratio is unchanged (~1.12). Note that `playback_fps` counts frames
 *delivered*, so it falls by design once duplicates stop being transmitted —
 compare `play_realtime_ratio`, not `playback_fps`, across this change.
+
+### P1.3 — adaptive preview scaling (2026-10-07)
+
+`PreviewPanel` now scales streamed frames with `FastTransformation` and, 150 ms
+after the stream pauses, re-renders the last frame with
+`SmoothTransformation`, so motion is cheap and stills stay crisp. Frames that
+arrive while the viewport is hidden (minimised, other page) are stored and scaled
+on show instead of on arrival. Recorded in `after-p1.3.json`:
+
+| metric | always smooth | adaptive |
+| --- | --- | --- |
+| per streamed frame (720p → 960×540) | 5.2–7.0 ms | 4.4–6.1 ms |
+| saving | — | **0.7–1.4 ms/frame** (~15–25%) |
+
+Per-frame numbers move with machine load (this box is shared), so the saving is
+quoted as a range across runs; within any single run fast is always cheaper, and
+the one settle-time smooth scale per burst is negligible. `QPixmap.fromImage`
+(~2.2 ms) is unchanged and remains the floor for the GUI-thread cost.

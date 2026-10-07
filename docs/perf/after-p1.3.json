@@ -1,0 +1,56 @@
+{
+  "editor": {
+    "from_image_ms": 2.2861,
+    "scale_fast_ms": 4.3933,
+    "scale_smooth_ms": 5.24,
+    "wrap_copy_ms": 1.2143,
+    "wrap_ms": 0.0038
+  },
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-07T21:08:33",
+  "machine": {
+    "cpu_count": 8,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD",
+    "python": "3.13.12"
+  },
+  "micro": {
+    "zlib-1": {
+      "decode_ms": 11.891,
+      "encode_ms": 44.103,
+      "payload_bytes": 410051,
+      "ratio": 8.99
+    },
+    "zlib-6": {
+      "decode_ms": 9.258,
+      "encode_ms": 69.319,
+      "payload_bytes": 125297,
+      "ratio": 29.42
+    },
+    "zstd-1": {
+      "decode_ms": 5.557,
+      "encode_ms": 6.443,
+      "payload_bytes": 138363,
+      "ratio": 26.64
+    },
+    "zstd-3": {
+      "decode_ms": 6.022,
+      "encode_ms": 8.513,
+      "payload_bytes": 140203,
+      "ratio": 26.29
+    }
+  },
+  "parser": {
+    "payload_bytes": 138384,
+    "round_trip_ms": 6.037
+  },
+  "pump": {
+    "caller_speedup": 3221.5,
+    "encode_ref_ms": 6.443,
+    "handoff_ms": 0.002
+  }
+}
