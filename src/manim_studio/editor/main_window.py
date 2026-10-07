@@ -82,6 +82,8 @@ class MainWindow(QMainWindow):
         self._restore_settings = restore_settings
         self._settings = QSettings("ManimStudio", "ManimStudio")
         self._api_names = api_cache.load_api_names()
+        # Toolbar actions by label (used by the control-surface tests).
+        self._toolbar_actions: dict[str, QAction] = {}
         # Timing edits (timeline right-edge drag) are kept separately from the
         # code editor's undo stack; the keyboard handler is focus-scoped.
         self._timing = TimingOverrides(TimelineLog(()))
@@ -323,9 +325,6 @@ class MainWindow(QMainWindow):
         self.editor.fileDropped.connect(self.open_path)
         self.editor.cursorMoved.connect(self._on_cursor_moved)
         self.editor.modificationChanged.connect(self._update_title)
-        self.preview_panel.reloadRequested.connect(self.reload_preview)
-        self.preview_panel.playRequested.connect(self.request_play)
-        self.preview_panel.stopRequested.connect(self.request_stop)
         self.timeline.scrubRequested.connect(self.scrub_to_time)
         self.timeline.playToggleRequested.connect(self._toggle_play)
         self.timeline.blockResized.connect(self._on_block_resized)
@@ -407,6 +406,7 @@ class MainWindow(QMainWindow):
         action = QAction(text, self)
         action.triggered.connect(lambda checked=False: slot())
         toolbar.addAction(action)
+        self._toolbar_actions[text] = action
         return action
 
     def _select_all(self) -> None:
@@ -640,6 +640,7 @@ class MainWindow(QMainWindow):
 
     def _on_transport_loop(self, enabled: bool) -> None:
         self._loop = bool(enabled)
+        self.timeline.set_looping(self._loop)
         self.transport.set_looping(self._loop)
         self._set_status("loop on" if self._loop else "loop off")
 
@@ -722,9 +723,14 @@ class MainWindow(QMainWindow):
         self.request_play()
 
     def _loop_block(self, index: int) -> None:
-        """Context menu: select the block, turn looping on and play it."""
+        """Context menu: toggle looping this block (clicking again undoes it)."""
         block = self.timeline.log.block_by_index(index)
         if block is None:
+            return
+        if self.timeline.block_is_looped(index):
+            # The block is already the loop region: undo the loop.
+            self.timeline.clear_range()
+            self.transport_bar.set_loop(False)  # emits loopToggled -> disables looping
             return
         self.timeline.set_range(block.start, block.end)
         self.events.play_from_index = index

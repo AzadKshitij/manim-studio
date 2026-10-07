@@ -97,6 +97,7 @@ class TimelineWidget(QWidget):
         self._range_anchor = 0.0
         self._timing_clipboard: float | None = None
         self._context_menu: QMenu | None = None  # kept for tests
+        self._looping = False  # mirrors the transport's loop toggle
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
         self._press_pos: QPoint | None = None
         self._last_mouse_x = 0.0
@@ -169,6 +170,18 @@ class TimelineWidget(QWidget):
         """The copied block duration (seconds), or ``None``."""
         return self._timing_clipboard
 
+    def set_looping(self, enabled: bool) -> None:
+        """Mirror the transport's loop toggle so the menu's checkbox is accurate."""
+        self._looping = bool(enabled)
+
+    def block_is_looped(self, index: int) -> bool:
+        """True when looping is on and the range is exactly this block's span."""
+        block = self._log.block_by_index(index)
+        if not self._looping or self._range is None or block is None:
+            return False
+        start, end = self._range
+        return abs(start - block.start) < 1e-6 and abs(end - block.end) < 1e-6
+
     def context_menu(self, index: int | None) -> QMenu:
         """Build the block context menu; ``index`` is the right-clicked block."""
         menu = QMenu(self)
@@ -180,9 +193,10 @@ class TimelineWidget(QWidget):
         menu.addAction("Play this block").triggered.connect(
             lambda: self.blockPlayRequested.emit(index)
         )
-        menu.addAction("Loop this block").triggered.connect(
-            lambda: self.blockLoopRequested.emit(index)
-        )
+        loop = menu.addAction("Loop this block")
+        loop.setCheckable(True)
+        loop.setChecked(self.block_is_looped(index))
+        loop.triggered.connect(lambda _checked=False: self.blockLoopRequested.emit(index))
         menu.addSeparator()
         menu.addAction("Set as export range").triggered.connect(
             lambda: self.blockExportRangeRequested.emit(index)

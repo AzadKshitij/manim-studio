@@ -1,17 +1,18 @@
-"""Preview presentation panel: embedded frame view + transport controls.
+"""Preview presentation panel: the embedded frame viewport.
 
-The panel is intentionally dumb: it renders frames, shows status and emits
-button signals.  Orchestration lives in :class:`~manim_studio.editor.main_window.MainWindow`.
+The panel is intentionally dumb: it renders frames and shows status.  All
+transport controls (play/pause, step, loop, speed, reload) live on the timeline's
+transport toolbar and the main toolbar; orchestration lives in
+:class:`~manim_studio.editor.main_window.MainWindow`.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QStackedLayout,
     QVBoxLayout,
@@ -25,11 +26,7 @@ __all__ = ["PreviewPanel"]
 
 
 class PreviewPanel(QWidget):
-    """Embedded preview viewport with Reload / Play / Stop controls."""
-
-    reloadRequested = Signal()
-    playRequested = Signal()
-    stopRequested = Signal()
+    """Embedded preview viewport (transport lives on the timeline toolbar)."""
 
     #: How long after the last streamed frame the viewport re-scales smoothly.
     SETTLE_MS = 150
@@ -88,28 +85,10 @@ class PreviewPanel(QWidget):
         self._stack.addWidget(self._placeholder)
         self._stack.addWidget(self._viewport)
 
-        self._reload_button = QPushButton("Reload")
-        self._reload_button.setToolTip("Reload the scene from disk (F5)")
-        self._play_button = QPushButton("Play")
-        self._play_button.setToolTip("Replay from the beginning")
-        self._stop_button = QPushButton("Stop")
-        self._stop_button.setToolTip("Stop live playback")
-
-        self._reload_button.clicked.connect(self.reloadRequested)
-        self._play_button.clicked.connect(self.playRequested)
-        self._stop_button.clicked.connect(self.stopRequested)
-
-        controls = QHBoxLayout()
-        controls.addWidget(self._reload_button)
-        controls.addWidget(self._play_button)
-        controls.addWidget(self._stop_button)
-        controls.addStretch(1)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addLayout(header)
         layout.addLayout(self._stack, 1)
-        layout.addLayout(controls)
 
         self.set_mode(embedded=True)
 

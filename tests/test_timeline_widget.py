@@ -352,6 +352,19 @@ class TestContextMenu:
     def test_empty_area_menu_offers_fit(self, timeline: TimelineWidget) -> None:
         assert [a.text() for a in timeline.context_menu(None).actions()] == ["Fit timeline"]
 
+    def test_loop_action_is_checkable(self, timeline: TimelineWidget) -> None:
+        action = self._action(timeline.context_menu(1), "Loop this block")
+        assert action.isCheckable() is True
+        assert action.isChecked() is False
+
+    def test_loop_action_reflects_the_looped_block(self, timeline: TimelineWidget) -> None:
+        timeline.set_range(1.0, 2.0)  # block 1 spans [1.0, 2.0]
+        timeline.set_looping(True)
+        assert self._action(timeline.context_menu(1), "Loop this block").isChecked() is True
+        assert self._action(timeline.context_menu(0), "Loop this block").isChecked() is False
+        timeline.set_looping(False)
+        assert self._action(timeline.context_menu(1), "Loop this block").isChecked() is False
+
 
 class TestZoomControls:
     def test_zoom_by_scales_the_span(self, timeline: TimelineWidget) -> None:

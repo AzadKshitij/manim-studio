@@ -822,6 +822,20 @@ class TestBlockContextMenu:
         finally:
             self._restore(window)
 
+    def test_loop_block_twice_undoes_the_loop(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._loop_block(1)
+            assert window.timeline.range() is not None
+            assert window.transport_bar.loop_enabled() is True
+            plays_after_first = len(stub.plays)
+            window._loop_block(1)  # clicking again undoes the loop
+            assert window.timeline.range() is None
+            assert window.transport_bar.loop_enabled() is False
+            assert len(stub.plays) == plays_after_first  # no extra playback
+        finally:
+            self._restore(window)
+
     def test_reset_block_timing_restores_the_base(self, window: MainWindow) -> None:
         self._stub(window)
         try:
