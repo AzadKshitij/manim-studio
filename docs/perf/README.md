@@ -37,6 +37,8 @@ end-to-end can be recorded separately).
 | `micro.<codec>.decode_ms` | payload decompression time for one frame |
 | `micro.<codec>.ratio` | uncompressed / compressed payload size |
 | `parser.round_trip_ms` | `encode_frame` → `FrameParser.feed` in 64 KiB bursts |
+| `editor.wrap_ms` / `editor.wrap_copy_ms` | wrapping a 720p RGBA buffer in a `QImage`, with and without the defensive copy |
+| `editor.from_image_ms` / `editor.scale_{smooth,fast}_ms` | `QPixmap` conversion and both downscale modes to a 960×540 viewport |
 
 **End-to-end** (real host, `tests/scenes/feature_showcase.py`, 1280×720):
 
@@ -115,3 +117,18 @@ Crawl throughput is up 71% on the baseline and frame encoding is an order of
 magnitude cheaper. Note: zstd compression contexts are not thread-safe and the
 host encodes on both the pump and the idle/crawl thread, so `frame_codec`
 caches one compressor **per thread**.
+
+### P1.4 — drop the editor's defensive QImage copy (2026-10-07)
+
+`PreviewController.decode_latest_frame` wrapped each decompressed frame in
+`QImage(..., ).copy()`. PySide6 already keeps a reference to the source buffer
+for the image's lifetime, so the copy was pure overhead on the GUI thread.
+Verified by reading pixels back after a forced collection and 300 MiB of heap
+churn. Recorded in `after-p1.4.json`:
+
+| metric | before | after P1.4 |
+| --- | --- | --- |
+| editor wrap + copy (720p) | 1.19 ms | **0.003 ms** (wrap only) |
+
+The editor still pays ~2.1 ms for `QPixmap.fromImage` and ~5.0 ms for the smooth
+downscale per frame; those are the remaining GUI-thread costs that P1.3 targets.

@@ -305,13 +305,17 @@ class PreviewController(QObject):
             return None
         frame = frames[-1]
         with self.timings.phase("decode"):
+            # QImage wraps the decompressed buffer without copying and keeps a
+            # Python-level reference to it for the image's lifetime, so no
+            # defensive ``.copy()`` is needed.  The panel turns it into a
+            # QPixmap (which does copy) as soon as it is delivered.
             image = QImage(
                 frame.rgba,
                 frame.width,
                 frame.height,
                 frame.width * 4,
                 QImage.Format.Format_RGBA8888,
-            ).copy()
+            )
         return image
 
     def _dispatch(self, message: dict[str, Any]) -> None:

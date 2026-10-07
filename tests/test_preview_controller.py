@@ -76,6 +76,8 @@ class TestPreviewControllerIntegration:
         import os
 
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        import gc
+
         from PySide6.QtWidgets import QApplication
 
         from manim_studio import ipc
@@ -87,6 +89,10 @@ class TestPreviewControllerIntegration:
         data = ipc.encode_frame(2, 2, first) + ipc.encode_frame(2, 2, second)
         image = controller.decode_latest_frame(data)
         assert image is not None
+        # The image wraps the decompressed buffer instead of copying it; PySide6
+        # keeps that buffer alive, so the pixels survive a collection.
+        gc.collect()
         assert image.pixelColor(0, 0).red() == 200
+        assert image.width() == 2 and image.height() == 2
         # A partial burst produces no image and keeps parser state.
         assert controller.decode_latest_frame(b"") is None

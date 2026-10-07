@@ -7,7 +7,9 @@ every codec the environment offers, :func:`bench_parser` times the editor-side
 file so a baseline and a later run can be diffed.
 
 Callers supply the raw pixels, so this module needs neither numpy nor a GL
-context and stays import-safe everywhere.
+context and stays import-safe everywhere.  :func:`bench_editor_frame` measures
+the Qt-side per-frame work and imports PySide6 lazily, so the module itself
+still pulls in no third-party code at load time.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "bench_codecs",
+    "bench_editor_frame",
     "bench_parser",
     "codec_candidates",
     "format_report",
@@ -123,6 +126,66 @@ def bench_parser(
     return {"payload_bytes": len(blob), "round_trip_ms": round(decode_ms, 3)}
 
 
+def bench_editor_frame(
+    width: int,
+    height: int,
+    rgba: bytes,
+    *,
+    viewport: tuple[int, int] = (960, 540),
+    repeats: int = 20,
+    warmup: int = 3,
+) -> dict[str, float]:
+    """Time the editor's per-frame Qt work (PySide6 imported lazily).
+
+    The GUI thread pays this for every frame: wrapping the decompressed buffer in
+    a ``QImage``, the defensive copy ``decode_latest_frame`` used to make, the
+    ``QPixmap`` conversion and both scaling modes.  A ``QApplication`` must exist.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage, QPixmap
+
+    stride = width * 4
+    fmt = QImage.Format.Format_RGBA8888
+    owning = QImage(rgba, width, height, stride, fmt).copy()
+    view_w, view_h = viewport
+
+    def wrap() -> QImage:
+        return QImage(rgba, width, height, stride, fmt)
+
+    def wrap_copy() -> QImage:
+        return QImage(rgba, width, height, stride, fmt).copy()
+
+    def from_image() -> QPixmap:
+        return QPixmap.fromImage(owning)
+
+    def scale_smooth() -> QPixmap:
+        return QPixmap.fromImage(owning).scaled(
+            view_w,
+            view_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def scale_fast() -> QPixmap:
+        return QPixmap.fromImage(owning).scaled(
+            view_w,
+            view_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+
+    def milliseconds(operation: Callable[[], Any]) -> float:
+        return round(median_seconds(operation, repeats=repeats, warmup=warmup) * 1000.0, 4)
+
+    return {
+        "wrap_ms": milliseconds(wrap),
+        "wrap_copy_ms": milliseconds(wrap_copy),
+        "from_image_ms": milliseconds(from_image),
+        "scale_smooth_ms": milliseconds(scale_smooth),
+        "scale_fast_ms": milliseconds(scale_fast),
+    }
+
+
 def machine_info() -> dict[str, Any]:
     """A few facts that make two report files comparable."""
     return {
@@ -174,6 +237,10 @@ def format_report(report: dict[str, Any]) -> str:
             f"pump handoff: {pump.get('handoff_ms')} ms/frame "
             f"(vs {pump.get('encode_ref_ms')} ms encode, {pump.get('caller_speedup')}x)"
         )
+    editor = report.get("editor")
+    if isinstance(editor, dict):
+        for name, value in sorted(editor.items()):
+            lines.append(f"editor {name}: {value} ms")
     end_to_end = report.get("end_to_end")
     if isinstance(end_to_end, dict):
         for name, value in sorted(end_to_end.items()):
