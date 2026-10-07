@@ -113,8 +113,8 @@ class TestEditorLiveHost:
 
             # 5. Live shell evaluates in the scene namespace.
             with qtbot.waitSignal(window.controller.execResultReceived, timeout=30000):
-                window.run_shell_code("print('editor shell ok')")
-            assert "editor shell ok" in window.shell_output.toPlainText()
+                window.shell.submit_text("print('editor shell ok')")
+            assert "editor shell ok" in window.shell.output.toPlainText()
 
             # 6. Play then stop through the toolbar paths.
             window.request_play()

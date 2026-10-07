@@ -13,7 +13,6 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
-    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -21,7 +20,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QSlider,
     QSplitter,
@@ -41,6 +39,7 @@ from manim_editor.editor.file_watcher import FileWatcher
 from manim_editor.editor.icon import load_icon
 from manim_editor.editor.preview_controller import PreviewController
 from manim_editor.editor.preview_panel import PreviewPanel
+from manim_editor.editor.shell_panel import ShellPanel
 from manim_editor.editor.stats_controller import StatsController
 from manim_editor.editor.timeline_controller import MediaTransport
 from manim_editor.editor.timeline_widget import TimelineWidget
@@ -233,23 +232,9 @@ class MainWindow(QMainWindow):
         self._add_toolbar_action(toolbar, "Render preview", self.render_preview_video)
 
     def _build_shell_dock(self) -> None:
-        self.shell_output = QPlainTextEdit(self)
-        self.shell_output.setReadOnly(True)
-        self.shell_output.setMaximumBlockCount(2000)
-        self.shell_output.setPlaceholderText("Preview host log and live shell output")
-        self.shell_input = QLineEdit(self)
-        self.shell_input.setPlaceholderText(">>> run Python against the live scene (Enter)")
-        self.shell_input.returnPressed.connect(self.send_shell_line)
-        dock_body = QWidget(self)
-        layout = QVBoxLayout(dock_body)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.addWidget(self.shell_output, 1)
-        layout.addWidget(self.shell_input)
-        self.shell_dock = QDockWidget("Live shell", self)
-        self.shell_dock.setWidget(dock_body)
-        self.shell_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.shell_dock)
-        self.shell_dock.hide()
+        self.shell = ShellPanel(self)
+        self.shell.lineSubmitted.connect(self._on_shell_line)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.shell)
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
@@ -310,13 +295,13 @@ class MainWindow(QMainWindow):
         self.controller.tickReceived.connect(self._on_tick)
         self.controller.stoppedReceived.connect(self._on_stopped)
         self.controller.errorReceived.connect(self._on_error)
-        self.controller.execResultReceived.connect(self._on_exec_result)
+        self.controller.execResultReceived.connect(self.shell.append_exec_result)
         self.controller.filmstripReceived.connect(self.stats.on_filmstrip)
         self.controller.statsReceived.connect(self.stats.on_stats)
         self.stats.memoryLabelChanged.connect(self._mem_label.setText)
         self.stats.cacheStatusChanged.connect(self.preview_panel.set_cache_status)
         self.controller.frameReceived.connect(self._on_frame)
-        self.controller.hostLogReceived.connect(self._append_shell_output)
+        self.controller.hostLogReceived.connect(self.shell.append)
         self.controller.stateChanged.connect(self._on_host_state)
         self.watcher.file_changed.connect(self._on_file_changed)
         self.watcher.file_missing.connect(lambda path: self._set_status(f"file missing: {path}"))
@@ -328,7 +313,7 @@ class MainWindow(QMainWindow):
         self.transport.durationChanged.connect(self._on_transport_duration)
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
         self.exports.statusChanged.connect(self._set_status)
-        self.exports.outputLine.connect(self._append_shell_output)
+        self.exports.outputLine.connect(self.shell.append)
         self.exports.previewVideoReady.connect(self._on_preview_video_ready)
         self.exports.previewVideoFailed.connect(self._on_preview_video_failed)
         self.exports.exportFinished.connect(self._on_export_finished)
@@ -382,8 +367,7 @@ class MainWindow(QMainWindow):
         )
 
     def focus_shell(self) -> None:
-        self.shell_dock.show()
-        self.shell_input.setFocus()
+        self.shell.focus_prompt()
 
     def set_embedded(self, checked: bool) -> None:
         self._embedded = bool(checked)
@@ -412,7 +396,7 @@ class MainWindow(QMainWindow):
         check = check_scene_file(target)
         if not check.ok:
             self._set_status(f"cannot open: {check.error}")
-            self._append_shell_output(f"open failed: {target}: {check.error}")
+            self.shell.append(f"open failed: {target}: {check.error}")
             return False
         self.editor.load_file(target)
         self._path = target.resolve()
@@ -710,7 +694,7 @@ class MainWindow(QMainWindow):
         try:
             timeline_log = parse_log(message.get("blocks", []))
         except Exception as exc:
-            self._append_shell_output(f"bad trace payload: {exc}")
+            self.shell.append(f"bad trace payload: {exc}")
             return
         self.timeline.set_log(timeline_log)
         self._total_duration = timeline_log.total_duration
@@ -760,10 +744,10 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: dict[str, Any]) -> None:
         text = str(message.get("message", "unknown error"))
         self.preview_panel.set_status("error", text)
-        self._append_shell_output(f"ERROR: {text}")
+        self.shell.append(f"ERROR: {text}")
         traceback_text = str(message.get("traceback", ""))
         if traceback_text:
-            self._append_shell_output(traceback_text.rstrip())
+            self.shell.append(traceback_text.rstrip())
         line = message.get("line")
         if isinstance(line, int):
             self.editor.set_error_marker(line, text)
@@ -809,36 +793,9 @@ class MainWindow(QMainWindow):
     # Live shell
     # ------------------------------------------------------------------
 
-    def send_shell_line(self) -> None:
-        code = self.shell_input.text().strip()
-        if not code:
-            return
-        self.shell_input.clear()
-        self.shell_dock.show()
-        self._append_shell_output(f">>> {code}")
+    def _on_shell_line(self, code: str) -> None:
         if not self.controller.exec_code(code):
-            self._append_shell_output("(preview host is not running)")
-
-    def run_shell_code(self, code: str) -> None:
-        self.shell_input.setText(code)
-        self.send_shell_line()
-
-    def _on_exec_result(self, message: dict[str, Any]) -> None:
-        stdout = str(message.get("stdout", ""))
-        if stdout:
-            self._append_shell_output(stdout.rstrip())
-        result = message.get("result")
-        if result is not None:
-            self._append_shell_output(f"< {result}")
-        error = message.get("error")
-        if error:
-            self._append_shell_output(f"! {error}")
-
-    def _append_shell_output(self, text: str) -> None:
-        if not text:
-            return
-        self.shell_output.appendPlainText(text)
-        self.shell_dock.show()
+            self.shell.append("(preview host is not running)")
 
     # ------------------------------------------------------------------
     # Misc

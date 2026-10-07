@@ -85,7 +85,7 @@ class TestConstruction:
         assert window.editor is not None
         assert window.timeline is not None
         assert window.preview_panel is not None
-        assert window.shell_dock is not None
+        assert window.shell is not None
 
     def test_window_has_icon(self, window: MainWindow) -> None:
         assert not window.windowIcon().isNull()
@@ -512,7 +512,7 @@ class TestTraceAndTimeline:
         window.editor.set_text("line1\nline2\n")
         window._on_error({"message": "ValueError: boom", "line": 2, "traceback": "trace"})
         assert window.editor.error_line == 2
-        assert "boom" in window.shell_output.toPlainText()
+        assert "boom" in window.shell.output.toPlainText()
 
 
 class TestFramesAndPreview:
@@ -552,12 +552,12 @@ class TestEditing:
         assert "self.wait(1.0)" in window.editor.text()
 
     def test_shell_without_host(self, window: MainWindow) -> None:
-        window.run_shell_code("print('hi')")
-        assert "(preview host is not running)" in window.shell_output.toPlainText()
+        window.shell.submit_text("print('hi')")
+        assert "(preview host is not running)" in window.shell.output.toPlainText()
 
     def test_host_log_appends(self, window: MainWindow) -> None:
-        window._append_shell_output("hello from host")
-        assert "hello from host" in window.shell_output.toPlainText()
+        window.shell.append("hello from host")
+        assert "hello from host" in window.shell.output.toPlainText()
 
     def test_host_state_label(self, window: MainWindow) -> None:
         window._on_host_state("crashed")
