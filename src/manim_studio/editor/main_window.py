@@ -316,6 +316,7 @@ class MainWindow(QMainWindow):
         self.timeline.scrubRequested.connect(self.scrub_to_time)
         self.timeline.playToggleRequested.connect(self._toggle_play)
         self.timeline.blockResized.connect(self._on_block_resized)
+        self.timeline.blockActivated.connect(self._on_block_activated)
         self.timeline.undoRequested.connect(self._undo_timing)
         self.timeline.redoRequested.connect(self._redo_timing)
         self.controller.logReceived.connect(self._on_trace_log)
@@ -636,6 +637,15 @@ class MainWindow(QMainWindow):
         if not self._timing.set_duration(index, duration):
             return
         self._push_timing()
+
+    def _on_block_activated(self, index: int) -> None:
+        """Ctrl+double-click on a block: jump the editor to its call site."""
+        line = self.events.call_line(index)
+        if line is not None:
+            self.editor.go_to_line(line)
+            self._set_status(f"block {index} → line {line}")
+        else:
+            self._set_status(f"block {index} has no known source line")
 
     def _undo_timing(self) -> None:
         if self._timing.undo():

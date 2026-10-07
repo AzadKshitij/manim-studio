@@ -28,6 +28,19 @@ if TYPE_CHECKING:
 __all__ = ["PreviewEvents"]
 
 
+def _parse_call_lines(raw: object) -> tuple[int | None, ...]:
+    """Coerce the host's ``call_sites`` payload into aligned line numbers."""
+    if not isinstance(raw, list):
+        return ()
+    lines: list[int | None] = []
+    for item in raw:
+        if isinstance(item, int) and not isinstance(item, bool):
+            lines.append(item)
+        else:
+            lines.append(None)
+    return tuple(lines)
+
+
 class PreviewEvents(QObject):
     """Routes preview-host events and owns trace/playback session state."""
 
@@ -59,6 +72,7 @@ class PreviewEvents(QObject):
         self._total_duration = 0.0
         self._play_from_index: int | None = None
         self._playing = False
+        self._call_lines: tuple[int | None, ...] = ()
 
         controller.logReceived.connect(self.on_log)
         controller.timingChanged.connect(self.on_timing)
@@ -93,6 +107,12 @@ class PreviewEvents(QObject):
     def playing(self) -> bool:
         return self._playing
 
+    def call_line(self, index: int) -> int | None:
+        """Source line in the scene file for block ``index`` (``None`` if unknown)."""
+        if 0 <= index < len(self._call_lines):
+            return self._call_lines[index]
+        return None
+
     # -- host events -------------------------------------------------------
 
     def on_log(self, message: dict[str, Any]) -> None:
@@ -103,6 +123,7 @@ class PreviewEvents(QObject):
             return
         self._timeline.set_log(timeline_log)
         self._total_duration = timeline_log.total_duration
+        self._call_lines = _parse_call_lines(message.get("call_sites"))
         # A successful trace means the scene now compiles/runs: clear any marker
         # left by the previous failure.
         self._editor.clear_error_marker()

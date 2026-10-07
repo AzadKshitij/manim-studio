@@ -241,6 +241,7 @@ class SceneHost:
         self.control_sock: socket.socket | None = None
         self._base_blocks: tuple[TimelineBlock, ...] = ()
         self._timing_factors: dict[int, float] = {}
+        self.call_lines: tuple[int | None, ...] = ()
         self.control: JsonLineWriter | None = None
         self.frame_pump: FramePump | None = None
         self.tick = TickThrottler()
@@ -469,6 +470,7 @@ class SceneHost:
         self.blocks = snapshot.blocks
         self._base_blocks = snapshot.blocks
         self._timing_factors = {}
+        self.call_lines = self._scene_call_lines(snapshot.call_sites, scene_path)
         self.stats = snapshot.stats
         self.events = snapshot.events
         self._fps = int(getattr(initial_scene.camera, "fps", 30)) or 30
@@ -491,6 +493,7 @@ class SceneHost:
             scene_name=scene_class.__name__,
             trace_id=self._trace_id,
             fps=self._fps,
+            call_sites=list(self.call_lines),
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()
@@ -520,6 +523,32 @@ class SceneHost:
             elapsed,
         )
         return snapshot, elapsed
+
+    @staticmethod
+    def _scene_call_lines(
+        call_sites: tuple[tuple[str, int] | None, ...], scene_path: Path
+    ) -> tuple[int | None, ...]:
+        """Per-block line numbers that live in ``scene_path`` (else ``None``).
+
+        Blocks recorded inside imported helper modules are dropped so the editor
+        only ever jumps within the scene file it already has open.
+        """
+        try:
+            target = scene_path.resolve()
+        except OSError:  # pragma: no cover - defensive
+            target = scene_path
+        lines: list[int | None] = []
+        for site in call_sites:
+            if site is None:
+                lines.append(None)
+                continue
+            filename, line = site
+            try:
+                matches = Path(filename).resolve() == target
+            except OSError:  # pragma: no cover - defensive
+                matches = False
+            lines.append(line if matches else None)
+        return tuple(lines)
 
     def _build_initial_scene(self, scene_class: type) -> Any:
         """Create and *run* the scene that shows the initial state.

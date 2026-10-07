@@ -108,6 +108,14 @@ class TestApplyTiming:
         assert host.blocks == host._base_blocks
 
 
+class TestSceneCallLines:
+    def test_keeps_only_lines_inside_the_scene_file(self, tmp_path: Path) -> None:
+        scene = tmp_path / "scene.py"
+        helper = tmp_path / "helper.py"
+        lines = SceneHost._scene_call_lines(((str(scene), 12), (str(helper), 3), None), scene)
+        assert lines == (12, None, None)
+
+
 class TestFramePump:
     def _rgba(self, width: int, height: int, seed: int = 0) -> bytes:
         return bytes(((i + seed) * 13) % 256 for i in range(width * height * 4))
@@ -321,6 +329,10 @@ class TestHostIntegration:
         assert log_event["stats"]["play"] >= 10
         assert log_event["stats"]["undo"] == 1
         assert [b["index"] for b in log_event["blocks"]] == list(range(len(log_event["blocks"])))
+        call_sites = log_event["call_sites"]
+        assert len(call_sites) == len(log_event["blocks"])
+        # The showcase calls play()/wait() directly, so most lines resolve to the file.
+        assert sum(1 for line in call_sites if isinstance(line, int) and line > 0) >= 10
 
     def test_initial_frame_is_streamed(self, host_session: Any) -> None:
         peer = host_session[0]

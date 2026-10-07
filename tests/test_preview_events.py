@@ -187,6 +187,22 @@ class TestOnTiming:
         assert h.events.total_duration == pytest.approx(1.0)
 
 
+class TestCallLines:
+    def test_call_lines_are_stored_and_exposed(self) -> None:
+        h = _Harness()
+        h.events.on_log({**SAMPLE_LOG, "call_sites": [12, None]})
+        assert h.events.call_line(0) == 12
+        assert h.events.call_line(1) is None
+        assert h.events.call_line(5) is None
+
+    def test_missing_or_bad_call_sites_are_ignored(self) -> None:
+        h = _Harness()
+        h.events.on_log(SAMPLE_LOG)
+        assert h.events.call_line(0) is None
+        h.events.on_log({**SAMPLE_LOG, "call_sites": "nope"})
+        assert h.events.call_line(0) is None
+
+
 class TestStatusAndTicks:
     def test_on_status_sets_playing(self) -> None:
         h = _Harness()

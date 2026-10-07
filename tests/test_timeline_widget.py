@@ -148,6 +148,26 @@ class TestResizing:
         assert resized.count() == 1
         assert resized.at(0)[1] == pytest.approx(1.0 / 30.0, abs=1e-6)
 
+    def test_ctrl_double_click_activates_the_block(self, timeline: TimelineWidget, qtbot) -> None:
+        activated = QSignalSpy(timeline.blockActivated)
+        qtbot.mouseDClick(
+            timeline,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.ControlModifier,
+            QPoint(60, 60),
+        )
+        assert activated.count() == 1
+        assert activated.at(0)[0] == 0
+
+    def test_plain_double_click_zooms_without_activating(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        activated = QSignalSpy(timeline.blockActivated)
+        before = timeline.view().span
+        qtbot.mouseDClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(60, 60))
+        assert activated.count() == 0
+        assert timeline.view().span < before
+
     def test_set_log_clears_a_pending_preview(self, timeline: TimelineWidget, qtbot) -> None:
         qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 60))
         timeline.set_log(make_log())

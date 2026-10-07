@@ -13,6 +13,7 @@ This module must stay free of manimlib/Qt imports; it works on duck-typed scenes
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -134,6 +135,9 @@ class TraceSnapshot:
     events: tuple[TraceEvent, ...]
     stats: dict[str, int]
     total_duration: float
+    #: Source call site ``(filename, line)`` for each block, ``None`` when unknown.
+    #: A parallel array so the frozen ``TimelineBlock``/``log.json`` shape stays as-is.
+    call_sites: tuple[tuple[str, int] | None, ...] = ()
 
     @property
     def num_plays(self) -> int:
@@ -146,6 +150,10 @@ class TraceSnapshot:
             "events": [event.to_dict() for event in self.events],
             "stats": dict(self.stats),
             "total_duration": self.total_duration,
+            "call_sites": [
+                None if site is None else {"file": site[0], "line": site[1]}
+                for site in self.call_sites
+            ],
         }
 
 
@@ -166,6 +174,7 @@ class TraceRecorder:
     def __init__(self, *, record_events: bool = True) -> None:
         self.record_events = record_events
         self._blocks: list[TimelineBlock] = []
+        self._call_sites: list[tuple[str, int] | None] = []
         self._events: list[TraceEvent] = []
         self._stats = TraceStats()
         self._scene: Any = None
@@ -225,6 +234,7 @@ class TraceRecorder:
             start = self._time()
             index = self._num_plays()
             label = describe_play_arguments(args)
+            call_site = _caller_site()
             self._stats.bump("play")
             self._play_depth += 1
             try:
@@ -234,7 +244,7 @@ class TraceRecorder:
                 # manimgl warns and returns for play() without animations; do not
                 # clutter the timeline with a zero-duration ghost block.
                 if args:
-                    self._record_block(index, label, start)
+                    self._record_block(index, label, start, call_site)
 
         return wrapper
 
@@ -242,11 +252,12 @@ class TraceRecorder:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             start = self._time()
             index = self._num_plays()
+            call_site = _caller_site()
             self._stats.bump("wait")
             try:
                 return original(*args, **kwargs)
             finally:
-                self._record_block(index, "Wait", start)
+                self._record_block(index, "Wait", start, call_site)
 
         return wrapper
 
@@ -266,7 +277,13 @@ class TraceRecorder:
 
         return wrapper
 
-    def _record_block(self, index: int, label: str, start: float) -> None:
+    def _record_block(
+        self,
+        index: int,
+        label: str,
+        start: float,
+        call_site: tuple[str, int] | None = None,
+    ) -> None:
         duration = max(0.0, self._time() - start)
         # Guard against scenes that never advance their clock (custom runners).
         if not math.isfinite(duration):
@@ -280,8 +297,11 @@ class TraceRecorder:
                 start=existing.start,
                 duration=max(0.0, self._time() - existing.start),
             )
+            if self._call_sites:
+                self._call_sites[-1] = self._call_sites[-1] or call_site
             return
         self._blocks.append(TimelineBlock(index=index, name=label, start=start, duration=duration))
+        self._call_sites.append(call_site)
 
     # -- results -----------------------------------------------------------
 
@@ -292,11 +312,13 @@ class TraceRecorder:
             events=tuple(self._events),
             stats=self._stats.to_dict(),
             total_duration=self._time(),
+            call_sites=tuple(self._call_sites),
         )
 
     def reset(self) -> None:
         """Clear recordings without detaching (reuse across runs)."""
         self._blocks.clear()
+        self._call_sites.clear()
         self._events.clear()
         self._stats = TraceStats()
         self._play_depth = 0
@@ -306,6 +328,20 @@ class TraceRecorder:
 
     def __exit__(self, *exc_info: object) -> None:
         self.detach()
+
+
+def _caller_site() -> tuple[str, int] | None:
+    """Source ``(filename, line)`` of the code that called the wrapped method.
+
+    Called from inside a tracer wrapper, so the user frame is two levels up
+    (``_caller_site`` -> ``wrapper`` -> user code). Returns ``None`` when the
+    interpreter cannot produce a frame (e.g. calls from C).
+    """
+    try:
+        frame = sys._getframe(2)
+    except ValueError:  # pragma: no cover - depends on the call stack
+        return None
+    return (frame.f_code.co_filename, frame.f_lineno)
 
 
 def _describe_detail(args: tuple[Any, ...]) -> str:

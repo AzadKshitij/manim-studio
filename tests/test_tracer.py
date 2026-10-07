@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from manim_studio.tracer import (
@@ -123,6 +125,38 @@ class TestPlayAndWaitBlocks:
         scene.play(make_animation("Transform"), run_time=0.5)
         snapshot = recorder2.snapshot()
         assert len(snapshot.blocks) == 1
+
+
+class TestCallSites:
+    def test_call_sites_align_with_blocks(self) -> None:
+        scene = FakeScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.play(make_animation("ShowCreation"), run_time=0.5)
+        scene.wait(0.5)
+        snapshot = recorder.snapshot()
+        assert len(snapshot.call_sites) == len(snapshot.blocks) == 2
+        sites = [site for site in snapshot.call_sites if site is not None]
+        assert len(sites) == 2
+        assert all(Path(site[0]).name == "test_tracer.py" for site in sites)
+        # play() precedes wait() in this file, so its recorded line is smaller.
+        assert sites[0][1] < sites[1][1]
+
+    def test_play_without_animations_records_no_call_site(self) -> None:
+        scene = FakeScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.play()  # not a block
+        assert recorder.snapshot().call_sites == ()
+
+    def test_snapshot_to_dict_includes_call_sites(self) -> None:
+        scene = FakeScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.play(make_animation("ShowCreation"), run_time=0.5)
+        payload = recorder.snapshot().to_dict()
+        assert payload["call_sites"][0]["line"] > 0
+        assert Path(payload["call_sites"][0]["file"]).name == "test_tracer.py"
 
 
 class TestEventsAndStats:

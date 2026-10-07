@@ -61,6 +61,7 @@ class TimelineWidget(QWidget):
     playToggleRequested = Signal()
     viewChanged = Signal()
     blockResized = Signal(int, float)  # block index, requested duration (seconds)
+    blockActivated = Signal(int)  # Ctrl+double-click: jump to the block's source line
     undoRequested = Signal()
     redoRequested = Signal()
 
@@ -82,8 +83,10 @@ class TimelineWidget(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setToolTip(
             "Drag: scrub · Drag a block's right edge: retime · Wheel: pan · "
-            "Ctrl+wheel: zoom · Double-click: zoom to block\n"
-            "←/→: step one frame · Shift+←/→: one second · Home/End · Space: play"
+            "Ctrl+wheel: zoom · Double-click: zoom to block · "
+            "Ctrl+double-click: go to code\n"
+            "←/→: step one frame · Shift+←/→: one second · Home/End · Space: play · "
+            "Ctrl+Z: undo retime"
         )
 
     # ------------------------------------------------------------------
@@ -271,6 +274,13 @@ class TimelineWidget(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         block = self._log.block_at(self._view.x_to_time(event.position().x()))
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if block is not None:
+                self.blockActivated.emit(block.index)
+            else:
+                self.fit()
+            event.accept()
+            return
         if block is not None:
             self.zoom_to_block(block.index)
         else:

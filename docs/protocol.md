@@ -44,7 +44,7 @@ The frames channel is only opened in `--embedded` mode.
 
 | `event` | Fields | Meaning |
 | --- | --- | --- |
-| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps` | runtime trace finished |
+| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps`, `call_sites[]` | runtime trace finished |
 | `status` | `state` (`idle`/`playing`/`seeking`/`error`/`closed`), `index?`, `note?` | lifecycle |
 | `tick` | `time`, `index`, `scrubbing?`, `cached?` | playhead update during playback/scrub (≤20 Hz) |
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |
@@ -57,6 +57,11 @@ The frames channel is only opened in `--embedded` mode.
 
 `log.blocks` is the spec `log.json` shape:
 `[{ "name": str, "start": float, "duration": float, "index": int }, ...]`.
+
+`log.call_sites` is a parallel array (same order/length as `blocks`) of source
+line numbers in the *scene file* for each block, or `null` when the call site is
+unknown or lives in an imported module. It powers Ctrl+double-click
+"go to code" on the timeline and is additive (v3).
 
 ## Frame encoding
 
