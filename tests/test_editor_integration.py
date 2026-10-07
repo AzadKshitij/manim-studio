@@ -55,6 +55,12 @@ class TestEditorLiveHost:
             offset = len(window.editor.text()[: window.editor.text().index("import")].encode())
             assert window.editor.styleAt(offset) == PY_KEYWORD
 
+            # 1c. Block call sites resolved; Ctrl+double-click jumps the editor there.
+            line = window.events.call_line(0)
+            assert line is not None
+            window.timeline.blockActivated.emit(0)
+            assert window.editor.current_line() == line
+
             # 2. Live frames arrive and reach the preview panel.
             qtbot.waitUntil(lambda: len(frames) > 0, timeout=60000)
             assert window.preview_panel.current_image is not None
@@ -110,6 +116,32 @@ class TestEditorLiveHost:
                 lambda: window.timeline.playhead_time == pytest.approx(block.end, abs=0.1),
                 timeout=60000,
             )
+
+            # 4b. Retiming a block updates the timeline and the host re-poses.
+            base = window.timeline.log
+            first = base.block_by_index(0)
+            assert first is not None
+            target = first.duration * 2.0
+            window.timeline.blockResized.emit(0, target)
+            qtbot.waitUntil(
+                lambda: (
+                    window.timeline.log.block_by_index(0).duration
+                    == pytest.approx(target, abs=1e-6)
+                ),
+                timeout=30000,
+            )
+            shifted = window.timeline.log.block_by_index(1)
+            assert shifted.start == pytest.approx(first.start + target, abs=1e-6)
+            # Ctrl+Z on the timeline restores the base timing (separate stack).
+            window.timeline.undoRequested.emit()
+            qtbot.waitUntil(
+                lambda: (
+                    window.timeline.log.block_by_index(0).duration
+                    == pytest.approx(first.duration, abs=1e-6)
+                ),
+                timeout=30000,
+            )
+            assert not errors, f"retime produced errors: {errors}"
 
             # 5. Live shell evaluates in the scene namespace.
             with qtbot.waitSignal(window.controller.execResultReceived, timeout=30000):
