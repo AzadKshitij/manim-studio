@@ -818,6 +818,22 @@ class TestTransport:
         finally:
             self._restore(window)
 
+    def test_pause_button_stops_at_a_loop_boundary(self, window: MainWindow) -> None:
+        """Reported bug: the button read Pause but clicking it played instead of pausing."""
+        stub = self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window.request_play()
+            window._on_host_status("playing", {})
+            window._on_host_status("idle", {})  # loop boundary: label stays Pause
+            window.events.on_status("idle", {})  # PreviewEvents clears its playing flag
+            assert window.transport_bar.playing() is True
+            window._toggle_play()  # click the button (shows Pause)
+            assert stub.stops == 1  # it must stop, not start another cycle
+            assert stub.plays == [0] or len(stub.plays) == 1
+        finally:
+            self._restore(window)
+
     def test_host_crash_resets_the_play_button(self, window: MainWindow) -> None:
         self._stub(window)
         try:

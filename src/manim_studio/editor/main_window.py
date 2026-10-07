@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         self._loop = False
         self._loop_paused = False
         self._was_playing = False
+        self._playback_active = False
         self._speed = 1.0
 
         self.editor = CodeEditor(self)
@@ -625,6 +626,7 @@ class MainWindow(QMainWindow):
                 index, to_index = bounds
         self._announce_play_start(index)
         self.controller.play(from_index=index, to_index=to_index, rate=self._speed)
+        self._set_transport_playing(True)  # optimistic; the host status confirms
 
     # ------------------------------------------------------------------
     # Transport toolbar
@@ -651,19 +653,19 @@ class MainWindow(QMainWindow):
         """
         if state == "playing":
             self._was_playing = True
-            self.transport_bar.set_playing(True)
+            self._set_transport_playing(True)
             return
         if state == "idle" and self._was_playing and self._loop and not self._loop_paused:
             return  # a loop cycle ended; the replay is about to resume
         self._was_playing = False
-        self.transport_bar.set_playing(False)
+        self._set_transport_playing(False)
 
     def _on_host_state_changed(self, state: str) -> None:
         """Reset playback intent when the host dies or shuts down."""
         if state in ("crashed", "stopped"):
             self._loop_paused = True  # never auto-replay after a crash/stop
             self._was_playing = False
-            self.transport_bar.set_playing(False)
+            self._set_transport_playing(False)
 
     def _on_transport_loop(self, enabled: bool) -> None:
         self._loop = bool(enabled)
@@ -677,7 +679,7 @@ class MainWindow(QMainWindow):
     def _on_transport_speed(self, speed: float) -> None:
         self._speed = float(speed) if float(speed) > 0 else 1.0
         self.transport.set_rate(self._speed)
-        if self.events.playing:
+        if self._playback_active:
             # The host honours the rate at play time; restart so it applies now.
             self.request_stop()
             self.request_play()
@@ -850,13 +852,23 @@ class MainWindow(QMainWindow):
         # A user stop/pause wins over an in-flight loop replay.
         self._loop_paused = True
         self.controller.stop_playback()
+        self._set_transport_playing(False)
+
+    def _set_transport_playing(self, playing: bool) -> None:
+        """Single source of truth for the play/pause button and its click action.
+
+        Kept separate from ``events.playing`` because a loop boundary briefly
+        reports ``idle`` while the button must stay usable as Pause.
+        """
+        self._playback_active = bool(playing)
+        self.transport_bar.set_playing(self._playback_active)
 
     def _on_scene_selected(self, name: str) -> None:
         if self._path is not None and name and self.controller.is_running:
             self.controller.load(self._path, name)
 
     def _toggle_play(self) -> None:
-        if self.events.playing:
+        if self._playback_active:
             self.request_stop()
         else:
             self.request_play()

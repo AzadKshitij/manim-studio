@@ -1,0 +1,194 @@
+"""End-to-end transport tests: real window, real preview host, real buttons.
+
+Unlike the offscreen control-surface tests, this drives the actual
+``MainWindow`` against a spawned ``manim_studio.preview_host`` and asserts the
+host's behaviour (playback actually starts, pauses, loops, speeds up) - not just
+which command was queued.  Skipped when no GL context is available.
+"""
+
+from __future__ import annotations
+
+import shutil
+import time
+from pathlib import Path
+
+import pytest
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
+
+from manim_studio.editor.main_window import MainWindow
+
+SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
+
+pytestmark = pytest.mark.gl
+
+
+def _click(qtbot, widget) -> None:  # type: ignore[no-untyped-def]
+    qtbot.mouseClick(widget, Qt.MouseButton.LeftButton)
+
+
+class LiveEditor:
+    """One real window + host, with event recording helpers."""
+
+    def __init__(self, window: MainWindow) -> None:
+        self.window = window
+        self.statuses: list[str] = []
+        self.stopped: list[dict] = []
+        self.errors: list[dict] = []
+        window.controller.statusChanged.connect(lambda state, _message: self.statuses.append(state))
+        window.controller.stoppedReceived.connect(self.stopped.append)
+        window.controller.errorReceived.connect(self.errors.append)
+
+    def wait_states(self, predicate, timeout: int = 30000) -> None:  # type: ignore[no-untyped-def]
+        # Pump the Qt event loop: the status/stopped signals arrive on sockets that
+        # only fire while the loop runs (a bare sleep would never observe them).
+        deadline = time.monotonic() + timeout / 1000
+        while time.monotonic() < deadline:
+            QApplication.processEvents()
+            if predicate():
+                return
+            time.sleep(0.02)
+        raise TimeoutError("expected host state never arrived")
+
+    def wait_status(self, state: str, timeout: int = 30000) -> None:
+        self.wait_states(lambda: state in self.statuses, timeout)
+
+    def play_count_statuses(self, state: str) -> int:
+        return self.statuses.count(state)
+
+
+@pytest.fixture
+def live(qtbot, tmp_path: Path):  # type: ignore[no-untyped-def]
+    scene = tmp_path / "feature_showcase.py"
+    shutil.copy(SCENE_FILE, scene)
+    window = MainWindow(
+        path=str(scene),
+        restore_settings=False,
+        embedded=True,
+        auto_preview=True,
+        preview_size=(320, 180),
+        completion=False,
+    )
+    qtbot.addWidget(window)
+    window.resize(900, 600)
+    window.show()
+    editor = LiveEditor(window)
+    try:
+        qtbot.waitUntil(lambda: window.timeline.log.num_blocks >= 12, timeout=90000)
+    except Exception:
+        window.controller.shutdown()
+        pytest.skip("preview host did not trace (GL unavailable?)")
+    yield editor
+    window.controller.shutdown()
+
+
+# ---------------------------------------------------------------------------
+
+
+def test_play_and_pause_buttons(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    window = live.window
+    play_button = window.transport_bar._play_button
+    total = window.events.total_duration
+    assert total > 1.0
+
+    # Play: the host actually starts and the button reads Pause.
+    _click(qtbot, play_button)
+    live.wait_status("playing")
+    assert window.events.playing is True
+    assert window._playback_active is True
+    assert play_button.text() == "Pause"
+
+    # Pause: the host stops and the button returns to Play.
+    before = len(live.stopped)
+    _click(qtbot, play_button)
+    live.wait_states(lambda: len(live.stopped) > before, timeout=15000)
+    live.wait_status("idle")
+    assert window.events.playing is False
+    assert window._playback_active is False
+    assert play_button.text() == "Play"
+    assert live.stopped[-1]["user_stopped"] is True
+    assert live.stopped[-1]["time"] < total  # stopped early, not at the end
+    assert not live.errors
+
+
+def test_loop_button_replays_and_pause_stops_it(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    window = live.window
+    loop_check = window.transport_bar._loop_check
+
+    # Enable looping (whole track) and play.
+    _click(qtbot, loop_check)
+    assert window.transport_bar.loop_enabled() is True
+    _click(qtbot, window.transport_bar._play_button)
+    live.wait_status("playing")
+
+    # Two natural cycle endings prove the loop actually repeats.
+    live.wait_states(
+        lambda: sum(1 for s in live.stopped if not s["user_stopped"]) >= 2, timeout=60000
+    )
+    assert len(live.errors) == 0
+
+    # The pause button stays "Pause" while looping...
+    assert window._playback_active is True
+    assert window.transport_bar._play_button.text() == "Pause"
+
+    # ...and clicking it really pauses, then stays paused (no next cycle).
+    _click(qtbot, window.transport_bar._play_button)
+    live.wait_states(lambda: window.events.playing is False, timeout=15000)
+    stopped = len(live.stopped)
+    playing = live.statuses.count("playing")
+    qtbot.wait(2500)  # give a buggy loop time to replay
+    assert live.statuses.count("playing") == playing  # playback did not resume
+    assert len(live.stopped) == stopped  # no further loop cycle
+    assert window.transport_bar._play_button.text() == "Play"
+
+    # Unchecking Loop leaves it off.
+    _click(qtbot, loop_check)
+    assert window.transport_bar.loop_enabled() is False
+
+
+def test_step_and_jump_buttons(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    window = live.window
+    ticks: list[float] = []
+    window.controller.tickReceived.connect(lambda seconds, _i, _s: ticks.append(seconds))
+
+    # Jump to the start, then step forward one frame.
+    _click(qtbot, window.transport_bar._start_button)
+    live.wait_states(lambda: window.timeline.playhead_time < 0.2, timeout=15000)
+    step = window.timeline.frame_step
+    ticks.clear()
+    _click(qtbot, window.transport_bar._forward_button)
+    live.wait_states(lambda: ticks and ticks[-1] > 0, timeout=15000)
+    assert ticks[-1] == pytest.approx(step, abs=2 * step)
+
+    # Jump to the end.
+    total = window.events.total_duration
+    _click(qtbot, window.transport_bar._end_button)
+    live.wait_states(lambda: window.timeline.playhead_time > total - 0.2, timeout=15000)
+    assert window.timeline.playhead_time == pytest.approx(total, abs=0.2)
+    assert not live.errors
+
+
+def test_speed_selector_makes_playback_faster(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    window = live.window
+    total = window.events.total_duration
+
+    # Baseline: a full 1x playthrough takes about `total` wall seconds.
+    start = time.monotonic()
+    _click(qtbot, window.transport_bar._play_button)
+    live.wait_status("playing")
+    live.wait_states(lambda: window.events.playing is False, timeout=int(total * 1000) + 30000)
+    normal = time.monotonic() - start
+
+    # 2x: a full playthrough is clearly faster but still covers the timeline.
+    window.transport_bar.set_speed(2.0)
+    before = len(live.stopped)
+    start = time.monotonic()
+    _click(qtbot, window.transport_bar._play_button)
+    live.wait_status("playing")
+    live.wait_states(
+        lambda: len(live.stopped) > before and not live.stopped[-1]["user_stopped"], timeout=60000
+    )
+    fast = time.monotonic() - start
+    assert live.stopped[-1]["time"] == pytest.approx(total, abs=0.5)  # reaches the end
+    assert fast < normal * 0.85, (normal, fast)
+    assert not live.errors
