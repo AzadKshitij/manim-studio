@@ -113,7 +113,8 @@ class FramePump:
 
     Callers hand over frames either raw (``offer``) or already encoded
     (``offer_encoded``).  Encoding and sending both happen on the pump thread, so
-    the GL thread never blocks on compression.  When the transport cannot keep up,
+    the GL thread never blocks on compression.  A raw frame identical to the last
+    one sent is dropped without re-encoding.  When the transport cannot keep up,
     frames are dropped instead of queued.  With ``timings`` set, encoding and
     sending are recorded as the ``encode``/``send`` phases.
     """
@@ -130,10 +131,12 @@ class FramePump:
         self.timings = timings
         self.frames_sent = 0
         self.frames_dropped = 0
+        self.frames_deduped = 0
         self._cond = threading.Condition()
         self._slot: bytes | tuple[bytes, int, int] | None = None
         self._running = True
         self._started = False
+        self._last_raw: bytes | None = None
         self._thread = threading.Thread(target=self._loop, name="frame-pump", daemon=True)
 
     def start(self) -> None:
@@ -172,6 +175,14 @@ class FramePump:
             assert item is not None
             if isinstance(item, tuple):
                 rgba, width, height = item
+                # Skip a frame identical to the last one actually sent: during a
+                # wait or a static hold the GL loop re-renders the same pixels on
+                # every tick, and re-encoding/sending them is pure waste.  The
+                # comparison runs here on the pump thread, never on the GL thread.
+                if self._last_raw is not None and rgba == self._last_raw:
+                    with self._cond:
+                        self.frames_deduped += 1
+                    continue
                 try:
                     if self.timings is None:
                         blob = ipc.encode_frame(width, height, rgba, level=self.level)
@@ -180,8 +191,10 @@ class FramePump:
                             blob = ipc.encode_frame(width, height, rgba, level=self.level)
                 except (ipc.ProtocolError, ValueError):
                     continue  # a bad frame must not kill the pump thread
+                raw = rgba
             else:
                 blob = item
+                raw = None
             try:
                 if self.timings is None:
                     self._sock.sendall(blob)
@@ -192,6 +205,12 @@ class FramePump:
                 with self._cond:
                     self._running = False
                 return
+            if raw is None:
+                # An encoded frame's pixels are not available for comparison, so
+                # forget the raw baseline; the next raw frame must be sent.
+                self._last_raw = None
+            else:
+                self._last_raw = raw
             with self._cond:
                 self.frames_sent += 1
 
@@ -681,6 +700,7 @@ class SceneHost:
             "host_rss": process_rss_bytes(),
             "sent": pump.frames_sent if pump is not None else 0,
             "dropped": pump.frames_dropped if pump is not None else 0,
+            "deduped": pump.frames_deduped if pump is not None else 0,
             "timings": self.timings.snapshot(),
         }
 
@@ -698,6 +718,7 @@ class SceneHost:
             "host_rss": process_rss_bytes(),
             "sent": pump.frames_sent if pump is not None else 0,
             "dropped": pump.frames_dropped if pump is not None else 0,
+            "deduped": pump.frames_deduped if pump is not None else 0,
             "fps": self._fps,
             "blocks": len(self.blocks),
             "total_duration": total,

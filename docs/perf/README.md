@@ -132,3 +132,23 @@ churn. Recorded in `after-p1.4.json`:
 
 The editor still pays ~2.1 ms for `QPixmap.fromImage` and ~5.0 ms for the smooth
 downscale per frame; those are the remaining GUI-thread costs that P1.3 targets.
+
+### P1.2 — dedup identical frames in the pump (2026-10-07)
+
+`FramePump` now compares each raw frame with the last one it actually sent and
+drops exact repeats without re-encoding or sending them. During a `wait` or a
+static hold manimgl redraws the same pixels every tick, so this removes real
+work; the comparison runs on the pump thread, never the GL thread, and costs
+~0.7 ms only when a frame did change. Recorded in `after-p1.2.json`:
+
+| metric | after P1.1b | after P1.2 |
+| --- | --- | --- |
+| frames offered during playback | 93 | 93 |
+| frames encoded / sent | 93 | **80** |
+| frames deduped | — | **13** (~14%) |
+
+This trims ~14% of the host's per-playback encode+send work (~29 ms) and the
+matching wire traffic. It does **not** change `render` (still ~23 ms/frame), so
+the realtime ratio is unchanged (~1.12). Note that `playback_fps` counts frames
+*delivered*, so it falls by design once duplicates stop being transmitted —
+compare `play_realtime_ratio`, not `playback_fps`, across this change.

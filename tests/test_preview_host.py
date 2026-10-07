@@ -195,6 +195,58 @@ class TestFramePump:
             pump.close()
             receiver.close()
 
+    def test_identical_frames_are_deduped(self) -> None:
+        sender, receiver = socket.socketpair()
+        try:
+            pump = FramePump(sender)
+            pump.start()
+            frame = self._rgba(4, 4)
+            pump.offer(frame, 4, 4)
+            deadline = time.monotonic() + 5
+            while pump.frames_sent < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            pump.offer(frame, 4, 4)  # byte-identical: no re-encode, no send
+            time.sleep(0.05)
+            assert pump.frames_sent == 1
+            assert pump.frames_deduped == 1
+            pump.offer(self._rgba(4, 4, seed=9), 4, 4)  # changed: sent normally
+            deadline = time.monotonic() + 5
+            while pump.frames_sent < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert pump.frames_sent == 2
+            assert pump.frames_deduped == 1
+        finally:
+            pump.close()
+            receiver.close()
+
+    def test_encoded_frame_resets_the_dedup_baseline(self) -> None:
+        from manim_studio.ipc import encode_frame
+
+        sender, receiver = socket.socketpair()
+        try:
+            pump = FramePump(sender)
+            pump.start()
+            frame = self._rgba(4, 4)
+            pump.offer(frame, 4, 4)
+            deadline = time.monotonic() + 5
+            while pump.frames_sent < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            pump.offer_encoded(encode_frame(4, 4, self._rgba(4, 4, seed=5)))
+            deadline = time.monotonic() + 5
+            while pump.frames_sent < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            # The editor now shows the encoded frame, so the earlier raw frame is
+            # no longer current and must be sent again instead of being deduped.
+            pump.offer(frame, 4, 4)
+            deadline = time.monotonic() + 5
+            while pump.frames_sent < 3 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert pump.frames_sent == 3
+            assert pump.frames_deduped == 0
+        finally:
+            pump.close()
+            receiver.close()
+
 
 class TestSceneShortcuts:
     """The live shell must expose the manimgl-style scene API, offline-testable."""
@@ -540,6 +592,7 @@ class _NullPump:
         self.offered: list[bytes] = []
         self.frames_sent = 0
         self.frames_dropped = 0
+        self.frames_deduped = 0
 
     def offer(self, rgba: bytes, width: int, height: int) -> None:
         from manim_studio.ipc import encode_frame
