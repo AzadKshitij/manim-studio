@@ -82,6 +82,9 @@ class TestConstruction:
         assert window.preview_panel is not None
         assert window.shell_dock is not None
 
+    def test_window_has_icon(self, window: MainWindow) -> None:
+        assert not window.windowIcon().isNull()
+
     def test_toolbar_has_scene_combo(self, window: MainWindow) -> None:
         assert window._scene_combo.count() == 0
 

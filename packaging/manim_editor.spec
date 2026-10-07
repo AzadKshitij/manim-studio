@@ -108,6 +108,11 @@ def _data_files() -> list[tuple[str, str]]:
     # moderngl-window ships shaders/fonts it loads at runtime.
     datas.extend(collect_data_files("moderngl_window"))
 
+    # The window/taskbar icon the editor loads via manim_editor.editor.icon.
+    for asset in sorted((SRC_DIR / "manim_editor" / "assets").glob("*")):
+        if asset.is_file():
+            datas.append((str(asset), "manim_editor/assets"))
+
     # Every installed *.dist-info: manimlib/__init__ calls
     # pkg_resources.get_distribution("manimgl") at import time, and that lookup
     # scans *.dist-info directories on sys.path — which in a frozen process is

@@ -9,8 +9,33 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from manim_editor import APP_NAME, ORG_NAME
+from manim_editor.editor.icon import load_icon
 
 __all__ = ["create_application", "dark_palette", "run_editor"]
+
+log = logging.getLogger(__name__)
+
+# Stable Windows shell identity; without it a taskbar launch through python.exe
+# is grouped under the Python launcher and shows its icon.
+WINDOWS_APP_ID = f"{ORG_NAME}.ManimEditor"
+
+
+def _set_windows_app_id(app_id: str) -> None:
+    """Tell Windows which AppUserModelID to group our windows under.
+
+    Best effort: the taskbar still works without it, it may just show the
+    launcher's icon instead of ours. Non-Windows platforms do nothing.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        windll = getattr(ctypes, "windll", None)
+        if windll is not None:
+            windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except OSError:  # pragma: no cover - shell integration is best effort
+        log.warning("could not set the Windows AppUserModelID", exc_info=True)
 
 
 def dark_palette() -> QPalette:
@@ -50,8 +75,10 @@ def create_application(argv: list[str] | None = None) -> QApplication:
     app = QApplication(argv if argv is not None else sys.argv[:1])
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(ORG_NAME)
+    _set_windows_app_id(WINDOWS_APP_ID)
     app.setStyle("Fusion")
     app.setPalette(dark_palette())
+    app.setWindowIcon(load_icon())
     return app
 
 

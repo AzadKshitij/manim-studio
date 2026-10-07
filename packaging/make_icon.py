@@ -1,9 +1,15 @@
-"""Generate ``packaging/manim_editor.ico`` procedurally.
+"""Generate the Manim Editor icon procedurally.
 
 The icon is drawn with Pillow (a transitive runtime dependency) so the repository
 needs no binary design assets and the output is deterministic:
 
     uv run python packaging/make_icon.py
+
+Two copies are written from the same master image:
+
+* ``packaging/manim_editor.ico`` — build input for PyInstaller and Inno Setup.
+* ``src/manim_editor/assets/manim_editor.ico`` — runtime asset the editor loads
+  with :func:`manim_editor.editor.icon.load_icon` for the window/taskbar icon.
 
 ``scripts/build.ps1`` runs this automatically before PyInstaller.
 """
@@ -15,6 +21,13 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 OUTPUT = Path(__file__).with_name("manim_editor.ico")
+ASSET_OUTPUT = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "manim_editor"
+    / "assets"
+    / "manim_editor.ico"
+)
 SIZES = (16, 24, 32, 48, 64, 128, 256)
 MASTER = 256
 SUPERSAMPLE = 4
@@ -61,10 +74,12 @@ def _render_master() -> Image.Image:
 
 
 def main() -> int:
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     image = _render_master()
-    image.save(OUTPUT, format="ICO", sizes=[(size, size) for size in SIZES])
-    print(f"wrote {OUTPUT} ({OUTPUT.stat().st_size} bytes)")
+    sizes = [(size, size) for size in SIZES]
+    for output in (OUTPUT, ASSET_OUTPUT):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        image.save(output, format="ICO", sizes=sizes)
+        print(f"wrote {output} ({output.stat().st_size} bytes)")
     return 0
 
 

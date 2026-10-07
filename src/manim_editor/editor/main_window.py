@@ -39,6 +39,7 @@ from manim_editor.api_index import build_index, index_names, load_index, save_in
 from manim_editor.editor.code_editor import CodeEditor
 from manim_editor.editor.completion_worker import CompletionWorker
 from manim_editor.editor.file_watcher import FileWatcher
+from manim_editor.editor.icon import load_icon
 from manim_editor.editor.preview_controller import PreviewController
 from manim_editor.editor.preview_panel import PreviewPanel
 from manim_editor.editor.timeline_controller import MediaTransport
@@ -77,6 +78,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(load_icon())
         self._embedded = embedded
         self._preview_size = preview_size
         self._initial_frame = initial_frame

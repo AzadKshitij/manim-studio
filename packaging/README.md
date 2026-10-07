@@ -10,7 +10,7 @@ input; everything produced lands in `dist/` at the repo root.
 | `entrypoints/cli_entry.py` | Console entry (`frozen_entry.cli_entry`). |
 | `installer.iss` | Inno Setup 6 script (per-user install, no admin). |
 | `make_icon.py` | Procedural icon generator (`uv run python packaging/make_icon.py`). |
-| `manim_editor.ico` | Generated icon (committed so the installer builds offline). |
+| `manim_editor.ico` | Generated icon (committed so the installer builds offline). The generator also writes the runtime copy at `src/manim_editor/assets/manim_editor.ico`. |
 
 Build with `scripts\build.ps1` from the repo root — never by invoking PyInstaller
 or ISCC by hand (the script pins `--distpath dist --workpath build`, the version
