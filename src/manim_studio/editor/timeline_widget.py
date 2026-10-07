@@ -26,7 +26,7 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QMenu, QSizePolicy, QWidget
+from PySide6.QtWidgets import QMenu, QScrollBar, QSizePolicy, QWidget
 
 from manim_studio.timeline_model import (
     TimelineBlock,
@@ -38,6 +38,8 @@ from manim_studio.timeline_model import (
 
 __all__ = ["TimelineWidget"]
 
+#: Height of the horizontal scrollbar strip at the bottom of the widget.
+SCROLLBAR_HEIGHT = 14
 RULER_HEIGHT = 22.0
 MIN_BLOCK_LABEL_WIDTH = 44.0
 CLICK_SLOP_PX = 4.0
@@ -103,7 +105,13 @@ class TimelineWidget(QWidget):
         self._last_mouse_x = 0.0
         self._resize_index: int | None = None
         self._resize_duration: float | None = None
-        self.setMinimumHeight(96)
+        self._syncing_scrollbar = False
+        self._scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
+        self._scrollbar.setSingleStep(1)
+        self._scrollbar.setToolTip("Scroll the zoomed timeline")
+        self._scrollbar.setEnabled(False)
+        self._scrollbar.valueChanged.connect(self._on_scrollbar_value)
+        self.setMinimumHeight(96 + SCROLLBAR_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -114,6 +122,8 @@ class TimelineWidget(QWidget):
             "←/→: step one frame · Shift+←/→: one second · Home/End · Space: play · "
             "Ctrl+Z: undo retime"
         )
+        self._layout_scrollbar()
+        self._sync_scrollbar()
 
     # ------------------------------------------------------------------
     # State
@@ -270,6 +280,7 @@ class TimelineWidget(QWidget):
         self._resize_index = None
         self._resize_duration = None
         self.update()
+        self._sync_scrollbar()
 
     def set_playhead(self, seconds: float) -> None:
         self._playhead = max(0.0, float(seconds))
@@ -282,9 +293,53 @@ class TimelineWidget(QWidget):
     def view(self) -> TimelineView:
         return self._view
 
+    @property
+    def scrollbar(self) -> QScrollBar:
+        """The horizontal scrollbar that pans the zoomed view."""
+        return self._scrollbar
+
+    def _layout_scrollbar(self) -> None:
+        self._scrollbar.setGeometry(
+            0,
+            max(0, self.height() - SCROLLBAR_HEIGHT),
+            self.width(),
+            SCROLLBAR_HEIGHT,
+        )
+
+    def _sync_scrollbar(self) -> None:
+        """Mirror the visible view window onto the scrollbar (values in milliseconds)."""
+        bar = self._scrollbar
+        total = self._view.total
+        span = self._view.span or total
+        page = max(1, round(span * 1000.0))
+        maximum = max(0, round(total * 1000.0) - page)
+        value = round(self._view.start * 1000.0)
+        self._syncing_scrollbar = True
+        try:
+            bar.setRange(0, maximum)
+            bar.setPageStep(page)
+            bar.setValue(min(max(value, 0), maximum))
+        finally:
+            self._syncing_scrollbar = False
+        bar.setEnabled(maximum > 0)
+
+    def _on_scrollbar_value(self, value: int) -> None:
+        """Pan the view when the user drags the scrollbar (ignores sync echoes)."""
+        if self._syncing_scrollbar:
+            return
+        self._view = TimelineView(
+            total=self._view.total,
+            width=float(max(self.width(), 1)),
+            start=value / 1000.0,
+            span=self._view.span,
+        )
+        self.update()
+        self.viewChanged.emit()
+
     def fit(self) -> None:
         self._view = self._view.fit()
         self.update()
+        self._sync_scrollbar()
         self.viewChanged.emit()
 
     def zoom_by(self, factor: float) -> None:
@@ -293,6 +348,7 @@ class TimelineWidget(QWidget):
             return
         self._view = self._view.zoom_at(self.width() / 2, factor)
         self.update()
+        self._sync_scrollbar()
         self.viewChanged.emit()
 
     def fit_selection(self) -> None:
@@ -316,6 +372,7 @@ class TimelineWidget(QWidget):
             span=span,
         )
         self.update()
+        self._sync_scrollbar()
         self.viewChanged.emit()
 
     def zoom_to_block(self, index: int) -> None:
@@ -330,6 +387,7 @@ class TimelineWidget(QWidget):
             span=span,
         )
         self.update()
+        self._sync_scrollbar()
         self.viewChanged.emit()
 
     # ------------------------------------------------------------------
@@ -343,6 +401,8 @@ class TimelineWidget(QWidget):
             start=self._view.start,
             span=self._view.span,
         )
+        self._layout_scrollbar()
+        self._sync_scrollbar()
         super().resizeEvent(event)
 
     def _request_scrub(self, x: float, *, snap: bool = True) -> None:
@@ -405,6 +465,7 @@ class TimelineWidget(QWidget):
         else:
             self._view = self._view.pan_px(-steps * 60.0)
         self.update()
+        self._sync_scrollbar()
         self.viewChanged.emit()
         event.accept()
 
@@ -452,6 +513,7 @@ class TimelineWidget(QWidget):
             self._view = self._view.pan_px(delta)
             self._last_mouse_x = event.position().x()
             self.update()
+            self._sync_scrollbar()
             self.viewChanged.emit()
             return
         if self._mode == "resize" and self._resize_index is not None:
@@ -564,6 +626,7 @@ class TimelineWidget(QWidget):
             super().keyPressEvent(event)
             return
         self.update()
+        self._sync_scrollbar()
         self.viewChanged.emit()
         event.accept()
 
@@ -575,7 +638,7 @@ class TimelineWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         width = self.width()
-        height = self.height()
+        height = max(0, self.height() - SCROLLBAR_HEIGHT)
         painter.fillRect(self.rect(), QColor(0x18, 0x18, 0x18))
         self._draw_ruler(painter, width)
         track_top = RULER_HEIGHT

@@ -7,7 +7,13 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QSignalSpy
 
-from manim_studio.editor.timeline_widget import FRAME_STEP, TimelineWidget, block_color, hash_name
+from manim_studio.editor.timeline_widget import (
+    FRAME_STEP,
+    SCROLLBAR_HEIGHT,
+    TimelineWidget,
+    block_color,
+    hash_name,
+)
 from manim_studio.timeline_model import TimelineBlock, TimelineLog
 
 
@@ -415,6 +421,66 @@ class TestKeyboard:
         spy = QSignalSpy(timeline.playToggleRequested)
         qtbot.keyClick(timeline, Qt.Key.Key_Space)
         assert spy.count() == 1
+
+
+class TestScrollbar:
+    """The bottom scrollbar mirrors and drives the zoomed view window."""
+
+    def test_disabled_and_zero_range_when_not_zoomed(self, timeline: TimelineWidget) -> None:
+        bar = timeline.scrollbar
+        assert bar.maximum() == 0
+        assert bar.isEnabled() is False
+
+    def test_enabled_after_zoom(self, timeline: TimelineWidget) -> None:
+        timeline.wheelEvent(_wheel(120, Qt.KeyboardModifier.ControlModifier))
+        bar = timeline.scrollbar
+        assert bar.maximum() > 0
+        assert bar.isEnabled() is True
+        # pageStep reflects the visible span in milliseconds.
+        assert bar.pageStep() == pytest.approx(timeline.view().span * 1000, abs=2)
+
+    def test_geometry_sits_at_the_bottom(self, timeline: TimelineWidget) -> None:
+        bar = timeline.scrollbar
+        assert bar.height() == SCROLLBAR_HEIGHT
+        assert bar.y() == timeline.height() - SCROLLBAR_HEIGHT
+        assert bar.width() == timeline.width()
+
+    def test_dragging_the_scrollbar_pans_the_view(self, timeline: TimelineWidget) -> None:
+        timeline.wheelEvent(_wheel(120, Qt.KeyboardModifier.ControlModifier))
+        bar = timeline.scrollbar
+        viewChanged = QSignalSpy(timeline.viewChanged)
+        bar.setValue(0)
+        assert timeline.view().start == pytest.approx(0.0, abs=1e-6)
+        bar.setValue(bar.maximum())
+        assert timeline.view().start == pytest.approx(bar.maximum() / 1000.0, abs=1e-6)
+        assert viewChanged.count() >= 1
+
+    def test_panning_updates_the_scrollbar_value(self, timeline: TimelineWidget) -> None:
+        timeline.wheelEvent(_wheel(120, Qt.KeyboardModifier.ControlModifier))
+        bar = timeline.scrollbar
+        before = bar.value()
+        timeline.wheelEvent(_wheel(-120))  # plain wheel pans right
+        assert timeline.view().start * 1000 > before
+        assert bar.value() == pytest.approx(timeline.view().start * 1000, abs=2)
+
+    def test_fit_resets_the_scrollbar(self, timeline: TimelineWidget) -> None:
+        timeline.wheelEvent(_wheel(120, Qt.KeyboardModifier.ControlModifier))
+        assert timeline.scrollbar.maximum() > 0
+        timeline.fit()
+        assert timeline.scrollbar.maximum() == 0
+        assert timeline.scrollbar.isEnabled() is False
+
+    def test_zoom_to_block_enables_the_scrollbar(self, timeline: TimelineWidget) -> None:
+        timeline.zoom_to_block(2)
+        assert timeline.scrollbar.maximum() > 0
+
+    def test_sync_does_not_echo_into_extra_signals(self, timeline: TimelineWidget) -> None:
+        # Synchronising the bar must not look like a user pan.
+        spy = QSignalSpy(timeline.viewChanged)
+        timeline.wheelEvent(_wheel(120, Qt.KeyboardModifier.ControlModifier))
+        before = spy.count()
+        timeline._sync_scrollbar()
+        assert spy.count() == before
 
 
 def _wheel(delta: int, modifiers: Qt.KeyboardModifier = Qt.KeyboardModifier.NoModifier):
