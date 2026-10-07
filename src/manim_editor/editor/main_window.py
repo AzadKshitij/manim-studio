@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 from manim_editor import APP_NAME, ipc
 from manim_editor.api_index import build_index, index_names, load_index, save_index
 from manim_editor.editor.code_editor import CodeEditor
+from manim_editor.editor.completion_worker import CompletionWorker
 from manim_editor.editor.file_watcher import FileWatcher
 from manim_editor.editor.preview_controller import PreviewController
 from manim_editor.editor.preview_panel import PreviewPanel
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow):
         restore_settings: bool = True,
         auto_preview: bool = True,
         initial_frame: str = "end",
+        completion: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -105,6 +107,12 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
         self.editor.set_completions(self._api_names)
+        self._completion_worker: CompletionWorker | None = None
+        if completion:
+            self._completion_worker = CompletionWorker(self)
+            self._completion_worker.completionsReady.connect(self._on_completions_ready)
+            self._completion_worker.signaturesReady.connect(self._on_signatures_ready)
+            self.destroyed.connect(self._stop_completion_worker)
         if restore_settings:
             self._restore_geometry()
         if path is not None:
@@ -317,6 +325,49 @@ class MainWindow(QMainWindow):
         self.transport.positionChanged.connect(self._on_transport_position)
         self.transport.durationChanged.connect(self._on_transport_duration)
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
+        self.editor.completionsRequested.connect(self._on_completions_requested)
+        self.editor.signaturesRequested.connect(self._on_signatures_requested)
+
+    # ------------------------------------------------------------------
+    # Completion (Jedi worker)
+    # ------------------------------------------------------------------
+
+    def _completion_path(self) -> str | None:
+        return str(self._path) if self._path is not None else None
+
+    def _on_completions_requested(self, source: str, offset: int) -> None:
+        if self._completion_worker is None:
+            return
+        self._completion_worker.request_completions(source, offset, self._completion_path())
+        self._ensure_completion_worker()
+
+    def _on_signatures_requested(self, source: str, offset: int) -> None:
+        if self._completion_worker is None:
+            return
+        self._completion_worker.request_signatures(source, offset, self._completion_path())
+        self._ensure_completion_worker()
+
+    def _ensure_completion_worker(self) -> None:
+        if self._completion_worker is not None and not self._completion_worker.isRunning():
+            self._completion_worker.start()
+
+    def _warm_up_completion(self) -> None:
+        """Prime Jedi's cache for the freshly loaded buffer in the background."""
+        if self._completion_worker is None:
+            return
+        self._completion_worker.request_warmup(self.editor.text(), self._completion_path())
+        self._ensure_completion_worker()
+
+    def _stop_completion_worker(self, *_args: Any) -> None:
+        if self._completion_worker is not None:
+            self._completion_worker.stop()
+
+    def _on_completions_ready(self, offset: int, items: Any) -> None:
+        self.editor.show_completions(offset, [item.insert for item in items])
+
+    def _on_signatures_ready(self, offset: int, items: Any) -> None:
+        if items:
+            self.editor.show_calltip(offset, "\n".join(item.label for item in items))
 
     # ------------------------------------------------------------------
     # Actions and menus
@@ -386,6 +437,7 @@ class MainWindow(QMainWindow):
         self._refresh_scene_list(self._path)
         self._update_title()
         self._set_status(f"opened {self._path.name} ({len(check.scenes)} scene(s))")
+        self._warm_up_completion()
         if self._auto_reload:
             self._start_preview()
         return True
@@ -799,6 +851,7 @@ class MainWindow(QMainWindow):
         self._set_status("file changed on disk — reloading editor and preview")
         self.editor.load_file(path)
         self._refresh_scene_list(Path(path))
+        self._warm_up_completion()
         self.reload_preview()
 
     # ------------------------------------------------------------------
@@ -876,6 +929,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.watcher.stop()
+        if self._completion_worker is not None:
+            self._completion_worker.stop()
         self.controller.shutdown()
         self.transport.stop()
         for process in (self._preview_process, self._export_process):

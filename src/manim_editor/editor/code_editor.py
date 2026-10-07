@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from manim_editor.ipc import as_bytes as _as_bytes
 from manim_editor.python_highlight import (
     TokenKind,
     highlight_spans,
+    kind_at,
     representative_token,
 )
 
@@ -104,6 +106,8 @@ class CodeEditor(ScintillaEdit):
     fileDropped = Signal(str)
     cursorMoved = Signal(int, int)  # 1-based line, 1-based column
     modificationChanged = Signal(bool)
+    completionsRequested = Signal(str, int)  # source, caret offset
+    signaturesRequested = Signal(str, int)  # source, caret offset
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -116,6 +120,11 @@ class CodeEditor(ScintillaEdit):
         self._restyle_timer.setSingleShot(True)
         self._restyle_timer.setInterval(0)
         self._restyle_timer.timeout.connect(self.restyle)
+        # Debounce Jedi lookups while the user is mid-word; '.' fires at once.
+        self._completion_timer = QTimer(self)
+        self._completion_timer.setSingleShot(True)
+        self._completion_timer.setInterval(120)
+        self._completion_timer.timeout.connect(self._request_completions)
         self.setAcceptDrops(True)
         self._configure_base()
         self.apply_theme(dark=True)
@@ -173,6 +182,12 @@ class CodeEditor(ScintillaEdit):
         self.styleSetBack(STYLE_LINENUMBER, _colorref(palette["gutter_bg"]))
         self.setMarginBackN(0, _colorref(palette["gutter_bg"]))
         self.setMarginBackN(1, _colorref(palette["gutter_bg"]))
+        # Completion popup and calltip behaviour/chrome.
+        self.callTipSetBack(_colorref(palette["default_bg"]))
+        self.callTipSetFore(_colorref(palette["default_fg"]))
+        self.autoCSetIgnoreCase(True)
+        self.autoCSetDropRestOfWord(True)
+        self.autoCSetMaxHeight(8)
         self.restyle()
 
     @staticmethod
@@ -229,6 +244,8 @@ class CodeEditor(ScintillaEdit):
         return _as_bytes(self.getText(self.textLength())).decode("utf-8", "replace")
 
     def set_text(self, text: str) -> None:
+        self.autoCCancel()
+        self.callTipCancel()
         self.setText(text.replace("\r\n", "\n").replace("\r", "\n"))
         self.restyle()
 
@@ -342,10 +359,53 @@ class CodeEditor(ScintillaEdit):
         self._completions = tuple(names)
 
     def trigger_completion(self) -> bool:
-        """Show the completion list filtered by the word being typed."""
+        """Show the instant static list and ask Jedi for a richer one."""
+        shown = self._show_static_completions()
+        self._request_completions()
+        return shown
+
+    def _show_static_completions(self) -> bool:
         if not self._completions:
             return False
         position = self.current_position()
+        self.autoCShow(position - self._word_start(position), " ".join(self._completions))
+        return True
+
+    def show_completions(self, offset: int, items: Sequence[str]) -> None:
+        """Display a Jedi completion list for ``offset`` (ignored if stale)."""
+        if offset != self.current_position() or not items:
+            return
+        self.autoCCancel()
+        self.autoCShow(offset - self._word_start(offset), " ".join(items))
+
+    def show_calltip(self, offset: int, text: str) -> None:
+        """Display a signature calltip for ``offset`` (ignored if stale)."""
+        if offset != self.current_position() or not text:
+            return
+        self.callTipShow(offset, text)
+
+    def _request_completions(self) -> None:
+        source = self.text()
+        offset = self.current_position()
+        if self._caret_in_ignored_token(source, offset):
+            return
+        self.completionsRequested.emit(source, offset)
+
+    def _request_signatures(self) -> None:
+        source = self.text()
+        offset = self.current_position()
+        if self._caret_in_ignored_token(source, offset):
+            return
+        self.signaturesRequested.emit(source, offset)
+
+    @staticmethod
+    def _caret_in_ignored_token(source: str, offset: int) -> bool:
+        """True when the character before the caret is inside a string/comment."""
+        if offset <= 0:
+            return False
+        return kind_at(source, offset - 1) in (TokenKind.STRING, TokenKind.COMMENT)
+
+    def _word_start(self, position: int) -> int:
         start = position
         while start > 0:
             char = chr(self.charAt(start - 1))
@@ -353,9 +413,7 @@ class CodeEditor(ScintillaEdit):
                 start -= 1
             else:
                 break
-        prefix_length = position - start
-        self.autoCShow(prefix_length, " ".join(self._completions))
-        return True
+        return start
 
     # ------------------------------------------------------------------
     # Qt events
@@ -417,8 +475,13 @@ class CodeEditor(ScintillaEdit):
             text = chr(char)
         except ValueError:  # pragma: no cover - defensive
             return
-        if text.isalpha() or text == "_":
-            self.trigger_completion()
+        if text == ".":
+            self._completion_timer.start(0)  # member access: no debounce
+        elif text == "(":
+            self._request_signatures()
+        elif text.isalpha() or text == "_":
+            self._show_static_completions()
+            self._completion_timer.start()
 
 
 def _byte_length(text: str, start: int, end: int) -> int:

@@ -29,6 +29,7 @@ class TestEditorLiveHost:
             embedded=True,
             auto_preview=True,
             preview_size=(320, 180),
+            completion=False,
         )
         qtbot.addWidget(window)
         window.resize(1000, 700)

@@ -204,3 +204,66 @@ class TestHighlighting:
         editor.apply_theme(dark=True)
         editor.apply_theme(dark=False)
         assert editor.styleAt(0) == PY_IDENTIFIER
+
+
+class TestCompletion:
+    def test_member_dot_requests_completions(self, editor: CodeEditor, qtbot) -> None:
+        editor.set_text("value.")
+        editor.lineEnd()
+        offsets: list[int] = []
+        editor.completionsRequested.connect(lambda _source, offset: offsets.append(offset))
+        editor._on_char_added(ord("."))
+        qtbot.waitUntil(lambda: bool(offsets), timeout=2000)
+        assert offsets[-1] == len(editor.text())
+
+    def test_open_paren_requests_signatures(self, editor: CodeEditor) -> None:
+        editor.set_text("greet(")
+        editor.lineEnd()
+        offsets: list[int] = []
+        editor.signaturesRequested.connect(lambda _source, offset: offsets.append(offset))
+        editor._on_char_added(ord("("))
+        assert offsets == [len("greet(")]
+
+    def test_requests_skipped_inside_comment(self, editor: CodeEditor) -> None:
+        editor.set_text("value = 1  # note")
+        editor.lineEnd()
+        offsets: list[int] = []
+        editor.completionsRequested.connect(lambda _source, offset: offsets.append(offset))
+        editor._request_completions()
+        assert offsets == []
+
+    def test_requests_skipped_inside_string(self, editor: CodeEditor) -> None:
+        editor.set_text('label = "some text')
+        editor.lineEnd()
+        offsets: list[int] = []
+        editor.completionsRequested.connect(lambda _source, offset: offsets.append(offset))
+        editor._request_completions()
+        assert offsets == []
+
+    def test_caret_guard_kinds(self, editor: CodeEditor) -> None:
+        editor.set_text("x = 1")
+        assert editor._caret_in_ignored_token("x = 1", 5) is False
+        assert editor._caret_in_ignored_token('x = "abc"', 9) is True
+        assert editor._caret_in_ignored_token("x = 1  # note", 13) is True
+
+    def test_show_completions_popup(self, editor: CodeEditor) -> None:
+        editor.set_text("val")
+        editor.lineEnd()
+        editor.show_completions(editor.current_position(), ["value", "validate"])
+        assert editor.autoCActive() is True
+        editor.autoCCancel()
+        assert editor.autoCActive() is False
+
+    def test_stale_completion_offset_ignored(self, editor: CodeEditor) -> None:
+        editor.set_text("val")
+        editor.lineEnd()
+        editor.show_completions(0, ["value"])
+        assert editor.autoCActive() is False
+
+    def test_show_calltip(self, editor: CodeEditor) -> None:
+        editor.set_text("greet(")
+        editor.lineEnd()
+        editor.show_calltip(editor.current_position(), "greet(name, excited)")
+        assert editor.callTipActive() is True
+        editor.callTipCancel()
+        assert editor.callTipActive() is False

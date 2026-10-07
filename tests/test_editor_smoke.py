@@ -68,7 +68,7 @@ SAMPLE_LOG_EVENT = {
 
 @pytest.fixture
 def window(qtbot) -> MainWindow:
-    main = MainWindow(restore_settings=False, embedded=True, auto_preview=False)
+    main = MainWindow(restore_settings=False, embedded=True, auto_preview=False, completion=False)
     qtbot.addWidget(main)
     main.resize(1200, 800)
     main.show()
@@ -87,6 +87,35 @@ class TestConstruction:
 
     def test_completions_loaded(self, window: MainWindow) -> None:
         assert len(window._api_names) > 100
+
+    def test_completion_disabled_by_flag(self, window: MainWindow) -> None:
+        assert window._completion_worker is None
+
+
+class TestCompletionWiring:
+    def test_worker_created_when_enabled(self, qtbot) -> None:
+        main = MainWindow(restore_settings=False, embedded=True, auto_preview=False)
+        qtbot.addWidget(main)
+        assert main._completion_worker is not None
+        assert main._completion_worker.isRunning() is False
+        main._completion_worker.stop()
+
+    def test_request_round_trips_through_jedi(self, qtbot) -> None:
+        main = MainWindow(restore_settings=False, embedded=True, auto_preview=False)
+        qtbot.addWidget(main)
+        worker = main._completion_worker
+        assert worker is not None
+        source = "values = [1, 2, 3]\nvalues.ap"
+        main.editor.set_text(source)
+        offset = len(source)
+        try:
+            with qtbot.waitSignal(worker.completionsReady, timeout=15000) as blocker:
+                main._on_completions_requested(source, offset)
+            got_offset, items = blocker.args
+            assert got_offset == offset
+            assert any(item.insert == "append" for item in items)
+        finally:
+            worker.stop()
 
 
 class TestOpenAndSave:

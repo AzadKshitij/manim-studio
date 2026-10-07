@@ -18,7 +18,7 @@ import enum
 from pygments.lexers import PythonLexer
 from pygments.token import Token, _TokenType
 
-__all__ = ["Span", "TokenKind", "highlight_spans", "representative_token"]
+__all__ = ["Span", "TokenKind", "highlight_spans", "kind_at", "representative_token"]
 
 
 class TokenKind(enum.Enum):
@@ -106,6 +106,19 @@ def highlight_spans(text: str) -> list[Span]:
         else:
             spans.append((index, end, kind))
     return spans
+
+
+def kind_at(text: str, offset: int) -> TokenKind | None:
+    """The token kind covering ``offset``, or ``None`` for whitespace/gaps.
+
+    Used by the editor to suppress completion inside strings and comments.
+    """
+    for start, end, kind in highlight_spans(text):
+        if start <= offset < end:
+            return kind
+        if start > offset:
+            break
+    return None
 
 
 def _refine_name(value: str) -> TokenKind:
