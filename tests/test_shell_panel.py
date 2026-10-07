@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from manim_editor.editor.shell_panel import ShellPanel
+from manim_studio.editor.shell_panel import ShellPanel
 
 
 class TestOutput:

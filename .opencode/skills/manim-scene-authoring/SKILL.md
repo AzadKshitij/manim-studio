@@ -1,9 +1,9 @@
 ---
 name: manim-scene-authoring
-description: Use when asked to create, edit, validate or export a ManimGL scene with Manim Editor (e.g. "build me a CircleToSquare scene"). Covers the CLI workflow, manimgl API conventions, templates and trace expectations.
+description: Use when asked to create, edit, validate or export a ManimGL scene with Manim Studio (e.g. "build me a CircleToSquare scene"). Covers the CLI workflow, manimgl API conventions, templates and trace expectations.
 ---
 
-# Authoring scenes for Manim Editor
+# Authoring scenes for Manim Studio
 
 You can fully drive the editor headlessly. Use the CLI, then the GUI only when the
 user wants to watch.
@@ -12,22 +12,22 @@ user wants to watch.
 
 ```powershell
 # 1. scaffold from a template (blank | circle_to_square | text_intro | three_d)
-uv run manim-editor new scenes/intro.py --template circle_to_square
+uv run manim-studio new scenes/intro.py --template circle_to_square
 
 # 2. static validation (syntax + scene discovery) — fast, no GL
-uv run manim-editor check scenes/intro.py --json
+uv run manim-studio check scenes/intro.py --json
 
 # 3. runtime trace — proves the scene runs and shows the timeline
-uv run manim-editor trace scenes/intro.py --json
+uv run manim-studio trace scenes/intro.py --json
 
 # 4. a quick visual check without a window
-uv run manim-editor still scenes/intro.py -o preview.png
+uv run manim-studio still scenes/intro.py -o preview.png
 
 # 5. render a distributable video
-uv run manim-editor export scenes/intro.py -o intro.mp4 --quality high --fps 60
+uv run manim-studio export scenes/intro.py -o intro.mp4 --quality high --fps 60
 
 # 6. open the editor when the user wants to iterate interactively
-uv run manim-editor gui scenes/intro.py
+uv run manim-studio gui scenes/intro.py
 ```
 
 `trace --json` returns `blocks` (one per `play`/`wait`), `stats` and
@@ -62,7 +62,7 @@ dot = Dot(fill_color=RED)               # Dot is filled; use fill_color
 circle = Circle(color=BLUE)             # WRONG: renders with a red stroke
 ```
 
-`manim-editor check` detects this pattern and prints a warning on the offending line.
+`manim-studio check` detects this pattern and prints a warning on the offending line.
 Other shapes (`Square`, `Rectangle`, `Line`, `Arrow`, `RegularPolygon`, `Text`) pass
 `color=` through normally.
 
@@ -101,13 +101,13 @@ class Intro(Scene):
 
 Snippets available for interactive insertion: circle, square, text, transform,
 fade_in, fade_out, wait, group, updater, always_redraw, camera_move, loop,
-condition, save_state. The same list (`manim-editor templates --json`) includes the
+condition, save_state. The same list (`manim-studio templates --json`) includes the
 exact code, formatted for insertion inside `construct`.
 
 ## Debugging a failing scene
 
-1. `uv run manim-editor check scenes/x.py` — syntax / missing scene class.
-2. `uv run manim-editor trace scenes/x.py` — full traceback with the scene line number.
+1. `uv run manim-studio check scenes/x.py` — syntax / missing scene class.
+2. `uv run manim-studio trace scenes/x.py` — full traceback with the scene line number.
 3. Common causes: manimgl-vs-CE names (`Create`), missing `run_time` defaults making
    tiny waits quantize to a full frame, `Tex` without a TeX installation (guard it or
    skip), input variables that are undefined at trace time.

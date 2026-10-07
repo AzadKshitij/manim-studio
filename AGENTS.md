@@ -1,6 +1,6 @@
-# AGENTS.md — Manim Editor development guide
+# AGENTS.md — Manim Studio development guide
 
-This repository builds **Manim Editor**: a production-grade desktop editor for
+This repository builds **Manim Studio**: a production-grade desktop editor for
 [ManimGL](https://github.com/3b1b/manim) scenes. Left: code editor. Right: realtime
 preview. Bottom: timeline scrub. Target platforms: Windows, macOS, Ubuntu 24+.
 
@@ -19,8 +19,8 @@ uv run pytest                        # full suite; Qt runs offscreen, GL auto-sk
 uv run pytest -m "not gl and not slow"   # fast inner loop
 uv run pytest -m gl                  # OpenGL integration tests (real GPU needed)
 uv run pytest -m slow                # real ffmpeg export test
-uv run manim-editor --help           # app CLI
-uv run manim-editor gui <file.py>    # open the editor
+uv run manim-studio --help           # app CLI
+uv run manim-studio gui <file.py>    # open the editor
 ```
 
 Never commit with failing `ruff check`, `ruff format --check`, `mypy`, or `pytest`.
@@ -31,24 +31,24 @@ explaining why not.
 
 | Module | Responsibility | May import |
 | --- | --- | --- |
-| `manim_editor/timeline_model.py` | Pure data model for trace blocks, px/time math, JSON (de)serialization | stdlib only |
-| `manim_editor/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls | stdlib, `timeline_model` |
-| `manim_editor/python_highlight.py` | Pygments-powered Python token spans for the code editor | stdlib, `pygments` |
-| `manim_editor/python_completion.py` | Jedi-backed completion candidates and call signatures | stdlib, `jedi` |
-| `manim_editor/ipc.py` | JSON-line protocol + binary frame codec | stdlib only |
-| `manim_editor/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
-| `manim_editor/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
-| `manim_editor/templates.py` | Scene + prefab templates | stdlib only |
-| `manim_editor/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
-| `manim_editor/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
-| `manim_editor/export.py` | Video export via `manimgl -w` subprocess | `subprocess` |
-| `manim_editor/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |
-| `manim_editor/latex.py` | LaTeX detection, runtime env and end-to-end probe | stdlib only |
-| `manim_editor/latex_install.py` | On-demand TinyTeX download/install | stdlib, `latex` |
-| `manim_editor/latex_compat.py` | Runtime fix for manimgl 1.7.2 `-no-pdf`/MiKTeX bug | `manimlib` lazily |
-| `manim_editor/manimgl_launcher.py` | Export entry point (manimgl CLI + LaTeX fix) | `manimlib` lazily |
-| `manim_editor/editor/*` | Qt shell, Scintilla, timeline widget, panels | PySide6 |
-| `manim_editor/cli.py` | Agent-facing CLI (`trace`, `export`, `check`, `new`, `preview`) | everything above |
+| `manim_studio/timeline_model.py` | Pure data model for trace blocks, px/time math, JSON (de)serialization | stdlib only |
+| `manim_studio/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls | stdlib, `timeline_model` |
+| `manim_studio/python_highlight.py` | Pygments-powered Python token spans for the code editor | stdlib, `pygments` |
+| `manim_studio/python_completion.py` | Jedi-backed completion candidates and call signatures | stdlib, `jedi` |
+| `manim_studio/ipc.py` | JSON-line protocol + binary frame codec | stdlib only |
+| `manim_studio/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
+| `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
+| `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
+| `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
+| `manim_studio/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
+| `manim_studio/export.py` | Video export via `manimgl -w` subprocess | `subprocess` |
+| `manim_studio/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |
+| `manim_studio/latex.py` | LaTeX detection, runtime env and end-to-end probe | stdlib only |
+| `manim_studio/latex_install.py` | On-demand TinyTeX download/install | stdlib, `latex` |
+| `manim_studio/latex_compat.py` | Runtime fix for manimgl 1.7.2 `-no-pdf`/MiKTeX bug | `manimlib` lazily |
+| `manim_studio/manimgl_launcher.py` | Export entry point (manimgl CLI + LaTeX fix) | `manimlib` lazily |
+| `manim_studio/editor/*` | Qt shell, Scintilla, timeline widget, panels | PySide6 |
+| `manim_studio/cli.py` | Agent-facing CLI (`trace`, `export`, `check`, `new`, `preview`) | everything above |
 
 Status: Stage 1 (external GL window) and Stage 2 (embedded frame streaming) are
 implemented; timeline v1 (media transport scrub) and v2 (zoom/pan/click-jump/drag)
@@ -149,18 +149,18 @@ Protocol details live in `docs/protocol.md`. Any change to the protocol bumps
 The editor is designed to be driven headlessly by agents:
 
 ```powershell
-uv run manim-editor check scenes/foo.py            # discover scenes + syntax check
-uv run manim-editor trace scenes/foo.py --json     # runtime blocks, stats, timing
-uv run manim-editor export scenes/foo.py -o out.mp4 --quality low
-uv run manim-editor new scenes/foo.py --template circle_to_square
-uv run manim-editor preview scenes/foo.py           # standalone GL preview window
+uv run manim-studio check scenes/foo.py            # discover scenes + syntax check
+uv run manim-studio trace scenes/foo.py --json     # runtime blocks, stats, timing
+uv run manim-studio export scenes/foo.py -o out.mp4 --quality low
+uv run manim-studio new scenes/foo.py --template circle_to_square
+uv run manim-studio preview scenes/foo.py           # standalone GL preview window
 ```
 
 The CLI emits machine-readable JSON on stdout when `--json` is passed. Exit codes:
-`0` success, `1` user/scene error, `2` usage error. `manim-editor check` is the fastest
+`0` success, `1` user/scene error, `2` usage error. `manim-studio check` is the fastest
 way to validate generated scenes before opening the editor.
 
 To author a scene, load the `manim-scene-authoring` skill (or read
 `.opencode/skills/manim-scene-authoring/SKILL.md`); it documents the CLI loop,
 manimgl naming conventions and templates. For codebase work, load
-`manim-editor-dev` (`.opencode/skills/manim-editor-dev/SKILL.md`).
+`manim-studio-dev` (`.opencode/skills/manim-studio-dev/SKILL.md`).

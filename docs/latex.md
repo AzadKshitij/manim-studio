@@ -1,7 +1,7 @@
 # LaTeX support (on-demand TinyTeX)
 
 `Tex`, `Brace` and friends need external programs: `latex` + `dvisvgm`.
-Manim Editor does **not** bundle them. It detects a system install and,
+Manim Studio does **not** bundle them. It detects a system install and,
 when missing, offers a one-click user-local download.
 
 ## User flow
@@ -23,11 +23,11 @@ when missing, offers a one-click user-local download.
 
 | OS      | Install dir                                              |
 | ------- | -------------------------------------------------------- |
-| Windows | `%LOCALAPPDATA%/ManimEditor/latex`                       |
-| macOS   | `~/Library/Application Support/ManimEditor/latex`        |
-| Linux   | `~/.local/share/manim-editor/latex` (`$XDG_DATA_HOME`)   |
+| Windows | `%LOCALAPPDATA%/ManimStudio/latex`                       |
+| macOS   | `~/Library/Application Support/ManimStudio/latex`        |
+| Linux   | `~/.local/share/manim-studio/latex` (`$XDG_DATA_HOME`)   |
 
-Override with `MANIM_EDITOR_LATEX_DIR` (used by tests and custom setups).
+Override with `MANIM_STUDIO_LATEX_DIR` (used by tests and custom setups).
 
 ## Download source
 
@@ -49,35 +49,35 @@ The old `yihui.org/tinytex/TinyTeX-1.{zip,tgz,tar.gz}` links are dead
 
 ## How it works
 
-- `src/manim_editor/latex.py` (stdlib only): `latex_status()`,
+- `src/manim_studio/latex.py` (stdlib only): `latex_status()`,
   `probe_compile()`, `runtime_env()`, `apply_runtime_path()`,
   `is_latex_error()`.
-- `src/manim_editor/latex_compat.py`: runtime fix for a manimgl 1.7.2 bug —
+- `src/manim_studio/latex_compat.py`: runtime fix for a manimgl 1.7.2 bug —
   it passes the TeX Live-only `-no-pdf` flag to `latex`, which MiKTeX rejects
   as an unknown option (upstream fixed this in manim PR #2298 by using the
   flag only for `xelatex`). The patch mirrors that fix without touching
   site-packages and is a no-op on TeX Live.
-- `src/manim_editor/latex_install.py`: downloads the pinned portable TinyTeX
+- `src/manim_studio/latex_install.py`: downloads the pinned portable TinyTeX
   release bundle for the current OS (version + SHA-256 in
   `TINYTEX_SOURCES`), verifies the checksum, unbundles it (Windows
   self-extracting exe via `exe -y`, no UI/admin; `.tar.xz` elsewhere),
   runs `tlmgr install` for the manimgl default-template package set
   (`MANIM_TEX_PACKAGES`), writes an `.installed` marker. Downloads retry
   transient failures and fail fast on HTTP errors with the URL included.
-- `src/manim_editor/editor/latex_dialog.py`: dialog + `QThread` workers for
+- `src/manim_studio/editor/latex_dialog.py`: dialog + `QThread` workers for
   install and diagnose. Network/extraction/tlmgr/compiles never run on the
   GUI thread.
 - Runtime wiring: `cli.main`, `editor/app.run_editor`, `preview_host.run`,
   `scene_runner.run_construct`/`run_trace`/`render_still` call
   `apply_runtime_path()` + `patch_manimgl_latex_compat()`;
   `export.run_export` uses `runtime_env()` and runs
-  `manim_editor.manimgl_launcher` (manimgl CLI + compat fix) so `manimgl -w`
+  `manim_studio.manimgl_launcher` (manimgl CLI + compat fix) so `manimgl -w`
   exports get both fixes.
 - Errors: `format_scene_error()` appends the right hint to `LatexError`s —
   "missing" only when the binaries are actually absent, otherwise "installed
   but the compile failed; run Diagnose".
-- CLI: `manim-editor latex status|install|uninstall|diagnose [--json] [--dir DIR]`;
-  `manim-editor check --json` includes a `latex:` object.
+- CLI: `manim-studio latex status|install|uninstall|diagnose [--json] [--dir DIR]`;
+  `manim-studio check --json` includes a `latex:` object.
 
 ## Troubleshooting
 
@@ -93,9 +93,9 @@ The old `yihui.org/tinytex/TinyTeX-1.{zip,tgz,tar.gz}` links are dead
 ## Headless / CI
 
 ```powershell
-uv run manim-editor latex status
-uv run manim-editor latex install
-uv run manim-editor check scenes/my_scene.py --json
+uv run manim-studio latex status
+uv run manim-studio latex install
+uv run manim-studio check scenes/my_scene.py --json
 ```
 
 TinyTeX is LPPL-licensed and downloaded at install time, so nothing

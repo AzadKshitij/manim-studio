@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.scene_runner import (
+from manim_studio.scene_runner import (
     SceneLoadError,
     check_scene_file,
     discover_scenes,
@@ -15,7 +15,7 @@ from manim_editor.scene_runner import (
     render_still,
     run_trace,
 )
-from manim_editor.timeline_model import load_log, save_log
+from manim_studio.timeline_model import load_log, save_log
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 

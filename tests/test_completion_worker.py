@@ -6,8 +6,8 @@ import threading
 
 import pytest
 
-from manim_editor.editor.completion_worker import CompletionWorker
-from manim_editor.python_completion import Completion, Signature
+from manim_studio.editor.completion_worker import CompletionWorker
+from manim_studio.python_completion import Completion, Signature
 
 pytestmark = pytest.mark.usefixtures("qtbot")
 

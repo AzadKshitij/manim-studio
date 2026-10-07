@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from manim_editor.editor import scene_files
+from manim_studio.editor import scene_files
 
 
 class TestReadDiskText:
@@ -34,7 +34,7 @@ class TestBufferMatchesDisk:
 
 class TestPreviewVideoPath:
     def test_path_next_to_scene(self, tmp_path: Path) -> None:
-        expected = tmp_path / ".manim-editor" / "demo_preview.mp4"
+        expected = tmp_path / ".manim-studio" / "demo_preview.mp4"
         assert scene_files.preview_video_path(tmp_path / "demo.py") == expected
 
 

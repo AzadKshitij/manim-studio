@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.api_index import (
+from manim_studio.api_index import (
     ApiSymbol,
     build_index,
     find_manimlib_path,

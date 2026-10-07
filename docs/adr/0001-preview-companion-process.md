@@ -7,7 +7,7 @@
 
 ## Decision
 
-1. All OpenGL lives in `manim_editor/preview_host.py`, a companion process with one GL
+1. All OpenGL lives in `manim_studio/preview_host.py`, a companion process with one GL
    context on one thread. The editor spawns it, passes a loopback TCP port, and the host
    connects back.
 2. Two presentation modes:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.editor.preview_controller import PreviewController
+from manim_studio.editor.preview_controller import PreviewController
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 
@@ -62,7 +62,7 @@ class TestPreviewControllerIntegration:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PySide6.QtWidgets import QApplication
 
-        from manim_editor import ipc
+        from manim_studio import ipc
 
         QApplication.instance() or QApplication([])
         controller = PreviewController()

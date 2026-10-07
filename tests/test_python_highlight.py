@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from manim_editor.python_highlight import (
+from manim_studio.python_highlight import (
     Span,
     TokenKind,
     highlight_spans,

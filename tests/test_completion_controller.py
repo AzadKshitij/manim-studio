@@ -9,10 +9,10 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import QObject
 
-from manim_editor.editor import completion_controller as module
-from manim_editor.editor.completion_controller import CompletionController
-from manim_editor.editor.completion_worker import CompletionWorker
-from manim_editor.python_completion import Completion, Signature
+from manim_studio.editor import completion_controller as module
+from manim_studio.editor.completion_controller import CompletionController
+from manim_studio.editor.completion_worker import CompletionWorker
+from manim_studio.python_completion import Completion, Signature
 
 
 class _FakeEditor:

@@ -4,11 +4,11 @@
     portable zip and (optionally) the Inno Setup installer.
 .DESCRIPTION
     1. Quality gate (ruff format check, ruff check, mypy, pytest) unless -SkipGate.
-    2. Regenerates the icon and builds dist\ManimEditor\ with PyInstaller
-       (windowed ManimEditor.exe + console manim-editor.exe).
+    2. Regenerates the icon and builds dist\ManimStudio\ with PyInstaller
+       (windowed ManimStudio.exe + console manim-studio.exe).
     3. Smoke-tests the frozen executables (CLI surface, frozen api-index,
        manimgl dispatch through pkg_resources, windowed stdio + host dispatch).
-    4. Zips dist\ManimEditor-<version>-portable.zip.
+    4. Zips dist\ManimStudio-<version>-portable.zip.
     5. Builds the Inno Setup installer unless -SkipInstaller or ISCC is missing.
 
     Needs ffmpeg on PATH only for the export path at runtime, not for the build.
@@ -44,7 +44,7 @@ try {
     $version = (uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
     if ($LASTEXITCODE -ne 0) { throw "cannot read version from pyproject.toml" }
     $version = $version.Trim()
-    Write-Host "==> building Manim Editor $version"
+    Write-Host "==> building Manim Studio $version"
 
     # -- 2. Icon (deterministic; regenerating is cheap and keeps it in sync) --
     uv run python packaging\make_icon.py
@@ -53,12 +53,12 @@ try {
     # -- 3. PyInstaller bundle --
     # Explicit dist/work paths: the spec lives in packaging/, but all outputs
     # belong at the repo root (dist/, build/) where clean.ps1 expects them.
-    uv run pyinstaller --noconfirm --clean --distpath dist --workpath build packaging\manim_editor.spec
+    uv run pyinstaller --noconfirm --clean --distpath dist --workpath build packaging\manim_studio.spec
     if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed" }
 
-    $bundleDir = Join-Path (Get-Location) "dist\ManimEditor"
-    $guiExe = Join-Path $bundleDir "ManimEditor.exe"
-    $cliExe = Join-Path $bundleDir "manim-editor.exe"
+    $bundleDir = Join-Path (Get-Location) "dist\ManimStudio"
+    $guiExe = Join-Path $bundleDir "ManimStudio.exe"
+    $cliExe = Join-Path $bundleDir "manim-studio.exe"
     foreach ($exe in ($guiExe, $cliExe)) {
         if (-not (Test-Path $exe)) { throw "expected executable missing: $exe" }
     }
@@ -80,7 +80,7 @@ try {
     }
 
     Write-Host "==> smoke tests"
-    $escapedVersion = [regex]::Escape("manim-editor $version")
+    $escapedVersion = [regex]::Escape("manim-studio $version")
     Invoke-Smoke -Label "cli --version" -Exe $cliExe -Arguments @("--version") -ExpectOutput $escapedVersion
     Invoke-Smoke -Label "cli check" -Exe $cliExe `
         -Arguments @("check", "tests\scenes\feature_showcase.py") -ExpectOutput "OK"
@@ -96,8 +96,8 @@ try {
     Invoke-Smoke -Label "gui host dispatch" -Exe $guiExe `
         -Arguments @("--preview-host", "--help") -ExpectOutput "port"
 
-    # -- 5. Portable zip (folder name inside the archive is ManimEditor/) --
-    $zipPath = Join-Path (Get-Location) "dist\ManimEditor-$version-portable.zip"
+    # -- 5. Portable zip (folder name inside the archive is ManimStudio/) --
+    $zipPath = Join-Path (Get-Location) "dist\ManimStudio-$version-portable.zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
     Compress-Archive -Path $bundleDir -DestinationPath $zipPath
     Write-Host "==> portable: $zipPath"
@@ -131,7 +131,7 @@ try {
 
     # -- 7. Summary --
     Write-Host "==> artifacts"
-    Get-ChildItem dist\ManimEditor-*.zip, dist\ManimEditor-Setup-*.exe -ErrorAction SilentlyContinue |
+    Get-ChildItem dist\ManimStudio-*.zip, dist\ManimStudio-Setup-*.exe -ErrorAction SilentlyContinue |
         ForEach-Object { Write-Host ("  {0}  ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB)) }
     $bundleSize = (Get-ChildItem $bundleDir -Recurse -File | Measure-Object Length -Sum).Sum
     Write-Host ("  {0}\  ({1:N1} MB unpacked)" -f $bundleDir, ($bundleSize / 1MB))

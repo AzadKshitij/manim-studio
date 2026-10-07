@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QProcess
 
-from manim_editor.editor import export_controller as module
-from manim_editor.editor.export_controller import ExportController
-from manim_editor.export import ExportPlan
+from manim_studio.editor import export_controller as module
+from manim_studio.editor.export_controller import ExportController
+from manim_studio.export import ExportPlan
 
 
 def _plan(code: str, output: Path) -> ExportPlan:

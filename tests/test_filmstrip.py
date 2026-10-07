@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from manim_editor.filmstrip import Filmstrip
+from manim_studio.filmstrip import Filmstrip
 
 
 def blob(size: int = 8) -> bytes:

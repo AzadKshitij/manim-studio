@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QComboBox
 
-from manim_editor.editor.export_controller import ExportController
-from manim_editor.editor.export_dialog import ExportDialog
-from manim_editor.export import ExportPlan
+from manim_studio.editor.export_controller import ExportController
+from manim_studio.editor.export_dialog import ExportDialog
+from manim_studio.export import ExportPlan
 
 
 def _scene_file(tmp_path: Path) -> Path:

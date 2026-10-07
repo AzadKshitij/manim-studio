@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from manim_editor.editor.main_window import MainWindow
-from manim_editor.editor.stats_dialog import AppStatsDialog
-from manim_editor.ipc import Command, Event
+from manim_studio.editor.main_window import MainWindow
+from manim_studio.editor.stats_dialog import AppStatsDialog
+from manim_studio.ipc import Command, Event
 
 HOST_STATS: dict[str, Any] = {
     "event": Event.STATS,
@@ -98,7 +98,7 @@ class TestMainWindowStatsWiring:
         dialog.close()
 
     def test_controller_stats_dispatch(self, qtbot) -> None:  # type: ignore[no-untyped-def]
-        from manim_editor.editor.preview_controller import PreviewController
+        from manim_studio.editor.preview_controller import PreviewController
 
         controller = PreviewController()
         with qtbot.waitSignal(controller.statsReceived, timeout=2000) as blocker:

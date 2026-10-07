@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from manim_editor.tracer import (
+from manim_studio.tracer import (
     TraceRecorder,
     describe_play_arguments,
 )

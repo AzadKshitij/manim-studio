@@ -3,7 +3,7 @@
 - Status: accepted (2026-10-06)
 - Context: users and AI agents need a double-clickable Windows app plus the scriptable
   CLI without installing Python. The editor spawns helpers as `python -m <module>`
-  (`preview_controller` → `manim_editor.preview_host`, `export` → manimgl launcher);
+  (`preview_controller` → `manim_studio.preview_host`, `export` → manimgl launcher);
   a frozen exe cannot do that, and `manimlib` resolves data files (shaders,
   `default_config.yml`) and API sources relative to its on-disk package directory.
 
@@ -14,9 +14,9 @@
    `--manimgl-export …` — which `frozen_entry` routes to the right module. Frozen
    detection is `getattr(sys, "frozen", False)` via `spawn.frozen()`, so dev checkouts
    keep using `python -m`.
-2. **Two executables, one bundle** (`packaging/manim_editor.spec`, onedir):
-   `ManimEditor.exe` (windowed GUI; bare path arg opens that file; no console flash
-   for spawned children) and `manim-editor.exe` (console: full CLI for terminals and
+2. **Two executables, one bundle** (`packaging/manim_studio.spec`, onedir):
+   `ManimStudio.exe` (windowed GUI; bare path arg opens that file; no console flash
+   for spawned children) and `manim-studio.exe` (console: full CLI for terminals and
    agents, and the worker exe frozen parents re-invoke). No onefile build — a
    onefile child would unpack hundreds of MB to `%TEMP%` on every preview restart.
 3. **Spec collects what analysis cannot see**: manimlib data (`.yml`, `.glsl`) *and*
@@ -30,12 +30,12 @@
    double-clicked GUI can never die on a stray `print`.
 5. **Distribution** (`scripts/build.ps1`): quality gate → PyInstaller → smoke tests
    of the frozen exes (`--version`, `check`, `api-index`, manimgl `--help`
-   dispatch, windowed dispatch) → portable zip (`ManimEditor-<ver>-portable.zip`)
-   → Inno Setup installer (`ManimEditor-Setup-<ver>.exe`, per-user, no admin).
+   dispatch, windowed dispatch) → portable zip (`ManimStudio-<ver>-portable.zip`)
+   → Inno Setup installer (`ManimStudio-Setup-<ver>.exe`, per-user, no admin).
 
 ## Consequences
 
-- `ffmpeg` (export) and LaTeX stay external requirements; `manim-editor latex
+- `ffmpeg` (export) and LaTeX stay external requirements; `manim-studio latex
   install` still provisions TinyTeX per user.
 - Everything frozen is covered by `test_spawn.py` / `test_frozen_entry.py` /
   `test_api_index.py::TestFrozenLookup`; the flag↔CLI-subcommand mapping and the

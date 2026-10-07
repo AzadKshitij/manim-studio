@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
-from manim_editor.editor.code_editor import (
+from manim_studio.editor.code_editor import (
     PY_BUILTIN,
     PY_CLASSNAME,
     PY_COMMENT,

@@ -15,10 +15,10 @@ full TeX Live (~5 GB) with the app is unacceptable.
 - Do **not** bundle LaTeX with the app.
 - Detect system LaTeX first; when missing, offer a one-click user-local
   portable-TinyTeX install from **Tools > LaTeX setup…** (also
-  `manim-editor latex install`), with progress, cancel and remove.
+  `manim-studio latex install`), with progress, cancel and remove.
 - Fix manimgl 1.7.2's `-no-pdf` incompatibility with MiKTeX at runtime
   (`latex_compat.py`, mirroring upstream manim PR #2298; exports go through
-  `manim_editor.manimgl_launcher`). This makes an existing system MiKTeX work
+  `manim_studio.manimgl_launcher`). This makes an existing system MiKTeX work
   without a download.
 - Provide a real end-to-end **Diagnose** (`probe_compile`) that compiles
   manimgl's default template and reports the exact TeX error, so "binaries

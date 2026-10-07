@@ -16,7 +16,7 @@ $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $targets = @(
     "dist",
     "build",
-    "packaging\manim_editor.ico",
+    "packaging\manim_studio.ico",
     ".pytest_cache",
     ".ruff_cache",
     ".mypy_cache",

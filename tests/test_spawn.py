@@ -6,19 +6,19 @@ import sys
 
 import pytest
 
-from manim_editor import spawn
+from manim_studio import spawn
 
 
 class TestDevelopmentCommands:
     def test_preview_host_uses_module_switch(self) -> None:
         executable, args = spawn.preview_host_command(["scene.py", "--port", "1"])
         assert executable == sys.executable
-        assert list(args) == ["-m", "manim_editor.preview_host", "scene.py", "--port", "1"]
+        assert list(args) == ["-m", "manim_studio.preview_host", "scene.py", "--port", "1"]
 
     def test_export_uses_module_switch(self) -> None:
         executable, args = spawn.manimgl_export_command(["scene.py", "-w"])
         assert executable == sys.executable
-        assert list(args) == ["-m", "manim_editor.manimgl_launcher", "scene.py", "-w"]
+        assert list(args) == ["-m", "manim_studio.manimgl_launcher", "scene.py", "-w"]
 
     def test_not_frozen_by_default(self) -> None:
         assert spawn.frozen() is False
@@ -78,7 +78,7 @@ class TestClassifyInvocation:
 
     def test_flags_are_not_cli_subcommands(self) -> None:
         # The dispatch flags must never collide with the argparse CLI surface.
-        from manim_editor.frozen_entry import CLI_SUBCOMMANDS
+        from manim_studio.frozen_entry import CLI_SUBCOMMANDS
 
         assert spawn.PREVIEW_HOST_FLAG not in CLI_SUBCOMMANDS
         assert spawn.MANIMGL_EXPORT_FLAG not in CLI_SUBCOMMANDS

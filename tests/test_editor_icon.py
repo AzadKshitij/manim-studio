@@ -6,8 +6,8 @@ import ctypes
 import sys
 from pathlib import Path
 
-from manim_editor.editor import app as app_module
-from manim_editor.editor.icon import ICON_FILENAME, _pick_icon, icon_path, load_icon
+from manim_studio.editor import app as app_module
+from manim_studio.editor.icon import ICON_FILENAME, _pick_icon, icon_path, load_icon
 
 
 def test_icon_asset_is_packaged() -> None:
@@ -49,7 +49,7 @@ def test_load_icon_returns_real_icon(qapp) -> None:
 
 
 def test_missing_asset_returns_empty_icon(qapp, monkeypatch) -> None:
-    monkeypatch.setattr("manim_editor.editor.icon.icon_path", lambda: None)
+    monkeypatch.setattr("manim_studio.editor.icon.icon_path", lambda: None)
     assert load_icon().isNull()
 
 

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from manim_editor.timeline_model import (
+from manim_studio.timeline_model import (
     TimelineBlock,
     TimelineError,
     TimelineLog,

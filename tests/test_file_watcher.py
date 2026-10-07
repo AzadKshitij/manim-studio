@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from manim_editor.editor.file_watcher import DebounceGate, FileWatcher
+from manim_studio.editor.file_watcher import DebounceGate, FileWatcher
 
 
 class FakeClock:

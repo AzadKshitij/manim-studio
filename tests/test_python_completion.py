@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from manim_editor.python_completion import (
+from manim_studio.python_completion import (
     Completion,
     Signature,
     complete,

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.api_index import ApiSymbol, load_index, save_index
-from manim_editor.editor import api_cache
+from manim_studio.api_index import ApiSymbol, load_index, save_index
+from manim_studio.editor import api_cache
 
 
 class TestApiCachePath:

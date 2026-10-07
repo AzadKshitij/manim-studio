@@ -7,8 +7,8 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QSignalSpy
 
-from manim_editor.editor.timeline_widget import FRAME_STEP, TimelineWidget, block_color, hash_name
-from manim_editor.timeline_model import TimelineBlock, TimelineLog
+from manim_studio.editor.timeline_widget import FRAME_STEP, TimelineWidget, block_color, hash_name
+from manim_studio.timeline_model import TimelineBlock, TimelineLog
 
 
 def make_log() -> TimelineLog:

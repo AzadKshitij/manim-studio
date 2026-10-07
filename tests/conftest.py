@@ -1,4 +1,4 @@
-"""Pytest configuration for the Manim Editor test suite."""
+"""Pytest configuration for the Manim Studio test suite."""
 
 from __future__ import annotations
 

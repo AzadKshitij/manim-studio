@@ -1,8 +1,8 @@
 # Preview protocol (v2)
 
-The editor (Qt) and the preview host (`manim_editor.preview_host`) communicate over
+The editor (Qt) and the preview host (`manim_studio.preview_host`) communicate over
 loopback TCP. The editor listens; the host connects back to the port passed on argv.
-All message shapes live in `src/manim_editor/ipc.py`; bump `PROTOCOL_VERSION` for any
+All message shapes live in `src/manim_studio/ipc.py`; bump `PROTOCOL_VERSION` for any
 breaking change and update this document plus the tests in `tests/test_ipc.py`,
 `tests/test_preview_host.py` and `tests/test_preview_controller.py`.
 

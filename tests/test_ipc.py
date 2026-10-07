@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from manim_editor.ipc import (
+from manim_studio.ipc import (
     PROTOCOL_VERSION,
     Channel,
     Command,

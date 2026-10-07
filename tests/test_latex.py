@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor import latex_install
-from manim_editor.latex import (
+from manim_studio import latex_install
+from manim_studio.latex import (
     LATEX_COMPILE_HINT,
     LATEX_SETUP_HINT,
     apply_runtime_path,
@@ -26,8 +26,8 @@ from manim_editor.latex import (
     probe_compile,
     runtime_env,
 )
-from manim_editor.latex_compat import strip_unsupported_no_pdf
-from manim_editor.scene_runner import format_scene_error
+from manim_studio.latex_compat import strip_unsupported_no_pdf
+from manim_studio.scene_runner import format_scene_error
 
 
 def _make_bin(directory: Path) -> Path:
@@ -96,12 +96,12 @@ def _install_fake_tools(root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                 encoding="utf-8",
             )
             launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
-    monkeypatch.setenv("MANIM_EDITOR_LATEX_DIR", str(root))
+    monkeypatch.setenv("MANIM_STUDIO_LATEX_DIR", str(root))
     return root
 
 
 def test_install_dir_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MANIM_EDITOR_LATEX_DIR", str(tmp_path / "custom"))
+    monkeypatch.setenv("MANIM_STUDIO_LATEX_DIR", str(tmp_path / "custom"))
     assert install_dir() == tmp_path / "custom"
 
 
@@ -114,9 +114,9 @@ def test_status_missing_in_empty_dir(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_apply_runtime_path_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _make_bin(tmp_path / "latex")
-    import manim_editor.latex as latex_module
+    import manim_studio.latex as latex_module
 
-    monkeypatch.setenv("MANIM_EDITOR_LATEX_DIR", str(root))
+    monkeypatch.setenv("MANIM_STUDIO_LATEX_DIR", str(root))
     monkeypatch.setenv("PATH", os.pathsep.join(("",)))
     # bin_dir() resolves the platform subdir; point PATH via runtime_env instead.
     env = runtime_env()
@@ -324,17 +324,17 @@ def test_format_scene_error_appends_latex_hint(tmp_path: Path) -> None:
 
 
 def test_cli_latex_status_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from manim_editor.cli import main
+    from manim_studio.cli import main
 
-    monkeypatch.setenv("MANIM_EDITOR_LATEX_DIR", str(tmp_path / "missing"))
+    monkeypatch.setenv("MANIM_STUDIO_LATEX_DIR", str(tmp_path / "missing"))
     assert main(["latex", "status"]) in (0, 1)
 
 
 def test_setup_dialog_smoke(qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from manim_editor.editor.latex_dialog import LatexSetupDialog
+    from manim_studio.editor.latex_dialog import LatexSetupDialog
 
     monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.setenv("MANIM_EDITOR_LATEX_DIR", str(tmp_path / "empty"))
+    monkeypatch.setenv("MANIM_STUDIO_LATEX_DIR", str(tmp_path / "empty"))
     dialog = LatexSetupDialog()
     dialog.refresh()
     assert "missing" in dialog._status_label.text().lower()
@@ -375,7 +375,7 @@ def test_is_miktex() -> None:
 
 def test_patch_manimgl_latex_compat_idempotent() -> None:
     pytest.importorskip("manimlib.utils.tex_file_writing")
-    from manim_editor.latex_compat import patch_manimgl_latex_compat
+    from manim_studio.latex_compat import patch_manimgl_latex_compat
 
     patch_manimgl_latex_compat()
     assert patch_manimgl_latex_compat() is False
@@ -389,7 +389,7 @@ def test_hint_distinguishes_missing_from_failed(
 
     exc = LatexError("LaTeX compilation failed")
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    monkeypatch.setenv("MANIM_EDITOR_LATEX_DIR", str(tmp_path / "empty"))
+    monkeypatch.setenv("MANIM_STUDIO_LATEX_DIR", str(tmp_path / "empty"))
     assert latex_hint_for(exc) == LATEX_SETUP_HINT
     _install_fake_tools(tmp_path / "tools", monkeypatch)
     assert latex_hint_for(exc) == LATEX_COMPILE_HINT
@@ -402,7 +402,7 @@ def test_hint_distinguishes_missing_from_failed(
 
 def test_probe_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.setenv("MANIM_EDITOR_LATEX_DIR", str(tmp_path / "empty"))
+    monkeypatch.setenv("MANIM_STUDIO_LATEX_DIR", str(tmp_path / "empty"))
     probe = probe_compile(timeout=20)
     assert not probe.ok
     assert probe.kind == "missing"

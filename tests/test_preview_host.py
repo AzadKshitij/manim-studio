@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from manim_editor.ipc import (
+from manim_studio.ipc import (
     Channel,
     Command,
     Event,
@@ -27,7 +27,7 @@ from manim_editor.ipc import (
     JsonLineWriter,
     decode_message,
 )
-from manim_editor.preview_host import FramePump, TickThrottler, parse_size
+from manim_studio.preview_host import FramePump, TickThrottler, parse_size
 from tests.helpers import FakeScene
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
@@ -119,7 +119,7 @@ class TestSceneShortcuts:
     """The live shell must expose the manimgl-style scene API, offline-testable."""
 
     def _host(self):
-        from manim_editor.preview_host import HostConfig, SceneHost
+        from manim_studio.preview_host import HostConfig, SceneHost
 
         host = SceneHost(HostConfig(scene_path=Path("unused.py")))
         host.scene = FakeScene()
@@ -144,7 +144,7 @@ class TestSceneShortcuts:
         assert shortcuts["self"] is shortcuts["scene"]
 
     def test_shortcuts_empty_without_scene(self) -> None:
-        from manim_editor.preview_host import HostConfig, SceneHost
+        from manim_studio.preview_host import HostConfig, SceneHost
 
         host = SceneHost(HostConfig(scene_path=Path("unused.py")))
         assert host._scene_shortcuts() == {}
@@ -152,7 +152,7 @@ class TestSceneShortcuts:
 
     def test_embed_is_neutralized(self) -> None:
         """scene.embed() would launch a blocking terminal inside the host."""
-        from manim_editor.preview_host import HostConfig, SceneHost
+        from manim_studio.preview_host import HostConfig, SceneHost
 
         class EmbedScene:
             def embed(self, *args: object, **kwargs: object) -> str:
@@ -299,7 +299,7 @@ class HostPeer:
             [
                 sys.executable,
                 "-m",
-                "manim_editor.preview_host",
+                "manim_studio.preview_host",
                 str(SCENE_FILE),
                 "--port",
                 str(self.port),
@@ -363,7 +363,7 @@ def host_session() -> Any:
 @pytest.mark.gl
 class TestHostIntegration:
     def test_hello_events(self, host_session: Any) -> None:
-        from manim_editor.ipc import PROTOCOL_VERSION
+        from manim_studio.ipc import PROTOCOL_VERSION
 
         _, _, control_hello, frames_hello, _ = host_session
         assert control_hello["role"] == "host"
@@ -558,7 +558,7 @@ class _NullPump:
         self.frames_dropped = 0
 
     def offer(self, rgba: bytes, width: int, height: int) -> None:
-        from manim_editor.ipc import encode_frame
+        from manim_studio.ipc import encode_frame
 
         self.offered.append(encode_frame(width, height, rgba))
 
@@ -588,7 +588,7 @@ class TestFilmstripCrawlerInProcess:
     )
 
     def test_crawl_fills_cache_and_reload_invalidates(self) -> None:
-        from manim_editor.preview_host import HostConfig, SceneHost
+        from manim_studio.preview_host import HostConfig, SceneHost
 
         host = SceneHost(HostConfig(scene_path=SCENE_FILE, embedded=True, size=(320, 180)))
         host._create_window()
@@ -622,7 +622,7 @@ class TestFilmstripCrawlerInProcess:
 
     def test_failed_load_keeps_last_good_state(self, tmp_path: Path) -> None:
         """A broken edit must not replace the working scene/timeline/filmstrip."""
-        from manim_editor.preview_host import HostConfig, SceneHost
+        from manim_studio.preview_host import HostConfig, SceneHost
 
         broken = tmp_path / "broken.py"
         broken.write_text(self.BROKEN_SCENE, encoding="utf-8")
@@ -658,7 +658,7 @@ class _RaisingCrawler:
     done = False
 
     def step(self) -> int:
-        from manim_editor.scrub import ScrubError
+        from manim_studio.scrub import ScrubError
 
         cause = ValueError("first")
         raise ScrubError("ValueError: first") from cause
@@ -668,8 +668,8 @@ class TestCrawlerGuard:
     """The idle loop must survive a scene error raised during a crawl."""
 
     def test_crawler_failure_disables_crawl_but_keeps_cache(self) -> None:
-        from manim_editor.filmstrip import Filmstrip
-        from manim_editor.preview_host import HostConfig, SceneHost
+        from manim_studio.filmstrip import Filmstrip
+        from manim_studio.preview_host import HostConfig, SceneHost
 
         host = SceneHost(HostConfig(scene_path=Path("unused.py")))
         filmstrip = Filmstrip()
@@ -701,8 +701,8 @@ class TestHostStatsPayloads:
     """STATS/FILMSTRIP payloads carry RAM accounting without needing GL."""
 
     def _host(self) -> Any:
-        from manim_editor.filmstrip import Filmstrip
-        from manim_editor.preview_host import HostConfig, SceneHost
+        from manim_studio.filmstrip import Filmstrip
+        from manim_studio.preview_host import HostConfig, SceneHost
 
         host = SceneHost(HostConfig(scene_path=Path("unused.py")))
         strip = Filmstrip()
@@ -728,7 +728,7 @@ class TestHostStatsPayloads:
         assert "host_rss" in payload
 
     def test_stats_command_emits_stats_event(self) -> None:
-        from manim_editor.ipc import Command, Event
+        from manim_studio.ipc import Command, Event
 
         host = self._host()
         host._handle({"cmd": Command.STATS})

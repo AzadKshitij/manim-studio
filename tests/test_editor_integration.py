@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.editor.code_editor import PY_KEYWORD
-from manim_editor.editor.main_window import MainWindow
+from manim_studio.editor.code_editor import PY_KEYWORD
+from manim_studio.editor.main_window import MainWindow
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 

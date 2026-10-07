@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from manim_editor import stats
+from manim_studio import stats
 
 
 class TestFormatBytes:

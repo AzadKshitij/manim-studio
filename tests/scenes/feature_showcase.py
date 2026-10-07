@@ -50,7 +50,7 @@ class FeatureShowcase(InteractiveScene):
 
     def construct(self) -> None:
         # --- static mobjects, text, and add() --------------------------------
-        title = Text("Manim Editor", font_size=64).to_edge(UP)
+        title = Text("Manim Studio", font_size=64).to_edge(UP)
         circle = Circle(radius=1.1, stroke_color=BLUE)
         square = Square(side_length=1.8, color=YELLOW)
         self.add(title, circle)

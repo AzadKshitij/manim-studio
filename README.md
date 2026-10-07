@@ -1,4 +1,4 @@
-# Manim Editor
+# Manim Studio
 
 A production-grade, realtime desktop editor for [ManimGL](https://github.com/3b1b/manim)
 scenes — Windows, macOS and Ubuntu 24+.
@@ -27,8 +27,8 @@ trace and export scenes with the CLI.
 
 ```powershell
 uv sync --all-groups
-uv run manim-editor new scenes/intro.py --template circle_to_square
-uv run manim-editor gui scenes/intro.py
+uv run manim-studio new scenes/intro.py --template circle_to_square
+uv run manim-studio gui scenes/intro.py
 ```
 
 In the editor: edit + save to auto-reload the preview (F5 forces a reload), F6
@@ -38,15 +38,15 @@ Ctrl+E exports the final video, Ctrl+` opens the live shell.
 ## CLI (agent-friendly)
 
 ```text
-manim-editor gui   [FILE]            open the desktop editor
-manim-editor check FILE              syntax + scene discovery (fast, no GL)
-manim-editor trace FILE [--json]     runtime play/wait trace (blocks, stats)
-manim-editor still FILE -o OUT.png   render the final frame
-manim-editor export FILE -o OUT.mp4  render a video (--quality, --fps, --gif, --resolution WxH, --range FROM,TO)
-manim-editor new FILE --template K   scaffold a scene (--list to see templates)
-manim-editor preview FILE            standalone GL preview host
-manim-editor templates --json        scene + insertable snippet templates
-manim-editor api-index --json        offline scan of the installed manimlib API
+manim-studio gui   [FILE]            open the desktop editor
+manim-studio check FILE              syntax + scene discovery (fast, no GL)
+manim-studio trace FILE [--json]     runtime play/wait trace (blocks, stats)
+manim-studio still FILE -o OUT.png   render the final frame
+manim-studio export FILE -o OUT.mp4  render a video (--quality, --fps, --gif, --resolution WxH, --range FROM,TO)
+manim-studio new FILE --template K   scaffold a scene (--list to see templates)
+manim-studio preview FILE            standalone GL preview host
+manim-studio templates --json        scene + insertable snippet templates
+manim-studio api-index --json        offline scan of the installed manimlib API
 ```
 
 Exit codes: `0` success, `1` user/scene error, `2` usage error. JSON goes to stdout;
@@ -54,8 +54,8 @@ scene output is captured so it can never corrupt structured output.
 
 ## Architecture in one paragraph
 
-A Qt shell (`manim_editor.editor`) never imports `manimlib`. A companion process
-(`manim_editor.preview_host`) owns the only OpenGL context, traces scenes at runtime
+A Qt shell (`manim_studio.editor`) never imports `manimlib`. A companion process
+(`manim_studio.preview_host`) owns the only OpenGL context, traces scenes at runtime
 and streams frames to the editor over a loopback protocol (`docs/protocol.md`).
 Export shells out to `manimgl -w` for deterministic, non-interactive rendering.
 The pure core (`timeline_model`, `tracer`, `ipc`, `templates`, `api_index`) has no
@@ -74,7 +74,7 @@ PowerShell helpers in `scripts/` wrap the same commands:
 
 | script | purpose |
 | --- | --- |
-| `scripts\run.ps1 [FILE] …` | open the GUI from source (args pass through to `manim-editor gui`) |
+| `scripts\run.ps1 [FILE] …` | open the GUI from source (args pass through to `manim-studio gui`) |
 | `scripts\lint.ps1 [-Fix]` | format check + ruff + mypy (`-Fix` applies safe autofixes) |
 | `scripts\test.ps1 [-m …]` | pytest (args pass through) |
 | `scripts\check.ps1 [-Fast]` | full pre-commit gate: lint + pytest (`-Fast` skips GL/slow tests) |
@@ -85,14 +85,14 @@ PowerShell helpers in `scripts/` wrap the same commands:
 
 `scripts\build.ps1` produces everything under `dist/` (see `docs/adr/0005-frozen-packaging.md`):
 
-- `dist\ManimEditor\` — the application folder: `ManimEditor.exe` (double-click
-  GUI) + `manim-editor.exe` (console CLI for terminals and AI agents).
-- `dist\ManimEditor-<version>-portable.zip` — unzip-and-run anywhere.
-- `dist\ManimEditor-Setup-<version>.exe` — Inno Setup installer (per-user, no
+- `dist\ManimStudio\` — the application folder: `ManimStudio.exe` (double-click
+  GUI) + `manim-studio.exe` (console CLI for terminals and AI agents).
+- `dist\ManimStudio-<version>-portable.zip` — unzip-and-run anywhere.
+- `dist\ManimStudio-Setup-<version>.exe` — Inno Setup installer (per-user, no
   admin prompt); skipped with `-SkipInstaller` or when Inno Setup 6 is missing.
 
 The frozen app still needs `ffmpeg` on `PATH` for video export and optionally
-LaTeX (`manim-editor latex install` provisions TinyTeX per user).
+LaTeX (`manim-studio latex install` provisions TinyTeX per user).
 
 See `AGENTS.md` for the full contract, `docs/protocol.md` for the wire protocol,
 `docs/adr/` for decisions, and the skills in `.opencode/skills/` for scene-authoring

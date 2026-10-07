@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.cli import _ensure_utf8_console, _parse_range, _parse_resolution, main
+from manim_studio.cli import _ensure_utf8_console, _parse_range, _parse_resolution, main
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 

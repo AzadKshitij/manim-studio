@@ -1,11 +1,11 @@
 [project]
-name = "manim-editor"
-version = "0.1.0"
+name = "manim-studio"
+version = "1.1.0"
 description = "Production-grade realtime editor for ManimGL scenes: live preview, timeline, export."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
-authors = [{ name = "Manim Editor Team" }]
+authors = [{ name = "Manim Studio Team" }]
 keywords = ["manim", "manimgl", "editor", "animation", "realtime"]
 dependencies = [
     "PySide6==6.11.2",
@@ -15,10 +15,10 @@ dependencies = [
     "moderngl-window==3.1.1",
     "IPython>=8.18",
     # Pygments lexers drive the code editor's syntax highlighting and its
-    # colour themes (see manim_editor.python_highlight).
+    # colour themes (see manim_studio.python_highlight).
     "pygments>=2.19",
     # Jedi powers the editor's static completion and calltips off the GUI
-    # thread (see manim_editor.python_completion).
+    # thread (see manim_studio.python_completion).
     "jedi>=0.19",
     # manimgl 1.7.2 imports pkg_resources at import time. setuptools>=81 no
     # longer ships it, so keep the runtime dependency bounded.
@@ -28,9 +28,9 @@ dependencies = [
 ]
 
 [project.scripts]
-manim-editor = "manim_editor.cli:main"
-manim-editor-gui = "manim_editor.cli:gui_main"
-manim-editor-preview = "manim_editor.preview_host:main"
+manim-studio = "manim_studio.cli:main"
+manim-studio-gui = "manim_studio.cli:gui_main"
+manim-studio-preview = "manim_studio.preview_host:main"
 
 [dependency-groups]
 dev = [
@@ -47,7 +47,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/manim_editor"]
+packages = ["src/manim_studio"]
 
 [tool.ruff]
 line-length = 100
@@ -75,7 +75,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["manim_editor"]
+source = ["manim_studio"]
 branch = true
 
 [tool.coverage.report]
@@ -90,7 +90,7 @@ exclude_lines = [
 
 [tool.mypy]
 python_version = "3.13"
-files = ["src/manim_editor"]
+files = ["src/manim_studio"]
 check_untyped_defs = true
 disallow_untyped_defs = true
 warn_unused_ignores = true

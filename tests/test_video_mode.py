@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QLabel, QSlider
 
-from manim_editor.editor.video_mode import VideoModeController
+from manim_studio.editor.video_mode import VideoModeController
 
 pytestmark = pytest.mark.usefixtures("qtbot")  # widgets need a QApplication
 

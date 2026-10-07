@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from PySide6.QtGui import QImage
 
-from manim_editor.editor import main_window as main_window_module
-from manim_editor.editor.code_editor import PY_KEYWORD
-from manim_editor.editor.main_window import MainWindow
+from manim_studio.editor import main_window as main_window_module
+from manim_studio.editor.code_editor import PY_KEYWORD
+from manim_studio.editor.main_window import MainWindow
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 
@@ -535,7 +535,7 @@ class TestFramesAndPreview:
         path = window.preview_video_path()
         assert path is not None
         assert path.name == "feature_showcase_preview.mp4"
-        assert path.parent.name == ".manim-editor"
+        assert path.parent.name == ".manim-studio"
 
     def test_embedded_toggle(self, window: MainWindow) -> None:
         window.set_embedded(False)

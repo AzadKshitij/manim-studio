@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from manim_editor.editor.stats_controller import StatsController
+from manim_studio.editor.stats_controller import StatsController
 
 HOST_STATS: dict[str, Any] = {
     "frames": 312,

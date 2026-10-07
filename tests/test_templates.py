@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.scene_runner import run_trace
-from manim_editor.templates import (
+from manim_studio.scene_runner import run_trace
+from manim_studio.templates import (
     SCENE_TEMPLATES,
     SNIPPET_TEMPLATES,
     Template,

@@ -9,8 +9,8 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QLabel
 
-from manim_editor.editor.preview_events import PreviewEvents
-from manim_editor.timeline_model import TimelineLog
+from manim_studio.editor.preview_events import PreviewEvents
+from manim_studio.timeline_model import TimelineLog
 
 pytestmark = pytest.mark.usefixtures("qtbot")  # the host-state label is a widget
 

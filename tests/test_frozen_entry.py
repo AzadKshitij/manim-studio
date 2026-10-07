@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from manim_editor import frozen_entry
+from manim_studio import frozen_entry
 
 
 def _capture_cli(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
@@ -18,7 +18,7 @@ def _capture_cli(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         log.append(list(argv) if argv is not None else [])
         return 0
 
-    monkeypatch.setattr("manim_editor.cli.main", fake_main)
+    monkeypatch.setattr("manim_studio.cli.main", fake_main)
     return log
 
 
@@ -47,7 +47,7 @@ class TestRunTarget:
         assert log == [["check", "a.py"]]
 
     def test_preview_host_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from manim_editor import preview_host
+        from manim_studio import preview_host
 
         seen: dict[str, Any] = {}
 
@@ -63,7 +63,7 @@ class TestRunTarget:
     def test_manimgl_export_target_patches_and_restores_argv(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from manim_editor import manimgl_launcher
+        from manim_studio import manimgl_launcher
 
         seen: dict[str, Any] = {}
 
@@ -84,24 +84,24 @@ class TestRunTarget:
 class TestGuiEntry:
     def test_no_args_opens_gui(self, monkeypatch: pytest.MonkeyPatch) -> None:
         log = _capture_cli(monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["ManimEditor.exe"])
+        monkeypatch.setattr(sys, "argv", ["ManimStudio.exe"])
         assert frozen_entry.gui_entry() == 0
         assert log == [["gui"]]
 
     def test_bare_path_opens_that_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
         log = _capture_cli(monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["ManimEditor.exe", "scenes/intro.py"])
+        monkeypatch.setattr(sys, "argv", ["ManimStudio.exe", "scenes/intro.py"])
         assert frozen_entry.gui_entry() == 0
         assert log == [["gui", "scenes/intro.py"]]
 
     def test_known_subcommand_passes_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
         log = _capture_cli(monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["ManimEditor.exe", "check", "scenes/intro.py"])
+        monkeypatch.setattr(sys, "argv", ["ManimStudio.exe", "check", "scenes/intro.py"])
         assert frozen_entry.gui_entry() == 0
         assert log == [["check", "scenes/intro.py"]]
 
     def test_preview_flag_is_not_wrapped_in_gui(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from manim_editor import preview_host
+        from manim_studio import preview_host
 
         seen: dict[str, Any] = {}
 
@@ -111,7 +111,7 @@ class TestGuiEntry:
 
         monkeypatch.setattr(preview_host, "main", fake_host)
         monkeypatch.setattr(
-            sys, "argv", ["ManimEditor.exe", "--preview-host", "a.py", "--embedded"]
+            sys, "argv", ["ManimStudio.exe", "--preview-host", "a.py", "--embedded"]
         )
         assert frozen_entry.gui_entry() == 0
         assert seen["argv"] == ["a.py", "--embedded"]
@@ -120,12 +120,12 @@ class TestGuiEntry:
 class TestCliEntry:
     def test_plain_args_reach_the_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         log = _capture_cli(monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["manim-editor", "templates"])
+        monkeypatch.setattr(sys, "argv", ["manim-studio", "templates"])
         assert frozen_entry.cli_entry() == 0
         assert log == [["templates"]]
 
     def test_worker_flag_routes_to_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from manim_editor import preview_host
+        from manim_studio import preview_host
 
         seen: dict[str, Any] = {}
 
@@ -134,7 +134,7 @@ class TestCliEntry:
             return 0
 
         monkeypatch.setattr(preview_host, "main", fake_host)
-        monkeypatch.setattr(sys, "argv", ["manim-editor", "--preview-host", "a.py"])
+        monkeypatch.setattr(sys, "argv", ["manim-studio", "--preview-host", "a.py"])
         assert frozen_entry.cli_entry() == 0
         assert seen["argv"] == ["a.py"]
 
@@ -143,7 +143,7 @@ class TestSubcommandMirror:
     def test_cli_subcommands_match_the_parser(self) -> None:
         from argparse import _SubParsersAction
 
-        from manim_editor.cli import build_parser
+        from manim_studio.cli import build_parser
 
         parser = build_parser()
         choices: set[str] = set()
