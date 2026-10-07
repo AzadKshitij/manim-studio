@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         # code editor's undo stack; the keyboard handler is focus-scoped.
         self._timing = TimingOverrides(TimelineLog(()))
         self._loop = False
+        self._loop_paused = False
         self._speed = 1.0
 
         self.editor = CodeEditor(self)
@@ -614,6 +615,7 @@ class MainWindow(QMainWindow):
         if not self.controller.is_running:
             self._start_preview()
             return
+        self._loop_paused = False
         self.video.exit()
         index = self._play_start_index()
         to_index: int | None = None
@@ -766,7 +768,7 @@ class MainWindow(QMainWindow):
 
     def _on_stopped_loop(self, message: dict[str, Any]) -> None:
         """Repeat the loop range when playback ends on its own."""
-        if not self._loop or message.get("user_stopped"):
+        if not self._loop or self._loop_paused or message.get("user_stopped"):
             return
         if self.controller.is_running:
             self.request_play()
@@ -817,6 +819,8 @@ class MainWindow(QMainWindow):
         self._set_status(f"playing from block {index} · {format_duration(block.start)}")
 
     def request_stop(self) -> None:
+        # A user stop/pause wins over an in-flight loop replay.
+        self._loop_paused = True
         self.controller.stop_playback()
 
     def _on_scene_selected(self, name: str) -> None:

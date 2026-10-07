@@ -764,6 +764,22 @@ class TestTransport:
         finally:
             self._restore(window)
 
+    def test_pause_during_loop_is_not_replayed(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window.events.on_status("playing", {})
+            window.request_stop()  # the user pauses while looping
+            window._on_stopped_loop({"user_stopped": True})
+            # A stale loop stop (user_stopped False) must not resurrect playback.
+            window._on_stopped_loop({"user_stopped": False})
+            assert stub.plays == []
+            # Pressing play again resumes (and clears the pause intent).
+            window.request_play()
+            assert len(stub.plays) == 1
+        finally:
+            self._restore(window)
+
     def test_zoom_actions_drive_the_timeline(self, window: MainWindow) -> None:
         self._stub(window)
         try:
