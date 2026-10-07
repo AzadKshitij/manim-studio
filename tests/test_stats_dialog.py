@@ -72,7 +72,9 @@ class TestMainWindowStatsWiring:
     def test_filmstrip_with_bytes_updates_panel_and_label(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         main = MainWindow(restore_settings=False, auto_preview=False, completion=False)
         qtbot.addWidget(main)
-        main._on_filmstrip({**HOST_STATS, "event": Event.FILMSTRIP, "done": False, "capped": False})
+        main.stats.on_filmstrip(
+            {**HOST_STATS, "event": Event.FILMSTRIP, "done": False, "capped": False}
+        )
         assert "312 frames" in main.preview_panel.cache_status
         assert "12.0 MiB" in main.preview_panel.cache_status
         assert "cache" in main._mem_label.text()
@@ -81,18 +83,19 @@ class TestMainWindowStatsWiring:
     def test_legacy_filmstrip_without_bytes_still_works(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         main = MainWindow(restore_settings=False, auto_preview=False, completion=False)
         qtbot.addWidget(main)
-        main._on_filmstrip({"frames": 5, "done": True, "capped": False})
+        main.stats.on_filmstrip({"frames": 5, "done": True, "capped": False})
         assert "5 frames" in main.preview_panel.cache_status
         assert "5 frames" in main._mem_label.text()
 
     def test_stats_event_updates_dialog_when_open(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         main = MainWindow(restore_settings=False, auto_preview=False, completion=False)
         qtbot.addWidget(main)
-        main.show_app_stats()
-        assert main._stats_dialog is not None
-        main._on_stats(HOST_STATS)
-        assert "312 frames" in main._stats_dialog._cache_value.text()
-        main._stats_dialog.close()
+        main.stats.show_dialog()
+        dialog = main.stats.dialog
+        assert dialog is not None
+        main.stats.on_stats(HOST_STATS)
+        assert "312 frames" in dialog._cache_value.text()
+        dialog.close()
 
     def test_controller_stats_dispatch(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         from manim_editor.editor.preview_controller import PreviewController
