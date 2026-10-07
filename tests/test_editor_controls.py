@@ -99,11 +99,13 @@ class StubExports:
         self.stills: list[tuple] = []
         self.preview_renders: list[tuple] = []
 
-    def export_still(self, path, scene_name, output, *, animation_range=None) -> bool:
+    def export_still(
+        self, path, scene_name, output, *, animation_range=None, timing_factors=None
+    ) -> bool:
         self.stills.append((str(path), scene_name, str(output), animation_range))
         return True
 
-    def render_preview_video(self, path, scene_name, output) -> bool:
+    def render_preview_video(self, path, scene_name, output, *, timing_factors=None) -> bool:
         self.preview_renders.append((str(path), scene_name, str(output)))
         return True
 

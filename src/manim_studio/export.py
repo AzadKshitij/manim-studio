@@ -9,6 +9,9 @@ an internal flag instead — see :mod:`manim_studio.spawn` (ADR 0005).
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import subprocess
 import tempfile
 import threading
@@ -19,7 +22,7 @@ from typing import TYPE_CHECKING
 from manim_studio import spawn
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
 __all__ = [
     "QUALITY_FLAGS",
@@ -58,6 +61,7 @@ class ExportPlan:
     gif: bool = False
     resolution: tuple[int, int] | None = None
     animation_range: tuple[int, int] | None = None
+    timing_factors: tuple[tuple[int, float], ...] = ()
 
     def command_line(self) -> str:
         return " ".join(self.argv)
@@ -87,6 +91,7 @@ def build_export_plan(
     gif: bool = False,
     resolution: tuple[int, int] | None = None,
     animation_range: tuple[int, int] | None = None,
+    timing_factors: Mapping[int, float] | None = None,
     extra_args: Sequence[str] = (),
 ) -> ExportPlan:
     """Translate editor-friendly options into a ``python -m manimlib`` invocation.
@@ -104,6 +109,11 @@ def build_export_plan(
     ``gif`` maps to manimgl's ``-i`` (GIF output); ``resolution`` maps to ``-r WxH``
     and overrides the preset ``quality`` flags; ``animation_range`` maps to
     ``-n start,end`` (0-based, inclusive) so a long scene can be rendered in parts.
+
+    ``timing_factors`` bakes the editor's per-block retiming into the render: a
+    ``{block_index: factor}`` map is written to a JSON file and passed to
+    :mod:`manim_studio.manimgl_launcher` via ``--timing-file``, which scales each
+    block's ``run_time`` so the exported video matches the retimed timeline.
     """
     if quality not in QUALITY_FLAGS:
         raise ExportError(f"unknown quality {quality!r}; choose from {sorted(QUALITY_FLAGS)}")
@@ -124,6 +134,18 @@ def build_export_plan(
         start, end = (int(value) for value in animation_range)
         if not 0 <= start <= end:
             raise ExportError(f"invalid animation range {animation_range!r}; expected start <= end")
+    normalised_timings: tuple[tuple[int, float], ...] = ()
+    if timing_factors:
+        for index, factor in timing_factors.items():
+            if int(index) < 0:
+                raise ExportError(f"invalid timing block index {index!r}")
+            value = float(factor)
+            if not math.isfinite(value) or value <= 0:
+                raise ExportError(
+                    f"invalid timing factor {factor!r} for block {index}; must be > 0"
+                )
+            normalised_timings = (*normalised_timings, (int(index), value))
+        normalised_timings = tuple(sorted(normalised_timings))
 
     requested = Path(output) if output is not None else None
     if requested is not None:
@@ -163,6 +185,8 @@ def build_export_plan(
         module_args.append("-i")
     if animation_range is not None:
         module_args.extend(["-n", f"{int(animation_range[0])},{int(animation_range[1])}"])
+    if normalised_timings:
+        module_args.extend(["--timing-file", str(_timing_config_path(normalised_timings))])
     module_args.extend(["--video_dir", str(output_dir), "--file_name", file_name])
     if fps is not None:
         module_args.extend(["--config_file", str(_fps_config_path(int(fps)))])
@@ -178,7 +202,21 @@ def build_export_plan(
         gif=gif,
         resolution=resolution,
         animation_range=animation_range,
+        timing_factors=normalised_timings,
     )
+
+
+def _timing_config_path(factors: tuple[tuple[int, float], ...]) -> Path:
+    """Write (once) the JSON file describing per-block retiming factors."""
+    payload = {str(index): factor for index, factor in factors}
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    config_dir = Path(tempfile.gettempdir()) / "manim-studio"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / f"timing_{digest}.json"
+    content = json.dumps(payload, sort_keys=True)
+    if not path.exists() or path.read_text(encoding="utf-8") != content:
+        path.write_text(content, encoding="utf-8")
+    return path
 
 
 def _fps_config_path(fps: int) -> Path:

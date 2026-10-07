@@ -793,7 +793,11 @@ class MainWindow(QMainWindow):
             return
         output = self._path.parent / ".manim-studio" / f"{self._path.stem}_block{index}.png"
         self.exports.export_still(
-            self._path, self._scene_name(), output, animation_range=(0, index + 1)
+            self._path,
+            self._scene_name(),
+            output,
+            animation_range=(0, index + 1),
+            timing_factors=self._timing_factors(),
         )
 
     def _on_stopped_loop(self, message: dict[str, Any]) -> None:
@@ -964,6 +968,19 @@ class MainWindow(QMainWindow):
         self.preview_panel.set_time(position, log.total_duration)
         self.controller.set_timing(self._timing.to_payload(), position)
 
+    def _timing_factors(self) -> dict[int, float]:
+        """Per-block retiming factors (``block index -> duration / base duration``).
+
+        Used to bake the editor's retiming into exports: the launcher scales each
+        block's ``run_time`` by this factor so the render matches the timeline.
+        """
+        factors: dict[int, float] = {}
+        for index, duration in self._timing.durations.items():
+            block = self._timing.base.block_by_index(index)
+            if block is not None and block.duration > 0:
+                factors[index] = duration / block.duration
+        return factors
+
     # ------------------------------------------------------------------
     # Export / preview video
     # ------------------------------------------------------------------
@@ -978,7 +995,10 @@ class MainWindow(QMainWindow):
             self._set_status("open a scene first")
             return
         self.exports.render_preview_video(
-            self._path, self._scene_name(), scene_files.preview_video_path(self._path)
+            self._path,
+            self._scene_name(),
+            scene_files.preview_video_path(self._path),
+            timing_factors=self._timing_factors(),
         )
 
     def export_dialog(
@@ -1001,6 +1021,7 @@ class MainWindow(QMainWindow):
             initial_still=still,
             initial_range=initial_range,
             controller=self.exports,
+            timing_factors=self._timing_factors(),
         )
         dialog.exec()
 
@@ -1010,7 +1031,14 @@ class MainWindow(QMainWindow):
         if self._path is None:
             self._set_status("open a scene first")
             return
-        self.exports.export_video(self._path, self._scene_name(), output, quality=quality, fps=fps)
+        self.exports.export_video(
+            self._path,
+            self._scene_name(),
+            output,
+            quality=quality,
+            fps=fps,
+            timing_factors=self._timing_factors(),
+        )
 
     def _on_preview_video_ready(self, output: Path) -> None:
         self.transport.load(output)

@@ -656,6 +656,23 @@ class TestNumericDuration:
         finally:
             self._restore(window)
 
+    def test_timing_factors_reflect_the_retime(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub(window)
+        try:
+            assert window._timing_factors() == {}
+            monkeypatch.setattr(
+                main_window_module,
+                "QInputDialog",
+                type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (2.5, True))}),
+            )
+            window.timeline.blockDurationEditRequested.emit(1)
+            # base block 1 is 0.5 s -> 2.5 s is a 5x factor, used to bake exports.
+            assert window._timing_factors() == pytest.approx({1: 5.0})
+        finally:
+            self._restore(window)
+
     def test_cancelling_changes_nothing(
         self, window: MainWindow, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -864,9 +881,13 @@ class TestTransport:
 class _StubExports:
     def __init__(self) -> None:
         self.stills: list[tuple[str, str | None, str, tuple[int, int] | None]] = []
+        self.timing_factors: dict[int, float] | None = None
 
-    def export_still(self, path, scene_name, output, *, animation_range=None) -> bool:
+    def export_still(
+        self, path, scene_name, output, *, animation_range=None, timing_factors=None
+    ) -> bool:
         self.stills.append((str(path), scene_name, str(output), animation_range))
+        self.timing_factors = timing_factors
         return True
 
 

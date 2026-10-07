@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +22,26 @@ def _scene_file(tmp_path: Path) -> Path:
     path = tmp_path / "scene.py"
     path.write_text("from manimlib import Scene\n\n\nclass DemoScene(Scene):\n    pass\n")
     return path
+
+
+def _video_duration(path: Path) -> float:
+    """Container duration of ``path`` in seconds, via ffprobe."""
+    output = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(output.stdout.strip())
 
 
 class TestBuildExportPlan:
@@ -110,6 +133,29 @@ class TestBuildExportPlan:
         with pytest.raises(ExportError, match="range"):
             build_export_plan(_scene_file(tmp_path), animation_range=(5, 2))
 
+    def test_timing_factors_written_and_passed(self, tmp_path: Path) -> None:
+        plan = build_export_plan(_scene_file(tmp_path), timing_factors={1: 2.0, 0: 0.5})
+        argv = list(plan.argv)
+        assert "--timing-file" in argv
+        config = Path(argv[argv.index("--timing-file") + 1])
+        assert config.is_file()
+        assert json.loads(config.read_text(encoding="utf-8")) == {"0": 0.5, "1": 2.0}
+        assert plan.timing_factors == ((0, 0.5), (1, 2.0))
+
+    def test_no_timing_factors_means_no_flag(self, tmp_path: Path) -> None:
+        plan = build_export_plan(_scene_file(tmp_path))
+        assert "--timing-file" not in plan.argv
+        assert plan.timing_factors == ()
+
+    @pytest.mark.parametrize("factor", [0.0, -1.0, float("nan"), float("inf")])
+    def test_invalid_timing_factor_rejected(self, tmp_path: Path, factor: float) -> None:
+        with pytest.raises(ExportError, match="timing factor"):
+            build_export_plan(_scene_file(tmp_path), timing_factors={0: factor})
+
+    def test_negative_timing_index_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ExportError, match="timing block index"):
+            build_export_plan(_scene_file(tmp_path), timing_factors={-1: 2.0})
+
     def test_still_with_animation_range(self, tmp_path: Path) -> None:
         plan = build_export_plan(
             _scene_file(tmp_path),
@@ -195,3 +241,28 @@ class TestRealExport:
         assert result.ok, result.log_tail
         assert plan.output_path.is_file()
         assert plan.output_path.stat().st_size > 0
+
+    def test_retimed_export_renders_longer(self, tmp_path: Path) -> None:
+        """A retimed block makes the exported video longer (timing is baked in)."""
+        if shutil.which("ffprobe") is None:
+            pytest.skip("ffprobe is required to measure the rendered duration")
+        scene = tmp_path / "tiny_scene.py"
+        scene.write_text(self.SCENE_SOURCE, encoding="utf-8")
+
+        def render(name: str, factors: dict[int, float] | None) -> Path:
+            plan = build_export_plan(
+                scene,
+                "TinyScene",
+                output=tmp_path / name,
+                quality="preview",
+                fps=24,
+                extra_args=("--resolution", "160x90"),
+                timing_factors=factors,
+            )
+            result = run_export(plan, timeout=300)
+            assert result.ok, result.log_tail
+            return plan.output_path
+
+        base = render("base.mp4", None)
+        retimed = render("retimed.mp4", {0: 4.0})
+        assert _video_duration(retimed) > _video_duration(base) + 0.2

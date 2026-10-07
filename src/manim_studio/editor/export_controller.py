@@ -18,7 +18,7 @@ from manim_studio import ipc
 from manim_studio.export import ExportPlan, build_export_plan
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 __all__ = ["PREVIEW_FPS", "ExportController"]
 
@@ -46,13 +46,25 @@ class ExportController(QObject):
     def export_running(self) -> bool:
         return self._is_running(self._export_process)
 
-    def render_preview_video(self, scene_path: Path, scene_name: str | None, output: Path) -> bool:
+    def render_preview_video(
+        self,
+        scene_path: Path,
+        scene_name: str | None,
+        output: Path,
+        *,
+        timing_factors: Mapping[int, float] | None = None,
+    ) -> bool:
         """Render the low-quality scrub video; False when one is already running."""
         if self._is_running(self._preview_process):
             self.statusChanged.emit("preview render already running")
             return False
         plan = build_export_plan(
-            scene_path, scene_name, output=output, quality="preview", fps=PREVIEW_FPS
+            scene_path,
+            scene_name,
+            output=output,
+            quality="preview",
+            fps=PREVIEW_FPS,
+            timing_factors=timing_factors,
         )
         self._preview_process = self._spawn(
             plan.argv, lambda exit_code: self._on_preview_finished(exit_code, output)
@@ -71,6 +83,7 @@ class ExportController(QObject):
         gif: bool = False,
         resolution: tuple[int, int] | None = None,
         animation_range: tuple[int, int] | None = None,
+        timing_factors: Mapping[int, float] | None = None,
     ) -> bool:
         """Export a video file; False when an export is already running."""
         if self._is_running(self._export_process):
@@ -85,6 +98,7 @@ class ExportController(QObject):
             gif=gif,
             resolution=resolution,
             animation_range=animation_range,
+            timing_factors=timing_factors,
         )
         return self.export_plan(plan)
 
@@ -95,6 +109,7 @@ class ExportController(QObject):
         output: str | Path,
         *,
         animation_range: tuple[int, int] | None = None,
+        timing_factors: Mapping[int, float] | None = None,
     ) -> bool:
         """Export a single frame; False when an export is already running.
 
@@ -105,7 +120,12 @@ class ExportController(QObject):
             self.statusChanged.emit("export already running")
             return False
         plan = build_export_plan(
-            scene_path, scene_name, output=output, still=True, animation_range=animation_range
+            scene_path,
+            scene_name,
+            output=output,
+            still=True,
+            animation_range=animation_range,
+            timing_factors=timing_factors,
         )
         return self.export_plan(plan)
 

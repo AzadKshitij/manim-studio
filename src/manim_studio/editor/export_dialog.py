@@ -12,7 +12,7 @@ window's Live shell through the controller's existing ``outputLine`` wiring.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QUrl
@@ -74,6 +74,7 @@ class ExportDialog(QDialog):
         initial_still: bool = False,
         initial_range: tuple[int, int] | None = None,
         controller: ExportController | None = None,
+        timing_factors: Mapping[int, float] | None = None,
         plan_builder: Callable[..., ExportPlan] = build_export_plan,
     ) -> None:
         super().__init__(parent)
@@ -85,6 +86,7 @@ class ExportDialog(QDialog):
         self._block_count = max(0, int(block_count))
         self._settings = settings
         self._controller = controller
+        self._timing_factors = dict(timing_factors or {})
         self._plan_builder = plan_builder
         self._plan: ExportPlan | None = None
         self._last_output: Path | None = None
@@ -324,6 +326,7 @@ class ExportDialog(QDialog):
             gif=self._is_gif(),
             resolution=self._resolution(),
             animation_range=self._animation_range(),
+            timing_factors=self._timing_factors or None,
         )
 
     def _refresh(self, *_args: object) -> None:
