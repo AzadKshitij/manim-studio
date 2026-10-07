@@ -1,0 +1,67 @@
+{
+  "end_to_end": {
+    "crawl_fps": 26.64,
+    "crawl_frames": 107,
+    "crawl_seconds": 4.017,
+    "frames_deduped": 13,
+    "frames_dropped": 0,
+    "frames_sent": 80,
+    "host_timings": {
+      "crawl_capture": {
+        "avg_ms": 9.193,
+        "count": 107,
+        "max_ms": 36.344
+      },
+      "crawl_encode": {
+        "avg_ms": 1.626,
+        "count": 107,
+        "max_ms": 8.745
+      },
+      "encode": {
+        "avg_ms": 3.718,
+        "count": 80,
+        "max_ms": 226.483
+      },
+      "handoff": {
+        "avg_ms": 0.035,
+        "count": 94,
+        "max_ms": 0.083
+      },
+      "readback": {
+        "avg_ms": 5.351,
+        "count": 94,
+        "max_ms": 24.479
+      },
+      "render": {
+        "avg_ms": 23.154,
+        "count": 94,
+        "max_ms": 58.898
+      },
+      "send": {
+        "avg_ms": 0.606,
+        "count": 80,
+        "max_ms": 9.259
+      }
+    },
+    "play_frames": 79,
+    "play_realtime_ratio": 1.126,
+    "play_seconds": 3.322,
+    "playback_fps": 23.78,
+    "stopped": true,
+    "time_to_playhead_s": 0.2466411000059452,
+    "total_duration": 2.95,
+    "trace_seconds": 12.552
+  },
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-07T21:16:59",
+  "machine": {
+    "cpu_count": 8,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD",
+    "python": "3.13.12"
+  }
+}

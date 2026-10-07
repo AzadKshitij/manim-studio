@@ -194,6 +194,7 @@ class TestEndToEndBenchmark:
                     "frames_sent": stats_event.get("sent"),
                     "frames_dropped": stats_event.get("dropped"),
                     "frames_deduped": stats_event.get("deduped"),
+                    "time_to_playhead_s": strip_event.get("time_to_playhead"),
                     "host_timings": stats_event.get("timings", {}),
                     "stopped": stopped is not None,
                 },

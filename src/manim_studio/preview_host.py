@@ -277,6 +277,9 @@ class SceneHost:
         self._crawl_disabled = False
         self._trace_id = 0
         self._fps = 30
+        # Where the editor's playhead is; the crawler fills the filmstrip
+        # nearest-first from here rather than always from the start.
+        self._playhead_hint = 0.0
 
     # ------------------------------------------------------------------
     # IPC plumbing
@@ -501,6 +504,7 @@ class SceneHost:
         self.log.info("loaded %s (%s)", scene_class.__name__, scene_path)
 
         total = self.blocks[-1].end if self.blocks else 0.0
+        self._playhead_hint = total if self.config.initial_frame == "end" else 0.0
         self.emit(
             Event.LOG,
             blocks=[block.to_dict() for block in self.blocks],
@@ -661,6 +665,7 @@ class SceneHost:
             self._fps,
             on_progress=self._on_crawl_progress,
             timings=self.timings,
+            start_time=self._playhead_hint,
         )
         self.log.info("filmstrip: crawl started (%d blocks)", len(self.blocks))
 
@@ -701,6 +706,9 @@ class SceneHost:
             "sent": pump.frames_sent if pump is not None else 0,
             "dropped": pump.frames_dropped if pump is not None else 0,
             "deduped": pump.frames_deduped if pump is not None else 0,
+            "time_to_playhead": (
+                self._crawler.seconds_to_playhead if self._crawler is not None else None
+            ),
             "timings": self.timings.snapshot(),
         }
 
@@ -779,6 +787,7 @@ class SceneHost:
         )
         time_seconds = float(message.get("time") or 0.0)
         self._pending_scrub = max(0.0, min(time_seconds, total))
+        self._playhead_hint = self._pending_scrub
 
     @staticmethod
     def _release_scene(scene: Any) -> None:
@@ -955,6 +964,9 @@ class SceneHost:
         self._render_current_frame()
         self.push_current_frame()
         block = self.blocks[index]
+        self._playhead_hint = block.end
+        if self._crawler is not None:
+            self._crawler.prioritize(block.end)
         self.emit(Event.TICK, time=block.end, index=index)
         self.emit_status("idle", index=index)
 
@@ -969,6 +981,9 @@ class SceneHost:
         """
         if not self.blocks:
             return
+        self._playhead_hint = max(0.0, float(time_seconds))
+        if self._crawler is not None:
+            self._crawler.prioritize(self._playhead_hint)
         fps = self._fps
         index = round(float(time_seconds) * fps)
         if self._filmstrip is not None and self.frame_pump is not None:

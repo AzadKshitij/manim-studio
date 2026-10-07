@@ -635,6 +635,9 @@ class TestFilmstripCrawlerInProcess:
             assert host._filmstrip is not None and host._filmstrip.is_empty
             host._ensure_crawler()
             assert host._crawler is not None
+            # The default initial frame is the end, so the crawl starts nearest
+            # the playhead (the last block) rather than from the beginning.
+            assert host._crawler._order[0] == len(host.blocks) - 1
             for _ in range(5000):
                 if host._crawler.done:
                     break

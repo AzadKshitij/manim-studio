@@ -348,6 +348,7 @@ class FilmstripCrawler:
         on_progress: Callable[[int, bool, bool], None] | None = None,
         frame_budget: int = 6,
         timings: TimingStats | None = None,
+        start_time: float = 0.0,
     ) -> None:
         self._engine = engine
         self._filmstrip = filmstrip
@@ -356,11 +357,22 @@ class FilmstripCrawler:
         self._timings = timings
         self.frame_budget = max(1, int(frame_budget))
         self._blocks = tuple(engine._blocks)
-        self._block_index = 0
+        # Visit order is playhead-first: the block nearest ``start_time`` renders
+        # first, then its neighbours.  Reordering costs nothing extra because
+        # posing any block replays the scene from the start regardless.
+        self._start_time = float(start_time)
+        self._order = sorted(
+            range(len(self._blocks)), key=lambda index: abs(self._blocks[index].start - start_time)
+        )
+        self._position = 0
+        self._done_duration = 0.0
         self._frame = 0
         self._frames = 0
         self._done = False
         self._capped = False
+        #: Seconds from construction until the playhead's block was cached.
+        self._t0 = time_module.perf_counter()
+        self.seconds_to_playhead: float | None = None
 
     # ------------------------------------------------------------------
 
@@ -378,30 +390,44 @@ class FilmstripCrawler:
 
     @property
     def progress(self) -> float:
-        """Crude completion estimate in [0, 1] based on block durations."""
+        """Monotonic completion estimate in [0, 1] based on block durations."""
         total = self._engine.total_duration
-        if total <= 0:
+        if total <= 0 or self._position >= len(self._order):
             return 1.0
-        if self._block_index >= len(self._blocks):
-            return 1.0
-        block = self._blocks[self._block_index]
-        done_time = block.start + (self._frame - 1) / self._fps
-        return min(max(done_time / total, 0.0), 1.0)
+        block = self._blocks[self._order[self._position]]
+        done = self._done_duration + min(max(self._frame - 1, 0) / self._fps, block.duration)
+        return min(max(done / total, 0.0), 1.0)
+
+    def prioritize(self, time: float) -> None:
+        """Re-aim the pending crawl at ``time`` (a new playhead or seek).
+
+        The block currently being rendered keeps its slot so its partial frames
+        stay valid; only the queue behind it is re-sorted nearest-first.
+        """
+        if self._done:
+            return
+        head = self._position + (1 if self._frame > 0 else 0)
+        if head >= len(self._order):
+            return
+        blocks = self._blocks
+        self._order[head:] = sorted(
+            self._order[head:], key=lambda index: abs(blocks[index].start - time)
+        )
 
     def step(self) -> int:
         """Render up to :attr:`frame_budget` frames; returns the number rendered."""
         rendered = 0
         while rendered < self.frame_budget and not self._done:
-            if self._block_index >= len(self._blocks):
+            if self._position >= len(self._order):
                 self._finish()
                 break
-            block = self._blocks[self._block_index]
+            block = self._blocks[self._order[self._position]]
             if self._engine.paused_block is not block:
                 self._engine.pose(block.start)
                 self._frame = 0
                 if self._engine.paused_block is not block:
                     # Zero-length block (or a target the replay skipped): no frames.
-                    self._advance_block()
+                    self._complete_block(block)
                     continue
             frame_count = self._block_frame_count(block)
             if self._frame == 0:
@@ -420,7 +446,7 @@ class FilmstripCrawler:
                 self._frame += 1
                 rendered += 1
                 continue
-            self._advance_block()
+            self._complete_block(block)
         return rendered
 
     # ------------------------------------------------------------------
@@ -429,9 +455,20 @@ class FilmstripCrawler:
         """Frame count manimgl's own loop would produce for this block."""
         return max(1, math.ceil(block.duration * self._fps - 1e-9))
 
-    def _advance_block(self) -> None:
-        self._block_index += 1
+    def _complete_block(self, block: TimelineBlock) -> None:
+        self._done_duration += block.duration
+        self._position += 1
         self._frame = 0
+        if self.seconds_to_playhead is None and self._is_playhead_block(block):
+            self.seconds_to_playhead = time_module.perf_counter() - self._t0
+
+    def _is_playhead_block(self, block: TimelineBlock) -> bool:
+        start = self._start_time
+        if block.start <= start < block.end:
+            return True
+        # The playhead often sits exactly at the end, which no half-open block
+        # contains; treat that as the final block.
+        return bool(self._blocks) and block is self._blocks[-1] and start >= block.end
 
     def _finish(self) -> None:
         if not self._done:

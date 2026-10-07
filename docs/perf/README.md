@@ -170,3 +170,20 @@ Per-frame numbers move with machine load (this box is shared), so the saving is
 quoted as a range across runs; within any single run fast is always cheaper, and
 the one settle-time smooth scale per burst is negligible. `QPixmap.fromImage`
 (~2.2 ms) is unchanged and remains the floor for the GUI-thread cost.
+
+### P1.5 — playhead-first filmstrip crawl (2026-10-07)
+
+`FilmstripCrawler` now fills the cache outward from the playhead instead of from
+the start, and the host re-aims it (`prioritize`) when a seek or scrub moves the
+playhead mid-crawl. Reordering is free: posing any block replays the scene from
+the beginning anyway, so the total work is unchanged and only the order differs.
+`time_to_playhead` records the wall time until the playhead's block is cached.
+A/B on `feature_showcase` (initial frame = end):
+
+| metric | sequential (before) | playhead-first |
+| --- | --- | --- |
+| `time_to_playhead` | 3.33 s | **0.25 s** |
+| crawl throughput | 33.2 fps | 26.6 fps (run-to-run noise; same work) |
+
+The playhead's region is ready ~13× sooner; the full crawl still takes the same
+time and `crawl_fps` is unchanged within noise.
