@@ -40,8 +40,9 @@ class _StubTimeline:
         self.playhead_time = 0.0
         self.playing = False
 
-    def set_log(self, log: TimelineLog) -> None:
+    def set_log(self, log: TimelineLog, *, keep_view: bool = False) -> None:
         self.log = log
+        self.keep_view = keep_view
 
     def set_playhead(self, time: float) -> None:
         self.playhead_time = time
@@ -80,6 +81,7 @@ class _StubShell:
 
 class _StubController(QObject):
     logReceived = Signal(dict)
+    timingChanged = Signal(dict)
     statusChanged = Signal(str, dict)
     tickReceived = Signal(float, int, bool)
     stoppedReceived = Signal(dict)
@@ -143,6 +145,46 @@ class TestOnLog:
         h = _Harness()
         h.controller.logReceived.emit(SAMPLE_LOG)
         assert h.timeline.log.num_blocks == 2
+
+
+class TestOnTiming:
+    def test_applies_blocks_and_keeps_the_view(self) -> None:
+        h = _Harness()
+        h.events.on_log(SAMPLE_LOG)
+        h.events.on_timing(
+            {
+                "blocks": [
+                    {"name": "ShowCreation", "start": 0.0, "duration": 2.0, "index": 0},
+                    {"name": "Wait", "start": 2.0, "duration": 0.5, "index": 1},
+                ]
+            }
+        )
+        assert h.timeline.keep_view is True
+        assert h.events.total_duration == pytest.approx(2.5)
+        assert h.panel.times[-1][1] == pytest.approx(2.5)
+
+    def test_clamps_the_playhead_to_the_new_total(self) -> None:
+        h = _Harness()
+        h.events.on_log(SAMPLE_LOG)  # total 1.5, playhead 1.5
+        h.events.on_timing(
+            {"blocks": [{"name": "ShowCreation", "start": 0.0, "duration": 0.4, "index": 0}]}
+        )
+        assert h.events.total_duration == pytest.approx(0.4)
+        assert h.timeline.playhead_time == pytest.approx(0.4)
+
+    def test_malformed_payload_reports_and_keeps_timeline(self) -> None:
+        h = _Harness()
+        h.events.on_log(SAMPLE_LOG)
+        h.events.on_timing({"blocks": [{"nope": True}]})
+        assert h.timeline.log.num_blocks == 2
+        assert h.shell.lines and "bad timing payload" in h.shell.lines[-1]
+
+    def test_controller_signal_is_wired(self) -> None:
+        h = _Harness()
+        h.controller.timingChanged.emit(
+            {"blocks": [{"name": "ShowCreation", "start": 0.0, "duration": 1.0, "index": 0}]}
+        )
+        assert h.events.total_duration == pytest.approx(1.0)
 
 
 class TestStatusAndTicks:

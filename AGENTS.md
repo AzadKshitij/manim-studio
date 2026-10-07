@@ -32,6 +32,7 @@ explaining why not.
 | Module | Responsibility | May import |
 | --- | --- | --- |
 | `manim_studio/timeline_model.py` | Pure data model for trace blocks, px/time math, JSON (de)serialization | stdlib only |
+| `manim_studio/timing.py` | Pure per-block duration overrides with undo/redo | stdlib, `timeline_model` |
 | `manim_studio/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls | stdlib, `timeline_model` |
 | `manim_studio/python_highlight.py` | Pygments-powered Python token spans for the code editor | stdlib, `pygments` |
 | `manim_studio/python_completion.py` | Jedi-backed completion candidates and call signatures | stdlib, `jedi` |
@@ -59,7 +60,7 @@ wire protocol and `docs/adr/` for architectural decisions.
 
 Hard dependency rules:
 
-1. Pure modules (`timeline_model`, `tracer`, `ipc`, `filmstrip`, `templates`,
+1. Pure modules (`timeline_model`, `timing`, `tracer`, `ipc`, `filmstrip`, `templates`,
    `api_index`) must never import Qt, `manimlib`, or `moderngl`. They are the
    fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor

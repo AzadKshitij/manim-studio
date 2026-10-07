@@ -49,6 +49,7 @@ from manim_studio.scene_runner import check_scene_file
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
 from manim_studio.timeline_model import TimelineLog
+from manim_studio.timing import TimingOverrides
 
 __all__ = ["MainWindow"]
 
@@ -80,6 +81,9 @@ class MainWindow(QMainWindow):
         self._restore_settings = restore_settings
         self._settings = QSettings("ManimStudio", "ManimStudio")
         self._api_names = api_cache.load_api_names()
+        # Timing edits (timeline right-edge drag) are kept separately from the
+        # code editor's undo stack; the keyboard handler is focus-scoped.
+        self._timing = TimingOverrides(TimelineLog(()))
 
         self.editor = CodeEditor(self)
         self.timings = TimingStats()
@@ -311,6 +315,10 @@ class MainWindow(QMainWindow):
         self.preview_panel.stopRequested.connect(self.request_stop)
         self.timeline.scrubRequested.connect(self.scrub_to_time)
         self.timeline.playToggleRequested.connect(self._toggle_play)
+        self.timeline.blockResized.connect(self._on_block_resized)
+        self.timeline.undoRequested.connect(self._undo_timing)
+        self.timeline.redoRequested.connect(self._redo_timing)
+        self.controller.logReceived.connect(self._on_trace_log)
         self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
         self.controller.execResultReceived.connect(self.shell.append_exec_result)
         self.controller.filmstripReceived.connect(self.stats.on_filmstrip)
@@ -609,6 +617,43 @@ class MainWindow(QMainWindow):
         self.timeline.set_playhead(position)
         self.preview_panel.set_time(position, self.events.total_duration)
         self.controller.scrub(position)
+
+    # ------------------------------------------------------------------
+    # Timeline retiming
+    # ------------------------------------------------------------------
+
+    def _on_trace_log(self, _message: dict[str, Any]) -> None:
+        """A fresh trace becomes the base for the timing-override stack.
+
+        Connected after :class:`PreviewEvents` so the widget already holds the new
+        log; any previous overrides refer to a timeline that no longer exists.
+        """
+        self._timing = TimingOverrides(self.timeline.log)
+
+    def _on_block_resized(self, index: int, duration: float) -> None:
+        if self._path is None or not self.controller.is_running:
+            return
+        if not self._timing.set_duration(index, duration):
+            return
+        self._push_timing()
+
+    def _undo_timing(self) -> None:
+        if self._timing.undo():
+            self._push_timing()
+
+    def _redo_timing(self) -> None:
+        if self._timing.redo():
+            self._push_timing()
+
+    def _push_timing(self) -> None:
+        """Show the edited timeline at once and ask the host to retime + re-pose."""
+        log = self._timing.log()
+        self.timeline.set_log(log, keep_view=True)
+        self.events.total_duration = log.total_duration
+        position = min(self.timeline.playhead_time, log.total_duration)
+        self.timeline.set_playhead(position)
+        self.preview_panel.set_time(position, log.total_duration)
+        self.controller.set_timing(self._timing.to_payload(), position)
 
     # ------------------------------------------------------------------
     # Export / preview video

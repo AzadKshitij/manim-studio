@@ -37,6 +37,7 @@ class PreviewController(QObject):
     execResultReceived = Signal(dict)
     filmstripReceived = Signal(dict)
     statsReceived = Signal(dict)
+    timingChanged = Signal(dict)
     frameReceived = Signal(QImage)
     hostLogReceived = Signal(str)
     stateChanged = Signal(str)  # starting | running | stopped | crashed
@@ -201,6 +202,14 @@ class PreviewController(QObject):
         """Pose the scene at an arbitrary time (coalesced host-side)."""
         return self.send(Command.SCRUB, time=float(time_seconds))
 
+    def set_timing(self, timings: list[dict[str, float]], time_seconds: float = 0.0) -> bool:
+        """Apply per-block duration overrides and re-pose at ``time_seconds``.
+
+        The host rebuilds the timeline, invalidates the filmstrip/replay state and
+        answers with an ``Event.TIMING`` carrying the authoritative blocks.
+        """
+        return self.send(Command.SET_TIMING, timings=list(timings), time=float(time_seconds))
+
     def exec_code(self, code: str) -> bool:
         return self.send(Command.EXEC, code=code)
 
@@ -327,6 +336,8 @@ class PreviewController(QObject):
             self.filmstripReceived.emit(message)
         elif event == Event.STATS:
             self.statsReceived.emit(message)
+        elif event == Event.TIMING:
+            self.timingChanged.emit(message)
         elif event == Event.PONG:
             pass
         else:

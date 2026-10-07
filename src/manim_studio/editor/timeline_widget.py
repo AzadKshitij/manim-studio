@@ -61,6 +61,8 @@ class TimelineWidget(QWidget):
     playToggleRequested = Signal()
     viewChanged = Signal()
     blockResized = Signal(int, float)  # block index, requested duration (seconds)
+    undoRequested = Signal()
+    redoRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -100,11 +102,12 @@ class TimelineWidget(QWidget):
     def playing(self) -> bool:
         return self._playing
 
-    def set_log(self, log: TimelineLog) -> None:
+    def set_log(self, log: TimelineLog, *, keep_view: bool = False) -> None:
         self._log = log
-        self._view = TimelineView(
-            total=max(log.total_duration, 0.01), width=float(max(self.width(), 1))
-        )
+        if not keep_view or self._view.total <= 0:
+            self._view = TimelineView(
+                total=max(log.total_duration, 0.01), width=float(max(self.width(), 1))
+            )
         self._playhead = min(self._playhead, log.total_duration)
         self._hover_index = None
         if self._mode == "resize":
@@ -278,6 +281,17 @@ class TimelineWidget(QWidget):
         step = FRAME_STEP
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             step = 1.0
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_Z and not (
+                event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+            ):
+                self.undoRequested.emit()
+                event.accept()
+                return
+            if event.key() in (Qt.Key.Key_Y, Qt.Key.Key_Z):
+                self.redoRequested.emit()
+                event.accept()
+                return
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
             delta = -step if event.key() == Qt.Key.Key_Left else step
             self._request_scrub(self._view.time_to_x(self._playhead + delta))

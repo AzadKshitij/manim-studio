@@ -26,12 +26,12 @@ from typing import TYPE_CHECKING, Any
 from manim_studio.timeline_model import TimelineBlock
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from manim_studio.filmstrip import Filmstrip
     from manim_studio.stats import TimingStats
 
-__all__ = ["FilmstripCrawler", "ScrubEngine", "ScrubError", "read_upright_rgba"]
+__all__ = ["FilmstripCrawler", "ScrubEngine", "ScrubError", "TimingScaler", "read_upright_rgba"]
 
 
 class ScrubError(RuntimeError):
@@ -46,6 +46,13 @@ def read_upright_rgba(camera: Any) -> tuple[bytes, int, int]:
     raw = camera.get_raw_fbo_data()
     array = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 4)[::-1]
     return array.tobytes(), width, height
+
+
+def _prepare_animation(animation: Any) -> Any:
+    """Lazy wrapper around manimgl's ``prepare_animation`` (keeps this module GL-free)."""
+    from manimlib.animation.animation import prepare_animation
+
+    return prepare_animation(animation)
 
 
 class ScrubEngine:
@@ -63,10 +70,12 @@ class ScrubEngine:
         scene: Any,
         blocks: Sequence[TimelineBlock],
         *,
+        factors: Mapping[int, float] | None = None,
         clock: Callable[[], float] = time_module.perf_counter,
     ) -> None:
         self._scene = scene
         self._blocks = tuple(blocks)
+        self._factors = dict(factors or {})
         self._clock = clock
         self._target = 0.0
         self._play_counter = 0
@@ -180,6 +189,11 @@ class ScrubEngine:
         self._paused_block = None
         self._paused_animations = None
 
+    def _factor(self, block: TimelineBlock | None) -> float:
+        if block is None:
+            return 1.0
+        return float(self._factors.get(block.index, 1.0))
+
     def _play(self, *args: Any, **kwargs: Any) -> Any:
         block = self._blocks[self._play_counter] if self._play_counter < len(self._blocks) else None
         if not args:
@@ -187,29 +201,58 @@ class ScrubEngine:
             return self._orig_play(*args, **kwargs)
         if block is not None and block.start <= self._target < block.end:
             return self._partial_play(args, kwargs, block)
+        factor = self._factor(block)
         self._play_counter += 1
+        if factor != 1.0:
+            return self._orig_play(*self._scaled_animations(args, factor), **kwargs)
         return self._orig_play(*args, **kwargs)
+
+    @staticmethod
+    def _scaled_animations(args: tuple[Any, ...], factor: float) -> list[Any]:
+        """Prepare ``play`` arguments and scale their run times by ``factor``.
+
+        Preparing here is safe because manimgl's ``prepare_animation`` is
+        idempotent for already-prepared animations, so ``Scene.play`` keeps the
+        scaled ``run_time`` while preserving every lag ratio in the block.
+        """
+        animations = [_prepare_animation(arg) for arg in args]
+        for animation in animations:
+            animation.run_time = float(getattr(animation, "run_time", 1.0)) * factor
+        return animations
 
     def _wait(self, *args: Any, **kwargs: Any) -> Any:
         block = self._blocks[self._play_counter] if self._play_counter < len(self._blocks) else None
         if block is not None and block.start <= self._target < block.end:
             return self._partial_wait(block)
+        factor = self._factor(block)
         self._play_counter += 1
+        if factor != 1.0:
+            duration = kwargs.get("duration")
+            if duration is None and args:
+                duration = args[0]
+            if duration is None:
+                duration = float(getattr(self._scene, "default_wait_time", 1.0))
+            if args:
+                return self._orig_wait(duration * factor, *args[1:], **kwargs)
+            scaled = {**kwargs, "duration": duration * factor}
+            return self._orig_wait(**scaled)
         return self._orig_wait(*args, **kwargs)
 
     def _partial_play(
         self, args: tuple[Any, ...], kwargs: dict[str, Any], block: TimelineBlock
     ) -> None:
         """Interpolate the target block's animations to the exact alpha and stop."""
-        from manimlib.animation.animation import prepare_animation
         from manimlib.scene.scene import EndScene
 
         scene = self._scene
-        animations = list(map(prepare_animation, args))
+        animations = list(map(_prepare_animation, args))
+        factor = self._factor(block)
         for animation in animations:
             animation.update_rate_info(
                 kwargs.get("run_time"), kwargs.get("rate_func"), kwargs.get("lag_ratio")
             )
+            if factor != 1.0:
+                animation.run_time = float(animation.run_time) * factor
         scene.pre_play()
         scene.begin_animations(animations)
         local_time = max(0.0, self._target - block.start)
@@ -239,6 +282,51 @@ class ScrubEngine:
         delta = self._target - scene.time
         if delta > 0:
             scene.increment_time(delta)
+
+
+class TimingScaler:
+    """Scale a scene's ``play``/``wait`` durations from per-block factors.
+
+    Real playback runs the user's ``construct`` at manimgl's own speed; wrapping
+    ``play``/``wait`` scales each animation's ``run_time`` (and each wait's
+    duration) so playback reproduces the timeline the user edited, without
+    touching the scene source.  Block indexes come from ``scene.num_plays`` at
+    call entry — exactly the value the tracer records.
+    """
+
+    def __init__(self, scene: Any, factors: Mapping[int, float]) -> None:
+        self._scene = scene
+        self._factors = dict(factors)
+        self._orig_play = scene.play
+        self._orig_wait = scene.wait
+        scene.play = self._play
+        scene.wait = self._wait
+
+    def _factor(self) -> float:
+        try:
+            index = int(self._scene.num_plays)
+        except (AttributeError, TypeError, ValueError):
+            return 1.0
+        return float(self._factors.get(index, 1.0))
+
+    def _play(self, *args: Any, **kwargs: Any) -> Any:
+        factor = self._factor()
+        if not args or factor == 1.0:
+            return self._orig_play(*args, **kwargs)
+        return self._orig_play(*ScrubEngine._scaled_animations(args, factor), **kwargs)
+
+    def _wait(self, *args: Any, **kwargs: Any) -> Any:
+        factor = self._factor()
+        if factor == 1.0:
+            return self._orig_wait(*args, **kwargs)
+        duration = kwargs.get("duration")
+        if duration is None and args:
+            duration = args[0]
+        if duration is None:
+            duration = float(getattr(self._scene, "default_wait_time", 1.0))
+        if args:
+            return self._orig_wait(duration * factor, *args[1:], **kwargs)
+        return self._orig_wait(**{**kwargs, "duration": duration * factor})
 
 
 class FilmstripCrawler:
