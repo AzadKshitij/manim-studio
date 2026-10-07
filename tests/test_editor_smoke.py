@@ -97,21 +97,22 @@ class TestConstruction:
         assert len(window._api_names) > 100
 
     def test_completion_disabled_by_flag(self, window: MainWindow) -> None:
-        assert window._completion_worker is None
+        assert window.completions.worker is None
 
 
 class TestCompletionWiring:
     def test_worker_created_when_enabled(self, qtbot) -> None:
         main = MainWindow(restore_settings=False, embedded=True, auto_preview=False)
         qtbot.addWidget(main)
-        assert main._completion_worker is not None
-        assert main._completion_worker.isRunning() is False
-        main._completion_worker.stop()
+        worker = main.completions.worker
+        assert worker is not None
+        assert worker.isRunning() is False
+        worker.stop()
 
     def test_request_round_trips_through_jedi(self, qtbot) -> None:
         main = MainWindow(restore_settings=False, embedded=True, auto_preview=False)
         qtbot.addWidget(main)
-        worker = main._completion_worker
+        worker = main.completions.worker
         assert worker is not None
         source = "values = [1, 2, 3]\nvalues.ap"
         main.editor.set_text(source)
@@ -123,7 +124,7 @@ class TestCompletionWiring:
             assert got_offset == offset
             assert any(item.insert == "append" for item in items)
         finally:
-            worker.stop()
+            main.completions.stop()
 
 
 class TestOpenAndSave:

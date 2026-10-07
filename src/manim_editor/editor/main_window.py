@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 from manim_editor import APP_NAME
 from manim_editor.editor import api_cache, scene_files
 from manim_editor.editor.code_editor import CodeEditor
-from manim_editor.editor.completion_worker import CompletionWorker
+from manim_editor.editor.completion_controller import CompletionController
 from manim_editor.editor.export_controller import ExportController
 from manim_editor.editor.export_dialog import ExportDialog
 from manim_editor.editor.file_watcher import FileWatcher
@@ -103,12 +103,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
         self.editor.set_completions(self._api_names)
-        self._completion_worker: CompletionWorker | None = None
-        if completion:
-            self._completion_worker = CompletionWorker(self)
-            self._completion_worker.completionsReady.connect(self._on_completions_ready)
-            self._completion_worker.signaturesReady.connect(self._on_signatures_ready)
-            self.destroyed.connect(self._stop_completion_worker)
+        self.completions = CompletionController(self.editor, enabled=completion, parent=self)
         if restore_settings:
             self._restore_geometry()
         if path is not None:
@@ -351,38 +346,14 @@ class MainWindow(QMainWindow):
         return str(self._path) if self._path is not None else None
 
     def _on_completions_requested(self, source: str, offset: int) -> None:
-        if self._completion_worker is None:
-            return
-        self._completion_worker.request_completions(source, offset, self._completion_path())
-        self._ensure_completion_worker()
+        self.completions.request_completions(source, offset, self._completion_path())
 
     def _on_signatures_requested(self, source: str, offset: int) -> None:
-        if self._completion_worker is None:
-            return
-        self._completion_worker.request_signatures(source, offset, self._completion_path())
-        self._ensure_completion_worker()
-
-    def _ensure_completion_worker(self) -> None:
-        if self._completion_worker is not None and not self._completion_worker.isRunning():
-            self._completion_worker.start()
+        self.completions.request_signatures(source, offset, self._completion_path())
 
     def _warm_up_completion(self) -> None:
         """Prime Jedi's cache for the freshly loaded buffer in the background."""
-        if self._completion_worker is None:
-            return
-        self._completion_worker.request_warmup(self.editor.text(), self._completion_path())
-        self._ensure_completion_worker()
-
-    def _stop_completion_worker(self, *_args: Any) -> None:
-        if self._completion_worker is not None:
-            self._completion_worker.stop()
-
-    def _on_completions_ready(self, offset: int, items: Any) -> None:
-        self.editor.show_completions(offset, [item.insert for item in items])
-
-    def _on_signatures_ready(self, offset: int, items: Any) -> None:
-        if items:
-            self.editor.show_calltip(offset, "\n".join(item.label for item in items))
+        self.completions.warm_up(self.editor.text(), self._completion_path())
 
     # ------------------------------------------------------------------
     # Actions and menus
@@ -953,8 +924,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.watcher.stop()
-        if self._completion_worker is not None:
-            self._completion_worker.stop()
+        self.completions.stop()
         self.controller.shutdown()
         self.exports.shutdown()
         self.transport.stop()
