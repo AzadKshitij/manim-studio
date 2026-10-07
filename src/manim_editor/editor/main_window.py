@@ -6,13 +6,11 @@ the file watcher and the rendered-preview transport, and routes every event.
 
 from __future__ import annotations
 
-import keyword
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QProcess, QSettings, QStandardPaths, Qt, QTimer
+from PySide6.QtCore import QProcess, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -35,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from manim_editor import APP_NAME, ipc
-from manim_editor.api_index import build_index, index_names, load_index, save_index
+from manim_editor.editor import api_cache, scene_files
 from manim_editor.editor.code_editor import CodeEditor
 from manim_editor.editor.completion_worker import CompletionWorker
 from manim_editor.editor.file_watcher import FileWatcher
@@ -47,12 +45,7 @@ from manim_editor.editor.timeline_widget import TimelineWidget
 from manim_editor.export import build_export_plan
 from manim_editor.scene_runner import check_scene_file
 from manim_editor.stats import format_bytes, process_rss_bytes, usage_percent
-from manim_editor.templates import (
-    SCENE_TEMPLATES,
-    SNIPPET_TEMPLATES,
-    find_template,
-    render_scene_template,
-)
+from manim_editor.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
 from manim_editor.timeline_model import TimelineLog, format_duration, parse_log
 
 __all__ = ["MainWindow"]
@@ -94,7 +87,7 @@ class MainWindow(QMainWindow):
         self._preview_process: QProcess | None = None
         self._export_process: QProcess | None = None
         self._settings = QSettings("ManimEditor", "ManimEditor")
-        self._api_names = self._load_api_names()
+        self._api_names = api_cache.load_api_names()
         self._stats_cache: dict[str, Any] = {}
         self._stats_dialog: Any = None
 
@@ -492,19 +485,18 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
         template_key = key.split(" — ", 1)[0]
-        suggested = _scene_name_from_path(Path(f"{template_key}.py"))
+        suggested = scene_files.scene_name_from_path(Path(f"{template_key}.py"))
         scene_name = self._prompt_scene_name(suggested)
         if scene_name is None:
             return
-        default_name = f"{_snake_case(scene_name)}.py"
+        default_name = f"{scene_files.snake_case(scene_name)}.py"
         path, _ = QFileDialog.getSaveFileName(
             self, "Create scene", str(Path.cwd() / default_name), "Python files (*.py)"
         )
         if not path:
             return
         target = self.create_scene_file(path, template_key, scene_name)
-        if target is not None:
-            self.open_path(target)
+        self.open_path(target)
 
     def _prompt_scene_name(self, default: str) -> str | None:
         """Ask for the scene class name until it is a usable Python identifier.
@@ -523,7 +515,7 @@ class MainWindow(QMainWindow):
             if not accepted:
                 return None
             name = name.strip()
-            if _is_valid_scene_name(name):
+            if scene_files.is_valid_scene_name(name):
                 return name
             QMessageBox.warning(
                 self,
@@ -535,12 +527,9 @@ class MainWindow(QMainWindow):
 
     def create_scene_file(
         self, path: str | Path, template_key: str, scene_name: str | None = None
-    ) -> Path | None:
-        target = Path(path)
-        scene_name = scene_name or _scene_name_from_path(target)
-        code = render_scene_template(template_key, scene_name)
-        target.write_text(code, encoding="utf-8")
-        return target
+    ) -> Path:
+        """Write a scene template to ``path``, deriving the class name when omitted."""
+        return scene_files.create_scene_file(path, template_key, scene_name)
 
     def save_buffer(self) -> None:
         if self._path is None:
@@ -550,7 +539,7 @@ class MainWindow(QMainWindow):
         # from disk, so a save only warrants a re-render when the code actually
         # changed.  ``is_modified()`` is Scintilla's save-point flag; it stays set
         # after retyping identical text, so content equality is the real check.
-        changed = not self._buffer_matches_disk()
+        changed = not scene_files.buffer_matches_disk(self._path, self.editor.text())
         if not self.editor.is_modified() and not changed:
             self._set_status(f"no changes — {self._path.name} is up to date")
             return
@@ -560,13 +549,6 @@ class MainWindow(QMainWindow):
         self._set_status(f"saved {self._path.name}")
         if changed and self._auto_reload and self.controller.is_running:
             self.controller.reload()
-
-    def _buffer_matches_disk(self) -> bool:
-        """True when the buffer holds exactly the code currently on disk."""
-        if self._path is None:
-            return False
-        disk = _read_disk_text(self._path)
-        return disk is not None and disk == self.editor.text()
 
     def save_buffer_as(self) -> None:
         suggested = str(self._path) if self._path else str(Path.cwd() / "scene.py")
@@ -661,7 +643,7 @@ class MainWindow(QMainWindow):
     def preview_video_path(self) -> Path | None:
         if self._path is None:
             return None
-        return self._path.parent / ".manim-editor" / f"{self._path.stem}_preview.mp4"
+        return scene_files.preview_video_path(self._path)
 
     def render_preview_video(self) -> None:
         if self._path is None:
@@ -933,7 +915,7 @@ class MainWindow(QMainWindow):
         if self.editor.is_modified():
             self._set_status("file changed on disk — save (Ctrl+S) to overwrite, or reopen")
             return
-        if _read_disk_text(Path(path)) == self.editor.text():
+        if scene_files.read_disk_text(Path(path)) == self.editor.text():
             # Rewritten with identical code (a touch, a no-op formatter, another
             # tool saving the same bytes): reloading would reset the cursor and
             # undo history, and re-render the scene, for nothing.
@@ -996,24 +978,6 @@ class MainWindow(QMainWindow):
         marker = " •" if self.editor.is_modified() else ""
         self.setWindowTitle(f"{self._path.name}{marker} — {APP_NAME}")
 
-    def _load_api_names(self) -> tuple[str, ...]:
-        try:
-            location = QStandardPaths.writableLocation(
-                QStandardPaths.StandardLocation.CacheLocation
-            )
-            cache = Path(location) / "api_index.json"
-        except Exception:  # pragma: no cover - platform fallback
-            cache = Path.home() / ".manim-editor" / "api_index.json"
-        symbols = load_index(cache)
-        if not symbols:
-            symbols = build_index()
-            if symbols:
-                try:
-                    save_index(cache, symbols)
-                except OSError:
-                    log.debug("could not persist API index to %s", cache)
-        return index_names(symbols)
-
     def _restore_geometry(self) -> None:
         geometry = self._settings.value("window/geometry")
         if geometry is not None:
@@ -1033,31 +997,3 @@ class MainWindow(QMainWindow):
         if self._restore_settings:
             self._settings.setValue("window/geometry", self.saveGeometry())
         event.accept()
-
-
-def _normalize_newlines(text: str) -> str:
-    """Normalise CRLF/CR line endings so buffer and disk text compare equal."""
-    return text.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def _read_disk_text(path: Path) -> str | None:
-    """The file's text with LF line endings, or ``None`` when it cannot be read."""
-    try:
-        return _normalize_newlines(path.read_text(encoding="utf-8"))
-    except OSError:
-        return None
-
-
-def _scene_name_from_path(path: Path) -> str:
-    name = "".join(part.capitalize() for part in path.stem.replace("-", "_").split("_"))
-    return name if name.isidentifier() else "MyScene"
-
-
-def _snake_case(name: str) -> str:
-    """``MyIntroScene`` -> ``my_intro_scene``, for a suggested file name."""
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
-
-
-def _is_valid_scene_name(name: str) -> bool:
-    """True when ``name`` can be used as the generated scene class name."""
-    return bool(name) and name.isidentifier() and not keyword.iskeyword(name)
