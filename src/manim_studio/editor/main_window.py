@@ -48,7 +48,7 @@ from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.scene_runner import check_scene_file
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
-from manim_studio.timeline_model import TimelineLog
+from manim_studio.timeline_model import TimelineLog, format_duration
 from manim_studio.timing import TimingOverrides
 
 __all__ = ["MainWindow"]
@@ -582,10 +582,38 @@ class MainWindow(QMainWindow):
         if not self.controller.is_running:
             self._start_preview()
             return
-        # Play from the beginning unless the user explicitly picked a block.
-        index = self.events.play_from_index if self.events.play_from_index is not None else 0
         self.video.exit()
+        index = self._play_start_index()
+        self._announce_play_start(index)
         self.controller.play(from_index=index)
+
+    def _play_start_index(self) -> int:
+        """Block that playback resumes from.
+
+        manimgl starts a replay at a whole animation block
+        (``start_at_animation_number``), so a block is the finest precision a
+        live replay can begin at.  The stored block — kept in step with the
+        playhead by scrub and seek — is the start; a fresh trace (no selection)
+        replays from the beginning.
+        """
+        if self.events.play_from_index is None:
+            return 0
+        return self.events.play_from_index
+
+    def _announce_play_start(self, index: int) -> None:
+        """Move the playhead to the block's true start so the timeline agrees.
+
+        Playback always begins at a block boundary, so a mid-block playhead is
+        snapped forward/back to that boundary rather than implying a sub-block
+        resume the host cannot perform.
+        """
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        self.events.play_from_index = index
+        self.timeline.set_playhead(block.start)
+        self.preview_panel.set_time(block.start, self.events.total_duration)
+        self._set_status(f"playing from block {index} · {format_duration(block.start)}")
 
     def request_stop(self) -> None:
         self.controller.stop_playback()

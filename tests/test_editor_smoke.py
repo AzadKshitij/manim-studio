@@ -542,6 +542,49 @@ class TestCaretBlockHighlight:
         assert window.editor.current_line() == 14
 
 
+class TestPlayFromPlayhead:
+    def test_plays_from_the_playheads_block(self, window: MainWindow) -> None:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            window.open_path(SCENE_FILE)
+            window.events.on_log(SAMPLE_LOG_EVENT)  # blocks 0,1,2 over [0,3.5]
+            window.scrub_to_time(0.6)  # inside block 0
+            window.request_play()
+            assert stub.plays == [0]
+            # Playback begins at a block boundary, so the playhead is snapped there.
+            assert window.timeline.playhead_time == pytest.approx(0.0)
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_boundary_starts_the_following_block(self, window: MainWindow) -> None:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            window.open_path(SCENE_FILE)
+            window.events.on_log(SAMPLE_LOG_EVENT)
+            window.scrub_to_time(1.5)  # exactly the start of block 2
+            window.request_play()
+            assert stub.plays == [2]
+            assert window.timeline.playhead_time == pytest.approx(1.5)
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_fresh_trace_replays_from_the_beginning(self, window: MainWindow) -> None:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            window.open_path(SCENE_FILE)
+            window.events.on_log(SAMPLE_LOG_EVENT)
+            window.request_play()
+            assert stub.plays == [0]
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+
 class TestFramesAndPreview:
     def test_frame_updates_panel(self, window: MainWindow) -> None:
         image = QImage(32, 24, QImage.Format.Format_RGBA8888)
