@@ -546,12 +546,27 @@ class MainWindow(QMainWindow):
         if self._path is None:
             self.save_buffer_as()
             return
+        # Compare the buffer to the file *before* writing.  The preview host reads
+        # from disk, so a save only warrants a re-render when the code actually
+        # changed.  ``is_modified()`` is Scintilla's save-point flag; it stays set
+        # after retyping identical text, so content equality is the real check.
+        changed = not self._buffer_matches_disk()
+        if not self.editor.is_modified() and not changed:
+            self._set_status(f"no changes — {self._path.name} is up to date")
+            return
         self.editor.save_file(self._path)
         self.watcher.note_save()
         self._update_title()
         self._set_status(f"saved {self._path.name}")
-        if self._auto_reload and self.controller.is_running:
+        if changed and self._auto_reload and self.controller.is_running:
             self.controller.reload()
+
+    def _buffer_matches_disk(self) -> bool:
+        """True when the buffer holds exactly the code currently on disk."""
+        if self._path is None:
+            return False
+        disk = _read_disk_text(self._path)
+        return disk is not None and disk == self.editor.text()
 
     def save_buffer_as(self) -> None:
         suggested = str(self._path) if self._path else str(Path.cwd() / "scene.py")
@@ -918,6 +933,12 @@ class MainWindow(QMainWindow):
         if self.editor.is_modified():
             self._set_status("file changed on disk — save (Ctrl+S) to overwrite, or reopen")
             return
+        if _read_disk_text(Path(path)) == self.editor.text():
+            # Rewritten with identical code (a touch, a no-op formatter, another
+            # tool saving the same bytes): reloading would reset the cursor and
+            # undo history, and re-render the scene, for nothing.
+            self._set_status("file touched on disk — code unchanged")
+            return
         # External change with a clean buffer: refresh the editor text, the scene
         # list (a class may have been renamed) and the preview, so all three agree.
         self._set_status("file changed on disk — reloading editor and preview")
@@ -1012,6 +1033,19 @@ class MainWindow(QMainWindow):
         if self._restore_settings:
             self._settings.setValue("window/geometry", self.saveGeometry())
         event.accept()
+
+
+def _normalize_newlines(text: str) -> str:
+    """Normalise CRLF/CR line endings so buffer and disk text compare equal."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _read_disk_text(path: Path) -> str | None:
+    """The file's text with LF line endings, or ``None`` when it cannot be read."""
+    try:
+        return _normalize_newlines(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
 
 
 def _scene_name_from_path(path: Path) -> str:

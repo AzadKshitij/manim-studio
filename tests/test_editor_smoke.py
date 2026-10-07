@@ -24,6 +24,7 @@ class _StubController:
 
     def __init__(self) -> None:
         self.loads: list[tuple[str, str | None]] = []
+        self.reloads: list[str | None] = []
         self.scrubs: list[float] = []
         self.seeks: list[int] = []
         self.plays: list[int] = []
@@ -32,6 +33,10 @@ class _StubController:
 
     def load(self, path, scene_name: str | None = None) -> bool:
         self.loads.append((str(path), scene_name))
+        return True
+
+    def reload(self, path=None) -> bool:
+        self.reloads.append(str(path) if path is not None else None)
         return True
 
     def scrub(self, time_seconds: float) -> bool:
@@ -219,6 +224,103 @@ class TestOpenAndSave:
         window.save_buffer()
         assert "x = 2" in target.read_text(encoding="utf-8")
         assert not window.editor.is_modified()
+
+    def test_save_without_changes_does_not_reload(self, window: MainWindow, tmp_path: Path) -> None:
+        target = tmp_path / "scene.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\nclass Demo(Scene):\n    pass\n", encoding="utf-8"
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            assert window.open_path(target) is True
+            window.watcher.stop()
+            window.save_buffer()
+            assert stub.reloads == []
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_save_with_changes_reloads_once(self, window: MainWindow, tmp_path: Path) -> None:
+        target = tmp_path / "scene.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\nclass Demo(Scene):\n    pass\n", encoding="utf-8"
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            assert window.open_path(target) is True
+            window.editor.set_text(
+                "from manimlib import Scene\n\n\nclass Demo(Scene):\n    x = 2\n"
+            )
+            window.watcher.stop()
+            window.save_buffer()
+            assert stub.reloads == [None]
+            assert not window.editor.is_modified()
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_save_identical_text_skips_reload(self, window: MainWindow, tmp_path: Path) -> None:
+        """Scintilla keeps the modified flag after retyping identical text, so the
+        content comparison must still suppress the redundant re-render."""
+        target = tmp_path / "scene.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\nclass Demo(Scene):\n    pass\n", encoding="utf-8"
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            assert window.open_path(target) is True
+            window.editor.set_text(target.read_text(encoding="utf-8"))
+            assert window.editor.is_modified()  # save point moved, content identical
+            window.watcher.stop()
+            window.save_buffer()
+            assert stub.reloads == []
+            assert not window.editor.is_modified()
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_save_crlf_file_without_changes_does_not_reload(
+        self, window: MainWindow, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "scene.py"
+        target.write_bytes(
+            b"from manimlib import Scene\r\n\r\n\r\nclass Demo(Scene):\r\n    pass\r\n"
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            assert window.open_path(target) is True
+            window.watcher.stop()
+            window.save_buffer()
+            assert stub.reloads == []
+        finally:
+            window.controller = original  # type: ignore[assignment]
+
+    def test_file_touched_without_change_does_not_reload(
+        self, window: MainWindow, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "scene.py"
+        target.write_text(
+            "from manimlib import Scene\n\n\nclass Demo(Scene):\n    pass\n", encoding="utf-8"
+        )
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        try:
+            assert window.open_path(target) is True
+            window.watcher.stop()
+            # Same bytes rewritten (a touch or a no-op formatter): the watcher fires
+            # but nothing actually changed, so no reload and no re-render.
+            target.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+            window._on_file_changed(str(target))
+            assert stub.loads == []
+            assert stub.reloads == []
+        finally:
+            window.controller = original  # type: ignore[assignment]
 
     def test_create_scene_from_template(self, window: MainWindow, tmp_path: Path) -> None:
         target = window.create_scene_file(tmp_path / "my_intro.py", "circle_to_square")
