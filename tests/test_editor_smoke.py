@@ -792,6 +792,35 @@ class TestTransport:
         finally:
             self._restore(window)
 
+    def test_loop_keeps_the_pause_label_between_cycles(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window.request_play()  # clears the pause intent
+            window._on_host_status("playing", {})
+            assert window.transport_bar.playing() is True
+            # The host reports idle at a loop boundary; the button must stay Pause.
+            window._on_host_status("idle", {})
+            assert window.transport_bar.playing() is True
+            window.request_stop()  # the user pauses for real
+            window._on_host_status("idle", {})
+            assert window.transport_bar.playing() is False
+        finally:
+            self._restore(window)
+
+    def test_host_crash_resets_the_play_button(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window.request_play()
+            window._on_host_status("playing", {})
+            assert window.transport_bar.playing() is True
+            window._on_host_state_changed("crashed")
+            assert window.transport_bar.playing() is False
+            assert window._loop_paused is True  # no auto-replay after a crash
+        finally:
+            self._restore(window)
+
     def test_zoom_actions_drive_the_timeline(self, window: MainWindow) -> None:
         self._stub(window)
         try:

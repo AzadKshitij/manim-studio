@@ -345,9 +345,8 @@ class MainWindow(QMainWindow):
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
         self.transport_bar.speedChanged.connect(self._on_transport_speed)
         self.transport_bar.zoomRequested.connect(self._on_zoom_requested)
-        self.controller.statusChanged.connect(
-            lambda state, _message: self.transport_bar.set_playing(state == "playing")
-        )
+        self.controller.statusChanged.connect(self._on_host_status)
+        self.controller.stateChanged.connect(self._on_host_state_changed)
         self.controller.stoppedReceived.connect(self._on_stopped_loop)
         self.controller.logReceived.connect(self._on_trace_log)
         self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
@@ -639,6 +638,25 @@ class MainWindow(QMainWindow):
         if self._path is None or not self.controller.is_running:
             return
         self.scrub_to_time(0.0 if where == "start" else self.events.total_duration)
+
+    def _on_host_status(self, state: str, _message: dict[str, Any]) -> None:
+        """Keep the play/pause label honest across loop cycles.
+
+        A loop replays in the stopped handler, so the host reports ``idle`` for a
+        moment at each cycle boundary before the next cycle's ``playing``.  While
+        the loop is active the button should stay on Pause through that gap rather
+        than flashing back to Play.
+        """
+        keep_pause = state == "playing" or (
+            state == "idle" and self._loop and not self._loop_paused
+        )
+        self.transport_bar.set_playing(keep_pause)
+
+    def _on_host_state_changed(self, state: str) -> None:
+        """Reset playback intent when the host dies or shuts down."""
+        if state in ("crashed", "stopped"):
+            self._loop_paused = True  # never auto-replay after a crash/stop
+            self.transport_bar.set_playing(False)
 
     def _on_transport_loop(self, enabled: bool) -> None:
         self._loop = bool(enabled)
