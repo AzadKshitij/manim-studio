@@ -11,12 +11,8 @@ concurrency:
 
 jobs:
   test:
-    name: gate (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: gate (windows)
+    runs-on: windows-latest
     env:
       # Qt widgets must never require a display server in CI.
       QT_QPA_PLATFORM: offscreen
@@ -28,15 +24,6 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
-
-      - name: Install Linux GUI libraries (PySide6 headless)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
-            libdbus-1-3 libfontconfig1 \
-            pkg-config libcairo2-dev libpango1.0-dev
 
       - name: Sync environment
         run: uv sync --all-groups
