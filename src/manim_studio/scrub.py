@@ -55,6 +55,24 @@ def _prepare_animation(animation: Any) -> Any:
     return prepare_animation(animation)
 
 
+def _scale_play_call(
+    args: tuple[Any, ...], kwargs: dict[str, Any], factor: float
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Scale a ``play()`` call's duration by ``factor``.
+
+    manimgl's ``Scene.play`` re-applies an explicit ``run_time`` keyword to every
+    animation (``update_rate_info``), which *overwrites* any per-animation scaling.
+    So when the scene passes ``run_time=`` explicitly, that keyword must be scaled
+    instead; only when it is absent do the animations' own run times need scaling.
+    Getting this wrong was why retimed/speed-adjusted playback looked unchanged for
+    the many scenes that pass ``run_time=`` to every ``play``.
+    """
+    run_time = kwargs.get("run_time")
+    if run_time is not None:
+        return args, {**kwargs, "run_time": float(run_time) * factor}
+    return tuple(ScrubEngine._scaled_animations(args, factor)), kwargs
+
+
 class ScrubEngine:
     """Owns one scene instance and poses it at arbitrary times.
 
@@ -204,7 +222,8 @@ class ScrubEngine:
         factor = self._factor(block)
         self._play_counter += 1
         if factor != 1.0:
-            return self._orig_play(*self._scaled_animations(args, factor), **kwargs)
+            scaled_args, scaled_kwargs = _scale_play_call(args, kwargs, factor)
+            return self._orig_play(*scaled_args, **scaled_kwargs)
         return self._orig_play(*args, **kwargs)
 
     @staticmethod
@@ -320,7 +339,8 @@ class TimingScaler:
         factor = self._factor()
         if not args or factor == 1.0:
             return self._orig_play(*args, **kwargs)
-        return self._orig_play(*ScrubEngine._scaled_animations(args, factor), **kwargs)
+        scaled_args, scaled_kwargs = _scale_play_call(args, kwargs, factor)
+        return self._orig_play(*scaled_args, **scaled_kwargs)
 
     def _wait(self, *args: Any, **kwargs: Any) -> Any:
         factor = self._factor()

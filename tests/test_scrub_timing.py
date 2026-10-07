@@ -27,7 +27,12 @@ class _FakeScene:
         self.default_wait_time = 1.0
         self.calls: list[tuple[str, Any]] = []
 
-    def play(self, *animations: Any, **kwargs: Any) -> None:
+    def play(self, *animations: Any, run_time: float | None = None, **kwargs: Any) -> None:
+        # manimgl's Scene.play applies an explicit run_time to every animation,
+        # overwriting any prior scaling; the fake mirrors that so scaling bugs show.
+        if run_time is not None:
+            for animation in animations:
+                animation.run_time = run_time
         self.calls.append(("play", [animation.run_time for animation in animations]))
         if animations:
             self.num_plays += 1
@@ -68,6 +73,14 @@ class TestScrubEngineScaling:
         engine._target = 5.0
         scene.play(_FakeAnimation(0.25))
         assert scene.calls[-1] == ("play", [0.25])
+
+    def test_replay_scales_an_explicit_run_time(self) -> None:
+        scene = _FakeScene()
+        blocks = (TimelineBlock(0, "ShowCreation", 0.0, 1.0),)
+        engine = scrub.ScrubEngine(scene, blocks, factors={0: 2.0})
+        engine._target = 5.0  # past the timeline: replay the block instead of pausing
+        scene.play(_FakeAnimation(0.5), run_time=0.5)
+        assert scene.calls[-1] == ("play", [1.0])  # 0.5 * 2.0 via the kwarg
 
 
 class TestTimingScaler:
@@ -114,6 +127,14 @@ class TestTimingScalerSpeed:
         scrub.TimingScaler(scene, {}, speed=0.5)
         scene.play(_FakeAnimation(1.0))
         assert scene.calls[-1] == ("play", [2.0])
+
+    def test_speed_scales_an_explicit_run_time(self) -> None:
+        # The scene passes run_time=, which Scene.play re-applies over any
+        # per-animation scaling: the kwarg itself must be scaled.
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=2.0)
+        scene.play(_FakeAnimation(1.0), run_time=1.0)
+        assert scene.calls[-1] == ("play", [0.5])
 
     def test_speed_composes_with_a_block_factor(self) -> None:
         scene = _FakeScene()
