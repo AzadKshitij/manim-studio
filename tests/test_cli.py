@@ -154,6 +154,7 @@ class TestExportOptionParsing:
 
 @pytest.mark.manim
 class TestTraceCommand:
+    @pytest.mark.gl
     def test_trace_json(self, capsys) -> None:
         assert main(["trace", str(SCENE_FILE), "--json"]) == 0
         payload = json.loads(capsys.readouterr().out)
@@ -161,6 +162,7 @@ class TestTraceCommand:
         assert len(payload["blocks"]) >= 12
         assert payload["stats"]["play"] >= 10
 
+    @pytest.mark.gl
     def test_trace_writes_log(self, tmp_path: Path) -> None:
         log_path = tmp_path / "log.json"
         assert main(["trace", str(SCENE_FILE), "--log", str(log_path)]) == 0
@@ -178,6 +180,7 @@ class TestTraceCommand:
 
 @pytest.mark.manim
 class TestStillCommand:
+    @pytest.mark.gl
     def test_still_written(self, capsys, tmp_path: Path) -> None:
         output = tmp_path / "frame.png"
         code = main(["still", str(SCENE_FILE), "-o", str(output), "--resolution", "160", "90"])

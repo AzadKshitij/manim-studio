@@ -166,6 +166,7 @@ class TestRunFlow:
             )
 
         monkeypatch.setattr(dialog, "_plan_builder", fake_plan)
+        dialog._refresh()  # rebuild the plan with the fake (a stale real plan would run manimgl)
 
     def test_export_runs_through_controller(
         self,
@@ -191,6 +192,7 @@ class TestRunFlow:
             scene_name="DemoScene",
             quality="high",
         )
+        dlg._refresh()  # rebuild the plan with the fake (a stale real plan would run manimgl)
         dlg._export_button.click()
         assert dlg._state == "running"
         assert dlg._cancel_button.isVisible()
@@ -283,6 +285,7 @@ class TestRunFlow:
             scene_name="DemoScene",
             quality="high",
         )
+        dlg._refresh()  # rebuild the plan with the fake (a stale real plan would run manimgl)
         dlg._export_button.click()
         qtbot.waitUntil(lambda: dlg._state == "done", timeout=10_000)
         assert opened == ["open"]
