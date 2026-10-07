@@ -1,7 +1,7 @@
 # Manim Studio
 
 <p>
-  <a href="https://github.com/azadk/manim-studio/actions/workflows/ci.yml"><img src="https://github.com/azadk/manim-studio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/AzadKshitij/manim-studio/actions/workflows/ci.yml"><img src="https://github.com/AzadKshitij/manim-studio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.13-blue.svg" alt="Python 3.13">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platforms: Windows, macOS, Linux">

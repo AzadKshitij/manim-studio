@@ -41,10 +41,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/azadk/manim-studio"
-Repository = "https://github.com/azadk/manim-studio"
-Issues = "https://github.com/azadk/manim-studio/issues"
-Changelog = "https://github.com/azadk/manim-studio/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/AzadKshitij/manim-studio"
+Repository = "https://github.com/AzadKshitij/manim-studio"
+Issues = "https://github.com/AzadKshitij/manim-studio/issues"
+Changelog = "https://github.com/AzadKshitij/manim-studio/blob/main/CHANGELOG.md"
 
 [project.scripts]
 manim-studio = "manim_studio.cli:main"

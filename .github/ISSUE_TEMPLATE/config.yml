@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question or idea
-    url: https://github.com/azadk/manim-studio/discussions
+    url: https://github.com/AzadKshitij/manim-studio/discussions
     about: Ask usage questions and discuss ideas with the community.
   - name: Report a security vulnerability
-    url: https://github.com/azadk/manim-studio/security/advisories/new
+    url: https://github.com/AzadKshitij/manim-studio/security/advisories/new
     about: Please report security issues privately, not as a public issue.

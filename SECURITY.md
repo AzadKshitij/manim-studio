@@ -15,7 +15,7 @@ release receives security fixes.
 Please report suspected vulnerabilities **privately** via GitHub Security
 Advisories:
 
-👉 https://github.com/azadk/manim-studio/security/advisories/new
+👉 https://github.com/AzadKshitij/manim-studio/security/advisories/new
 
 Do not open a public issue for a security problem. Include:
 

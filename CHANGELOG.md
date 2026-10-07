@@ -58,6 +58,6 @@ First versioned update after the initial shareable 0.1.0 build.
   export via `manimgl -w`, and the headless CLI (`check`, `trace`, `export`,
   `new`, `preview`).
 
-[Unreleased]: https://github.com/azadk/manim-studio/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/azadk/manim-studio/releases/tag/v1.1.0
-[0.1.0]: https://github.com/azadk/manim-studio/releases/tag/v0.1.0
+[Unreleased]: https://github.com/AzadKshitij/manim-studio/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/AzadKshitij/manim-studio/releases/tag/v1.1.0
+[0.1.0]: https://github.com/AzadKshitij/manim-studio/releases/tag/v0.1.0
