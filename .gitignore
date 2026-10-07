@@ -21,6 +21,9 @@ trace.json
 media/
 videos/
 
+# Benchmark runs (baselines/comparisons under docs/perf are tracked)
+docs/perf/latest.json
+
 # Local scratch scenes (generated; tests/scenes is tracked)
 /scenes/
 

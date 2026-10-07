@@ -1,0 +1,50 @@
+{
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-07T19:12:30",
+  "machine": {
+    "cpu_count": 8,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD",
+    "python": "3.13.12"
+  },
+  "micro": {
+    "lz4-block": {
+      "decode_ms": 3.419,
+      "encode_ms": 2.39,
+      "payload_bytes": 383383,
+      "ratio": 9.62
+    },
+    "zlib-1": {
+      "decode_ms": 12.528,
+      "encode_ms": 33.809,
+      "payload_bytes": 410051,
+      "ratio": 8.99
+    },
+    "zlib-6": {
+      "decode_ms": 7.051,
+      "encode_ms": 61.006,
+      "payload_bytes": 125297,
+      "ratio": 29.42
+    },
+    "zstd-1": {
+      "decode_ms": 5.016,
+      "encode_ms": 5.731,
+      "payload_bytes": 138363,
+      "ratio": 26.64
+    },
+    "zstd-3": {
+      "decode_ms": 5.093,
+      "encode_ms": 7.651,
+      "payload_bytes": 140203,
+      "ratio": 26.29
+    }
+  },
+  "parser": {
+    "payload_bytes": 410071,
+    "round_trip_ms": 10.9
+  }
+}

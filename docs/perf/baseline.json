@@ -1,0 +1,76 @@
+{
+  "end_to_end": {
+    "crawl_fps": 22.96,
+    "crawl_frames": 107,
+    "crawl_seconds": 4.66,
+    "host_timings": {
+      "crawl_capture": {
+        "avg_ms": 8.304,
+        "count": 107,
+        "max_ms": 30.359
+      },
+      "crawl_encode": {
+        "avg_ms": 12.505,
+        "count": 107,
+        "max_ms": 26.901
+      },
+      "encode": {
+        "avg_ms": 18.313,
+        "count": 94,
+        "max_ms": 31.364
+      },
+      "readback": {
+        "avg_ms": 5.781,
+        "count": 94,
+        "max_ms": 19.328
+      },
+      "render": {
+        "avg_ms": 10.829,
+        "count": 94,
+        "max_ms": 33.93
+      },
+      "send": {
+        "avg_ms": 2.123,
+        "count": 93,
+        "max_ms": 7.81
+      }
+    },
+    "play_frames": 91,
+    "play_realtime_ratio": 1.233,
+    "play_seconds": 3.637,
+    "playback_fps": 25.02,
+    "stopped": true,
+    "total_duration": 2.95,
+    "trace_seconds": 4.84
+  },
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-07T19:13:23",
+  "machine": {
+    "cpu_count": 8,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD",
+    "python": "3.13.12"
+  },
+  "micro": {
+    "zlib-1": {
+      "decode_ms": 10.281,
+      "encode_ms": 33.279,
+      "payload_bytes": 410051,
+      "ratio": 8.99
+    },
+    "zlib-6": {
+      "decode_ms": 7.243,
+      "encode_ms": 62.587,
+      "payload_bytes": 125297,
+      "ratio": 29.42
+    }
+  },
+  "parser": {
+    "payload_bytes": 410071,
+    "round_trip_ms": 10.783
+  }
+}
