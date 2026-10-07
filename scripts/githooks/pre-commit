@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pre-commit gate: fast static checks (mirrors CI's first steps).
+# Bypass with `git commit --no-verify` (not recommended).
+set -e
+command -v uv >/dev/null 2>&1 || {
+  echo "pre-commit: 'uv' not found on PATH; install it (https://docs.astral.sh/uv/) or bypass with --no-verify." >&2
+  exit 1
+}
+uv run ruff format --check src tests
+uv run ruff check src tests
+uv run mypy
+# Catch Linux-only typing errors from any checkout (e.g. ctypes.windll).
+uv run mypy --platform linux

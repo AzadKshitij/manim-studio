@@ -21,6 +21,7 @@ before a non-trivial change. The highlights:
 
 ```powershell
 uv sync --all-groups
+scripts/install-hooks.ps1  # recommended: installs pre-commit (static gate) + pre-push (test gate) hooks
 ```
 
 Python 3.13, [`uv`](https://docs.astral.sh/uv/), an OpenGL 3.3 context (preview,

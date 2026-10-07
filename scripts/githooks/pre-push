@@ -1,0 +1,9 @@
+#!/bin/sh
+# Pre-push gate: the test subset CI runs (offscreen, no GL/slow).
+# Bypass with `git push --no-verify` (not recommended).
+set -e
+command -v uv >/dev/null 2>&1 || {
+  echo "pre-push: 'uv' not found on PATH; install it (https://docs.astral.sh/uv/) or bypass with --no-verify." >&2
+  exit 1
+}
+uv run pytest -m "not gl and not slow" -q
