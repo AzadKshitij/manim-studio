@@ -808,6 +808,16 @@ class TestTransport:
         finally:
             self._restore(window)
 
+    def test_loop_enabled_but_idle_still_shows_play(self, window: MainWindow) -> None:
+        """The bug: an idle host with Loop checked showed Pause but still played."""
+        self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window._on_host_status("idle", {})
+            assert window.transport_bar.playing() is False
+        finally:
+            self._restore(window)
+
     def test_host_crash_resets_the_play_button(self, window: MainWindow) -> None:
         self._stub(window)
         try:

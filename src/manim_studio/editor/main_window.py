@@ -89,6 +89,7 @@ class MainWindow(QMainWindow):
         self._timing = TimingOverrides(TimelineLog(()))
         self._loop = False
         self._loop_paused = False
+        self._was_playing = False
         self._speed = 1.0
 
         self.editor = CodeEditor(self)
@@ -643,19 +644,25 @@ class MainWindow(QMainWindow):
         """Keep the play/pause label honest across loop cycles.
 
         A loop replays in the stopped handler, so the host reports ``idle`` for a
-        moment at each cycle boundary before the next cycle's ``playing``.  While
-        the loop is active the button should stay on Pause through that gap rather
-        than flashing back to Play.
+        moment at each cycle boundary before the next cycle's ``playing``.  The
+        button should stay on Pause through that gap - but only when a cycle was
+        actually rolling into the next one.  An idle host with the loop merely
+        enabled (never playing) must still read Play.
         """
-        keep_pause = state == "playing" or (
-            state == "idle" and self._loop and not self._loop_paused
-        )
-        self.transport_bar.set_playing(keep_pause)
+        if state == "playing":
+            self._was_playing = True
+            self.transport_bar.set_playing(True)
+            return
+        if state == "idle" and self._was_playing and self._loop and not self._loop_paused:
+            return  # a loop cycle ended; the replay is about to resume
+        self._was_playing = False
+        self.transport_bar.set_playing(False)
 
     def _on_host_state_changed(self, state: str) -> None:
         """Reset playback intent when the host dies or shuts down."""
         if state in ("crashed", "stopped"):
             self._loop_paused = True  # never auto-replay after a crash/stop
+            self._was_playing = False
             self.transport_bar.set_playing(False)
 
     def _on_transport_loop(self, enabled: bool) -> None:
