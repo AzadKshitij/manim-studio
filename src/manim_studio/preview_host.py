@@ -250,6 +250,9 @@ class SceneHost:
         self.stop_event = threading.Event()
         self.quit_event = threading.Event()
         self.commands: queue.Queue[dict[str, Any]] = queue.Queue()
+        #: Bumped on every STOP/QUIT so a play queued *before* a stop can tell it
+        #: was superseded (a loop replay racing a pause must not resurrect audio).
+        self._stop_gen = 0
         self.window: Any = None
         self.module: Any = None
         self.scene: Any = None
@@ -347,10 +350,14 @@ class SceneHost:
             for message in reader.messages():
                 command = message.get("cmd")
                 if command in (Command.STOP, Command.QUIT):
+                    self._stop_gen += 1
                     self.stop_event.set()
                 if command == Command.QUIT:
                     self.quit_event.set()
                     break
+                # Stamp the stop generation at enqueue time: a later STOP makes
+                # this command stale, so a play cannot clear the pause state.
+                message["_stop_gen"] = self._stop_gen
                 self.commands.put(message)
         except ipc.ProtocolError as exc:
             self.log.warning("control protocol error: %s", exc)
@@ -908,6 +915,11 @@ class SceneHost:
     def _cmd_play(self, message: dict[str, Any]) -> None:
         if not self.blocks:
             self.emit_status("idle", note="nothing to play")
+            return
+        if message.get("_stop_gen") != self._stop_gen:
+            # A STOP arrived after this play was queued (a loop replay racing a
+            # user pause): honour the stop instead of starting another cycle.
+            self.emit_status("idle")
             return
         start = int(message.get("from") or 0)
         start = max(0, min(start, len(self.blocks) - 1))

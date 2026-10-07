@@ -108,6 +108,34 @@ class TestApplyTiming:
         assert host.blocks == host._base_blocks
 
 
+class TestStopRace:
+    """A play queued before a STOP must not clear the pause (loop replay race)."""
+
+    def _host(self) -> SceneHost:
+        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
+        host.blocks = (TimelineBlock(0, "A", 0.0, 1.0),)
+        return host
+
+    def test_a_play_superseded_by_a_stop_is_ignored(self) -> None:
+        host = self._host()
+        host._stop_gen = 5
+        seen: list[tuple[str, dict]] = []
+        host.emit = lambda event, **payload: seen.append((event, payload))  # type: ignore[method-assign]
+        host._cmd_play({"cmd": "play", "from": 0, "_stop_gen": 4})
+        assert seen == [(Event.STATUS, {"state": "idle"})]
+
+    def test_a_fresh_play_proceeds_past_the_guard(self) -> None:
+        host = self._host()
+        host._stop_gen = 5
+
+        def boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("reached make_scene")
+
+        host._make_scene = boom  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="reached make_scene"):
+            host._cmd_play({"cmd": "play", "from": 0, "_stop_gen": 5})
+
+
 class TestSceneCallLines:
     def test_keeps_only_lines_inside_the_scene_file(self, tmp_path: Path) -> None:
         scene = tmp_path / "scene.py"
