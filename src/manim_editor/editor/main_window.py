@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -38,15 +38,17 @@ from manim_editor.editor.export_dialog import ExportDialog
 from manim_editor.editor.file_watcher import FileWatcher
 from manim_editor.editor.icon import load_icon
 from manim_editor.editor.preview_controller import PreviewController
+from manim_editor.editor.preview_events import PreviewEvents
 from manim_editor.editor.preview_panel import PreviewPanel
 from manim_editor.editor.shell_panel import ShellPanel
 from manim_editor.editor.stats_controller import StatsController
 from manim_editor.editor.timeline_controller import MediaTransport
 from manim_editor.editor.timeline_widget import TimelineWidget
+from manim_editor.editor.video_mode import VideoModeController
 from manim_editor.scene_runner import check_scene_file
 from manim_editor.stats import process_rss_bytes
 from manim_editor.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
-from manim_editor.timeline_model import TimelineLog, format_duration, parse_log
+from manim_editor.timeline_model import TimelineLog
 
 __all__ = ["MainWindow"]
 
@@ -76,10 +78,6 @@ class MainWindow(QMainWindow):
         self._auto_reload = True
         self._auto_preview = auto_preview
         self._restore_settings = restore_settings
-        self._video_mode = False
-        self._playing = False
-        self._play_from_index: int | None = None
-        self._total_duration = 0.0
         self._settings = QSettings("ManimEditor", "ManimEditor")
         self._api_names = api_cache.load_api_names()
 
@@ -98,6 +96,29 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_shell_dock()
         self._build_status_bar()
+        self.video = VideoModeController(
+            transport=self.transport,
+            slider=self._scrub_slider,
+            position_label=self._scrub_position,
+            preview_panel=self.preview_panel,
+            timeline=self.timeline,
+            stop_playback=self.controller.stop_playback,
+            status_line=self._set_status,
+            parent=self,
+        )
+        self.events = PreviewEvents(
+            editor=self.editor,
+            timeline=self.timeline,
+            preview_panel=self.preview_panel,
+            shell=self.shell,
+            controller=self.controller,
+            host_state_label=self._host_state_label,
+            initial_frame=self._initial_frame,
+            status_line=self._set_status,
+            refresh_latex=self.refresh_latex_indicator,
+            video_mode_active=lambda: self.video.active,
+            parent=self,
+        )
         self._connect_signals()
 
         self.editor.set_completions(self._api_names)
@@ -222,7 +243,6 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(QLabel(" Scene: "))
         self._scene_combo = QComboBox(self)
         self._scene_combo.setMinimumWidth(140)
-        self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
         toolbar.addWidget(self._scene_combo)
         toolbar.addSeparator()
         self._add_toolbar_action(toolbar, "Reload", self.reload_preview)
@@ -290,27 +310,16 @@ class MainWindow(QMainWindow):
         self.preview_panel.stopRequested.connect(self.request_stop)
         self.timeline.scrubRequested.connect(self.scrub_to_time)
         self.timeline.playToggleRequested.connect(self._toggle_play)
-        self.controller.logReceived.connect(self._on_log)
-        self.controller.statusChanged.connect(self._on_status)
-        self.controller.tickReceived.connect(self._on_tick)
-        self.controller.stoppedReceived.connect(self._on_stopped)
-        self.controller.errorReceived.connect(self._on_error)
+        self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
         self.controller.execResultReceived.connect(self.shell.append_exec_result)
         self.controller.filmstripReceived.connect(self.stats.on_filmstrip)
         self.controller.statsReceived.connect(self.stats.on_stats)
         self.stats.memoryLabelChanged.connect(self._mem_label.setText)
         self.stats.cacheStatusChanged.connect(self.preview_panel.set_cache_status)
-        self.controller.frameReceived.connect(self._on_frame)
         self.controller.hostLogReceived.connect(self.shell.append)
-        self.controller.stateChanged.connect(self._on_host_state)
         self.watcher.file_changed.connect(self._on_file_changed)
         self.watcher.file_missing.connect(lambda path: self._set_status(f"file missing: {path}"))
         self._render_preview_button.clicked.connect(self.render_preview_video)
-        self._scrub_slider.sliderMoved.connect(self._on_slider_moved)
-        self._scrub_slider.sliderReleased.connect(self._on_slider_released)
-        self.transport.frameReady.connect(self._on_transport_frame)
-        self.transport.positionChanged.connect(self._on_transport_position)
-        self.transport.durationChanged.connect(self._on_transport_duration)
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
         self.exports.statusChanged.connect(self._set_status)
         self.exports.outputLine.connect(self.shell.append)
@@ -561,39 +570,43 @@ class MainWindow(QMainWindow):
             self._start_preview()
             return
         # Play from the beginning unless the user explicitly picked a block.
-        index = self._play_from_index if self._play_from_index is not None else 0
-        self._video_mode = False
+        index = self.events.play_from_index if self.events.play_from_index is not None else 0
+        self.video.exit()
         self.controller.play(from_index=index)
 
     def request_stop(self) -> None:
         self.controller.stop_playback()
 
+    def _on_scene_selected(self, name: str) -> None:
+        if self._path is not None and name and self.controller.is_running:
+            self.controller.load(self._path, name)
+
     def _toggle_play(self) -> None:
-        if self._playing:
+        if self.events.playing:
             self.request_stop()
         else:
             self.request_play()
 
     def seek_to_block(self, index: int) -> None:
         """Jump to the end state of a block (used by menus/tests; drag uses scrub)."""
-        self._video_mode = False
-        self._play_from_index = index
+        self.video.exit()
+        self.events.play_from_index = index
         block = self.timeline.log.block_by_index(index)
         if block is not None:
             self.timeline.set_playhead(block.end)
-            self.preview_panel.set_time(block.end, self._total_duration)
+            self.preview_panel.set_time(block.end, self.events.total_duration)
         self.controller.seek(index)
 
     def scrub_to_time(self, time: float) -> None:
         """Continuous scrub: pose the live scene at exactly this time."""
         if self._path is None or not self.controller.is_running:
             return
-        self._video_mode = False
-        limit = max(self._total_duration, 0.0)
+        self.video.exit()
+        limit = max(self.events.total_duration, 0.0)
         position = min(max(float(time), 0.0), limit)
-        self._play_from_index = self.timeline.log.index_at(position)
+        self.events.play_from_index = self.timeline.log.index_at(position)
         self.timeline.set_playhead(position)
-        self.preview_panel.set_time(position, self._total_duration)
+        self.preview_panel.set_time(position, self.events.total_duration)
         self.controller.scrub(position)
 
     # ------------------------------------------------------------------
@@ -652,124 +665,21 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------
-    # Video scrub transport
+    # Stats snapshot
     # ------------------------------------------------------------------
-
-    def _on_slider_moved(self, milliseconds: int) -> None:
-        self._enter_video_mode()
-        self.transport.seek(milliseconds / 1000.0)
-
-    def _on_slider_released(self) -> None:
-        self._enter_video_mode()
-
-    def _enter_video_mode(self) -> None:
-        if self._video_mode:
-            return
-        self._video_mode = True
-        self.controller.stop_playback()
-        self._set_status("scrubbing rendered preview (timeline click returns to live)")
-
-    def _on_transport_frame(self, image: QImage) -> None:
-        if self._video_mode:
-            self.preview_panel.set_frame(image)
-
-    def _on_transport_position(self, seconds: float) -> None:
-        if self._video_mode:
-            self.timeline.set_playhead(seconds)
-            self.preview_panel.set_time(seconds, self.transport.duration)
-            if not self._scrub_slider.isSliderDown():
-                self._scrub_slider.blockSignals(True)
-                self._scrub_slider.setValue(int(seconds * 1000))
-                self._scrub_slider.blockSignals(False)
-
-    def _on_transport_duration(self, seconds: float) -> None:
-        self._scrub_slider.setRange(0, int(seconds * 1000))
-        self._scrub_position.setText(f"0:00.0 / {format_duration(seconds)}")
-
-    # ------------------------------------------------------------------
-    # Preview host events
-    # ------------------------------------------------------------------
-
-    def _on_log(self, message: dict[str, Any]) -> None:
-        try:
-            timeline_log = parse_log(message.get("blocks", []))
-        except Exception as exc:
-            self.shell.append(f"bad trace payload: {exc}")
-            return
-        self.timeline.set_log(timeline_log)
-        self._total_duration = timeline_log.total_duration
-        # A successful trace means the scene now compiles/runs: clear any marker
-        # left by the previous failure.
-        self.editor.clear_error_marker()
-        self.preview_panel.set_cache_status("")
-        # The host shows the final frame by default; line the playhead up with it and
-        # forget any previously selected block so Play restarts from the beginning.
-        self.timeline.set_playhead(self._total_duration if self._initial_frame == "end" else 0.0)
-        self.preview_panel.set_time(self.timeline.playhead_time, self._total_duration)
-        self._play_from_index = None
-        self._set_status(
-            f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
-        )
-
-    def _on_status(self, state: str, message: dict[str, Any]) -> None:
-        note = str(message.get("note", ""))
-        self._playing = state == "playing"
-        self.preview_panel.set_status(state, note)
-        self.timeline.set_playing(self._playing)
-
-    def _on_tick(self, time_seconds: float, _index: int, scrubbing: bool = False) -> None:
-        # While the user is dragging, the widget already owns the playhead: applying
-        # host ticks here would fight the pointer and make it jitter (ticks for
-        # older positions can arrive after the pointer has moved on).
-        if scrubbing:
-            return
-        if self._video_mode:
-            return
-        self.timeline.set_playhead(time_seconds)
-        self.preview_panel.set_time(time_seconds, self._total_duration)
 
     def _editor_stats_snapshot(self) -> dict[str, Any]:
         return {
             "editor_rss": process_rss_bytes(),
             "api_names": len(self._api_names),
             "blocks": self.timeline.log.num_blocks,
-            "total_duration": self._total_duration,
+            "total_duration": self.events.total_duration,
             "preview_size": self._preview_size,
         }
 
-    def _on_stopped(self, message: dict[str, Any]) -> None:
-        self.timeline.set_playing(False)
-        self._set_status("playback stopped" if message.get("user_stopped") else "playback finished")
-
-    def _on_error(self, message: dict[str, Any]) -> None:
-        text = str(message.get("message", "unknown error"))
-        self.preview_panel.set_status("error", text)
-        self.shell.append(f"ERROR: {text}")
-        traceback_text = str(message.get("traceback", ""))
-        if traceback_text:
-            self.shell.append(traceback_text.rstrip())
-        line = message.get("line")
-        if isinstance(line, int):
-            self.editor.set_error_marker(line, text)
-        if "LaTeX" in text or "latex" in text:
-            self.refresh_latex_indicator()
-            self._set_status(f"preview error: {text} — open Tools > LaTeX setup and click Diagnose")
-        else:
-            self._set_status(f"preview error: {text}")
-
-    def _on_frame(self, image: QImage) -> None:
-        if not self._video_mode:
-            self.preview_panel.set_frame(image)
-
-    def _on_host_state(self, state: str) -> None:
-        self._host_state_label.setText(f"preview: {state}")
-        if state == "crashed":
-            self.preview_panel.set_status("crashed", "host process died — press Reload")
-            self._set_status("preview host crashed")
-
-    def _on_scene_selected(self, name: str) -> None:
-        if self._path is not None and name and self.controller.is_running:
-            self.controller.load(self._path, name)
+    # ------------------------------------------------------------------
+    # File watching
+    # ------------------------------------------------------------------
 
     def _on_file_changed(self, path: str) -> None:
         if self.editor.is_modified():

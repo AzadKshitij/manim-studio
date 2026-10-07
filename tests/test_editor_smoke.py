@@ -437,13 +437,13 @@ class TestNewSceneDialog:
 
 class TestTraceAndTimeline:
     def test_log_event_populates_timeline(self, window: MainWindow) -> None:
-        window._on_log(SAMPLE_LOG_EVENT)
+        window.events.on_log(SAMPLE_LOG_EVENT)
         assert window.timeline.log.num_blocks == 3
         assert window.timeline.log.total_duration == pytest.approx(3.5)
-        assert window._total_duration == pytest.approx(3.5)
+        assert window.events.total_duration == pytest.approx(3.5)
 
     def test_seek_updates_playhead(self, window: MainWindow) -> None:
-        window._on_log(SAMPLE_LOG_EVENT)
+        window.events.on_log(SAMPLE_LOG_EVENT)
         window.seek_to_block(2)
         assert window.timeline.playhead_time == pytest.approx(3.5)
 
@@ -453,11 +453,11 @@ class TestTraceAndTimeline:
         window.controller = stub  # type: ignore[assignment]
         try:
             window.open_path(SCENE_FILE)
-            window._on_log(SAMPLE_LOG_EVENT)
+            window.events.on_log(SAMPLE_LOG_EVENT)
             window.scrub_to_time(0.3)  # inside block 0, not snapped to a boundary
             assert stub.scrubs[-1] == pytest.approx(0.3)
             assert window.timeline.playhead_time == pytest.approx(0.3)
-            assert window._play_from_index == 0
+            assert window.events.play_from_index == 0
             window.scrub_to_time(99.0)  # clamped to total
             assert stub.scrubs[-1] == pytest.approx(3.5)
         finally:
@@ -475,7 +475,7 @@ class TestTraceAndTimeline:
         window.editor.set_error_marker(2, "NameError: boom")
         assert window.editor.error_line == 2
 
-        window._on_log(SAMPLE_LOG_EVENT)  # a trace succeeded
+        window.events.on_log(SAMPLE_LOG_EVENT)  # a trace succeeded
         assert window.editor.error_line is None
 
         # The host-restart path must clear the marker too.
@@ -489,28 +489,28 @@ class TestTraceAndTimeline:
         window.controller = stub  # type: ignore[assignment]
         try:
             window.open_path(SCENE_FILE)
-            window._on_log(SAMPLE_LOG_EVENT)
-            window._playing = False
+            window.events.on_log(SAMPLE_LOG_EVENT)
+            window.events.on_status("paused", {})  # host reports not playing
             window._toggle_play()
             assert stub.plays == [0]
-            window._playing = True
+            window.events.on_status("playing", {})
             window._toggle_play()
             assert stub.stops == 1
         finally:
             window.controller = original  # type: ignore[assignment]
 
     def test_tick_moves_playhead(self, window: MainWindow) -> None:
-        window._on_log(SAMPLE_LOG_EVENT)
-        window._on_tick(1.25, 1, False)
+        window.events.on_log(SAMPLE_LOG_EVENT)
+        window.events.on_tick(1.25, 1, False)
         assert window.timeline.playhead_time == pytest.approx(1.25)
 
     def test_malformed_log_is_ignored(self, window: MainWindow) -> None:
-        window._on_log({"blocks": [{"nope": True}]})
+        window.events.on_log({"blocks": [{"nope": True}]})
         assert window.timeline.log.is_empty
 
     def test_error_marks_editor(self, window: MainWindow) -> None:
         window.editor.set_text("line1\nline2\n")
-        window._on_error({"message": "ValueError: boom", "line": 2, "traceback": "trace"})
+        window.events.on_error({"message": "ValueError: boom", "line": 2, "traceback": "trace"})
         assert window.editor.error_line == 2
         assert "boom" in window.shell.output.toPlainText()
 
@@ -519,14 +519,14 @@ class TestFramesAndPreview:
     def test_frame_updates_panel(self, window: MainWindow) -> None:
         image = QImage(32, 24, QImage.Format.Format_RGBA8888)
         image.fill(0xFF0000FF)
-        window._on_frame(image)
+        window.events.on_frame(image)
         assert window.preview_panel.current_image is not None
         assert window.preview_panel.current_image.size().width() == 32
 
     def test_video_mode_ignores_live_frames(self, window: MainWindow) -> None:
-        window._enter_video_mode()
+        window.video.enter()
         image = QImage(16, 16, QImage.Format.Format_RGBA8888)
-        window._on_frame(image)
+        window.events.on_frame(image)
         assert window.preview_panel.current_image is None
 
     def test_preview_video_path(self, window: MainWindow) -> None:
@@ -560,5 +560,5 @@ class TestEditing:
         assert "hello from host" in window.shell.output.toPlainText()
 
     def test_host_state_label(self, window: MainWindow) -> None:
-        window._on_host_state("crashed")
+        window.events.on_host_state("crashed")
         assert "crashed" in window._host_state_label.text()
