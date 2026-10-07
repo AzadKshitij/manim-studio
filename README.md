@@ -1,5 +1,12 @@
 # Manim Studio
 
+<p>
+  <a href="https://github.com/azadk/manim-studio/actions/workflows/ci.yml"><img src="https://github.com/azadk/manim-studio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.13-blue.svg" alt="Python 3.13">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platforms: Windows, macOS, Linux">
+</p>
+
 A production-grade, realtime desktop editor for [ManimGL](https://github.com/3b1b/manim)
 scenes — Windows, macOS and Ubuntu 24+.
 
@@ -98,3 +105,21 @@ See `AGENTS.md` for the full contract, `docs/protocol.md` for the wire protocol,
 `docs/adr/` for decisions, and the skills in `.opencode/skills/` for scene-authoring
 and codebase workflows. `tests/scenes/feature_showcase.py` is the canonical scene
 that exercises every editor, timeline and scene-API feature.
+
+## Contributing
+
+Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md); the
+repository's mandatory contract is [`AGENTS.md`](AGENTS.md). Before any commit,
+run the gate:
+
+```powershell
+uv run ruff format src tests && uv run ruff check src tests && uv run mypy && uv run pytest
+```
+
+Please also read the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and report
+security issues privately per [`SECURITY.md`](SECURITY.md).
+
+## License
+
+[MIT](LICENSE) © 2026 Manim Studio Team. Manim Studio is an independent project
+and is not affiliated with or endorsed by the ManimGL/Manim community.
