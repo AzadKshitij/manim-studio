@@ -149,6 +149,39 @@ class TimelineLog:
         block = self.block_at(time)
         return None if block is None else block.index
 
+    def scaled_block_duration(self, index: int, duration: float) -> TimelineLog:
+        """Return a copy where block ``index`` lasts ``duration`` seconds.
+
+        Later blocks shift so the timeline stays contiguous; earlier blocks are
+        untouched.  This is the model behind dragging a block's right edge on the
+        timeline.  Raises :class:`TimelineError` for an unknown index or a
+        non-finite/negative duration.
+        """
+        if not math.isfinite(duration) or duration < 0:
+            raise TimelineError(f"duration must be finite and >= 0, got {duration!r}")
+        target = self.block_by_index(index)
+        if target is None:
+            raise TimelineError(f"no block with index {index}")
+        delta = duration - target.duration
+        blocks: list[TimelineBlock] = []
+        for block in self.blocks:
+            if block.index == index:
+                blocks.append(replace(block, duration=duration))
+            elif block.index > index:
+                blocks.append(replace(block, start=block.start + delta))
+            else:
+                blocks.append(block)
+        return TimelineLog(tuple(blocks))
+
+    def scaled_block(self, index: int, factor: float) -> TimelineLog:
+        """Return a copy with block ``index``'s duration multiplied by ``factor``."""
+        target = self.block_by_index(index)
+        if target is None:
+            raise TimelineError(f"no block with index {index}")
+        if not math.isfinite(factor) or factor <= 0:
+            raise TimelineError(f"factor must be finite and > 0, got {factor!r}")
+        return self.scaled_block_duration(index, target.duration * factor)
+
     def to_dicts(self) -> list[dict[str, Any]]:
         return [block.to_dict() for block in self.blocks]
 

@@ -96,6 +96,65 @@ class TestScrubbing:
         assert timeline._hover_index == 2
 
 
+class TestResizing:
+    def test_right_edge_press_resizes_instead_of_scrubbing(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        scrub = QSignalSpy(timeline.scrubRequested)
+        resized = QSignalSpy(timeline.blockResized)
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 60))
+        assert timeline._mode == "resize"
+        assert scrub.count() == 0
+        qtbot.mouseMove(timeline, QPoint(225, 60))  # 1.5 s
+        qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(225, 60))
+        assert resized.count() == 1
+        index, duration = resized.at(0)
+        assert index == 0
+        assert duration == pytest.approx(1.5, abs=0.02)
+
+    def test_interior_press_still_scrubs(self, timeline: TimelineWidget, qtbot) -> None:
+        scrub = QSignalSpy(timeline.scrubRequested)
+        qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(75, 60))
+        assert scrub.count() >= 1
+
+    def test_shared_boundary_resizes_the_earlier_block(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        # x=300 is the end of block 1 and the start of block 2; it must retime block 1.
+        resized = QSignalSpy(timeline.blockResized)
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(300, 60))
+        qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(300, 60))
+        assert resized.count() == 1
+        assert resized.at(0)[0] == 1
+
+    def test_drag_preview_is_visual_only_until_release(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 60))
+        qtbot.mouseMove(timeline, QPoint(300, 60))  # 2.0 s
+        display = timeline._display_log()
+        assert display.block_by_index(0).duration == pytest.approx(2.0, abs=0.02)
+        assert display.block_by_index(1).start == pytest.approx(2.0, abs=0.02)
+        # the authoritative log is only updated when the host confirms
+        assert timeline.log.block_by_index(0).duration == 1.0
+        qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(300, 60))
+        assert timeline.log.block_by_index(0).duration == 1.0
+
+    def test_resize_clamps_to_one_frame(self, timeline: TimelineWidget, qtbot) -> None:
+        resized = QSignalSpy(timeline.blockResized)
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 60))
+        qtbot.mouseMove(timeline, QPoint(0, 60))  # would be negative -> clamp
+        qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(0, 60))
+        assert resized.count() == 1
+        assert resized.at(0)[1] == pytest.approx(1.0 / 30.0, abs=1e-6)
+
+    def test_set_log_clears_a_pending_preview(self, timeline: TimelineWidget, qtbot) -> None:
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 60))
+        timeline.set_log(make_log())
+        assert timeline._resize_index is None
+        assert timeline._display_log().block_by_index(0).duration == 1.0
+
+
 class TestViewNavigation:
     def test_plain_wheel_pans(self, timeline: TimelineWidget) -> None:
         timeline.wheelEvent(_wheel(120, Qt.KeyboardModifier.ControlModifier))  # zoom in first

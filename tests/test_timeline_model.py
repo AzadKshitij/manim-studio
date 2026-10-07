@@ -113,6 +113,55 @@ class TestTimelineLog:
         log = make_log(("A", 0.0, 1.0), ("B", 1.0, 1.0))
         assert snap_index(log, 1.2) == 1
 
+    def test_scaled_block_duration_extends_and_shifts_later_blocks(self) -> None:
+        log = make_log(("A", 0.0, 1.0), ("B", 1.0, 2.0), ("C", 3.0, 0.5))
+        edited = log.scaled_block_duration(1, 3.0)
+        assert [(b.index, b.start, b.duration) for b in edited.blocks] == [
+            (0, 0.0, 1.0),
+            (1, 1.0, 3.0),
+            (2, 4.0, 0.5),
+        ]
+        assert edited.total_duration == 4.5
+
+    def test_scaled_block_duration_shortens_and_pulls_later_blocks(self) -> None:
+        log = make_log(("A", 0.0, 1.0), ("B", 1.0, 2.0), ("C", 3.0, 0.5))
+        edited = log.scaled_block_duration(0, 0.25)
+        assert [(b.start, b.duration) for b in edited.blocks] == [
+            (0.0, 0.25),
+            (0.25, 2.0),
+            (2.25, 0.5),
+        ]
+
+    def test_scaled_block_factor(self) -> None:
+        log = make_log(("A", 0.0, 2.0), ("B", 2.0, 1.0))
+        edited = log.scaled_block(0, 2.5)
+        assert edited.blocks[0].duration == 5.0
+        assert edited.blocks[1].start == 5.0
+
+    @pytest.mark.parametrize("duration", [-0.1, float("nan"), float("inf")])
+    def test_scaled_block_duration_rejects_bad_values(self, duration: float) -> None:
+        log = make_log(("A", 0.0, 1.0))
+        with pytest.raises(TimelineError):
+            log.scaled_block_duration(0, duration)
+
+    def test_scaled_block_unknown_index(self) -> None:
+        log = make_log(("A", 0.0, 1.0))
+        with pytest.raises(TimelineError, match="no block"):
+            log.scaled_block(9, 2.0)
+        with pytest.raises(TimelineError, match="no block"):
+            log.scaled_block_duration(9, 2.0)
+
+    @pytest.mark.parametrize("factor", [0.0, -1.0, float("nan")])
+    def test_scaled_block_rejects_bad_factor(self, factor: float) -> None:
+        log = make_log(("A", 0.0, 1.0))
+        with pytest.raises(TimelineError):
+            log.scaled_block(0, factor)
+
+    def test_scaled_block_duration_is_pure(self) -> None:
+        log = make_log(("A", 0.0, 1.0), ("B", 1.0, 1.0))
+        log.scaled_block_duration(0, 5.0)
+        assert log.blocks[0].duration == 1.0  # original untouched
+
 
 class TestSerialization:
     def test_dump_log_is_bare_list(self) -> None:

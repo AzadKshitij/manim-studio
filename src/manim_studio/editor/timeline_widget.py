@@ -2,8 +2,11 @@
 
 A real timeline: continuous drag scrubbing (the preview follows the pointer),
 click-to-position, wheel panning, Ctrl+wheel zooming, zoom-to-block on
-double-click, hover highlighting and keyboard nudging.  The widget is paint-only
-and talks to the application exclusively through signals.
+double-click, hover highlighting and keyboard nudging.  Dragging a block's right
+edge retimes that section: the stretch is drawn live (visual only) and a
+:attr:`TimelineWidget.blockResized` request is emitted on release, which the
+application forwards to the host.  The widget is paint-only and talks to the
+application exclusively through signals.
 """
 
 from __future__ import annotations
@@ -32,6 +35,8 @@ RULER_HEIGHT = 22.0
 MIN_BLOCK_LABEL_WIDTH = 44.0
 CLICK_SLOP_PX = 4.0
 FRAME_STEP = 1.0 / 30.0
+EDGE_GRAB_PX = 5.0
+MIN_BLOCK_DURATION = 1.0 / 30.0
 
 
 def block_color(name: str) -> QColor:
@@ -55,6 +60,7 @@ class TimelineWidget(QWidget):
     scrubRequested = Signal(float)  # scene time under the pointer (continuous)
     playToggleRequested = Signal()
     viewChanged = Signal()
+    blockResized = Signal(int, float)  # block index, requested duration (seconds)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -63,15 +69,18 @@ class TimelineWidget(QWidget):
         self._playhead = 0.0
         self._playing = False
         self._hover_index: int | None = None
-        self._mode: str | None = None  # "scrub" | "pan"
+        self._mode: str | None = None  # "scrub" | "pan" | "resize"
         self._press_pos: QPoint | None = None
         self._last_mouse_x = 0.0
+        self._resize_index: int | None = None
+        self._resize_duration: float | None = None
         self.setMinimumHeight(96)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setToolTip(
-            "Drag: scrub · Wheel: pan · Ctrl+wheel: zoom · Double-click: zoom to block\n"
+            "Drag: scrub · Drag a block's right edge: retime · Wheel: pan · "
+            "Ctrl+wheel: zoom · Double-click: zoom to block\n"
             "←/→: step one frame · Shift+←/→: one second · Home/End · Space: play"
         )
 
@@ -98,6 +107,10 @@ class TimelineWidget(QWidget):
         )
         self._playhead = min(self._playhead, log.total_duration)
         self._hover_index = None
+        if self._mode == "resize":
+            self._mode = None
+        self._resize_index = None
+        self._resize_duration = None
         self.update()
 
     def set_playhead(self, seconds: float) -> None:
@@ -149,6 +162,25 @@ class TimelineWidget(QWidget):
         self.update()
         self.scrubRequested.emit(time)
 
+    def _edge_hit(self, x: float) -> TimelineBlock | None:
+        """Return the block whose right edge is within ``EDGE_GRAB_PX`` of ``x``.
+
+        The shared boundary between two blocks belongs to the earlier block, so
+        dragging it lengthens/shortens the section that ends there.
+        """
+        for block in self._log.blocks:
+            if abs(x - self._view.time_to_x(block.end)) <= EDGE_GRAB_PX:
+                return block
+        return None
+
+    def _display_log(self) -> TimelineLog:
+        """The log to paint: the resize preview while dragging, else the trace."""
+        if self._mode == "resize" and self._resize_index is not None:
+            duration = self._resize_duration
+            if duration is not None:
+                return self._log.scaled_block_duration(self._resize_index, duration)
+        return self._log
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.angleDelta().y() == 0:
             return
@@ -174,6 +206,14 @@ class TimelineWidget(QWidget):
             self._mode = "pan"
             return
         if event.button() == Qt.MouseButton.LeftButton:
+            edge = self._edge_hit(event.position().x())
+            if edge is not None:
+                self._mode = "resize"
+                self._resize_index = edge.index
+                self._resize_duration = edge.duration
+                self._hover_index = edge.index
+                self.update()
+                return
             self._mode = "scrub"
             self._request_scrub(event.position().x())
 
@@ -185,23 +225,44 @@ class TimelineWidget(QWidget):
             self.update()
             self.viewChanged.emit()
             return
+        if self._mode == "resize" and self._resize_index is not None:
+            block = self._log.block_by_index(self._resize_index)
+            if block is not None:
+                duration = self._view.x_to_time(event.position().x()) - block.start
+                self._resize_duration = max(MIN_BLOCK_DURATION, duration)
+            self.update()
+            return
         block = self._log.block_at(self._view.x_to_time(event.position().x()))
         hover = block.index if block is not None else None
+        self.setCursor(
+            Qt.CursorShape.SizeHorCursor
+            if self._edge_hit(event.position().x()) is not None
+            else Qt.CursorShape.ArrowCursor
+        )
         if hover != self._hover_index:
             self._hover_index = hover
             if block is not None:
                 self.setToolTip(
                     f"{block.name}  ·  #{block.index}  ·  "
-                    f"{format_duration(block.start)} - {format_duration(block.end)}"
+                    f"{format_duration(block.start)} - {format_duration(block.end)}\n"
+                    "Drag the right edge to retime this section"
                 )
             self.update()
         if self._mode == "scrub":
             self._request_scrub(event.position().x())
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        was_scrubbing, self._mode = self._mode, None
+        was, self._mode = self._mode, None
         press, self._press_pos = self._press_pos, None
-        if was_scrubbing == "scrub" and press is not None:
+        if was == "resize" and self._resize_index is not None:
+            index, duration = self._resize_index, self._resize_duration
+            self._resize_index = None
+            self._resize_duration = None
+            self.unsetCursor()
+            self.update()
+            if duration is not None:
+                self.blockResized.emit(index, duration)
+        elif was == "scrub" and press is not None:
             self._request_scrub(event.position().x())
         event.accept()
 
@@ -265,8 +326,9 @@ class TimelineWidget(QWidget):
             )
         else:
             metrics = QFontMetrics(self.font())
-            current = self._log.index_at(self._playhead)
-            for block in self._log.blocks:
+            display = self._display_log()
+            current = display.index_at(self._playhead)
+            for block in display.blocks:
                 self._draw_block(
                     painter,
                     block,
