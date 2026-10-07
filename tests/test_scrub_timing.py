@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import types
 from typing import Any
 
+import numpy as np
 import pytest
 
 from manim_studio import scrub
@@ -26,6 +28,9 @@ class _FakeScene:
         self.num_plays = 0
         self.default_wait_time = 1.0
         self.calls: list[tuple[str, Any]] = []
+        self.skip_animations = False
+        self.show_animation_progress = False
+        self.camera = types.SimpleNamespace(fps=30)
 
     def play(self, *animations: Any, run_time: float | None = None, **kwargs: Any) -> None:
         # manimgl's Scene.play applies an explicit run_time to every animation,
@@ -40,6 +45,16 @@ class _FakeScene:
     def wait(self, duration: float | None = None, **kwargs: Any) -> None:
         self.calls.append(("wait", self.default_wait_time if duration is None else duration))
         self.num_plays += 1
+
+    def get_time_progression(
+        self,
+        run_time: float,
+        n_iterations: int | None = None,
+        desc: str = "",
+        override_skip_animations: bool = False,
+    ) -> Any:
+        step = 1.0 / self.camera.fps
+        return np.arange(0.0, float(run_time), step) + step
 
 
 @pytest.fixture(autouse=True)
@@ -116,40 +131,53 @@ class TestTimingScaler:
 
 
 class TestTimingScalerSpeed:
-    def test_speed_double_halves_run_time(self) -> None:
+    def test_speed_leaves_run_time_alone(self) -> None:
+        # run_time must NOT shrink, or scene.time would stop short of the timeline.
         scene = _FakeScene()
         scrub.TimingScaler(scene, {}, speed=2.0)
-        scene.play(_FakeAnimation(1.0))
-        assert scene.calls[-1] == ("play", [0.5])
-
-    def test_half_speed_doubles_run_time(self) -> None:
-        scene = _FakeScene()
-        scrub.TimingScaler(scene, {}, speed=0.5)
-        scene.play(_FakeAnimation(1.0))
-        assert scene.calls[-1] == ("play", [2.0])
-
-    def test_speed_scales_an_explicit_run_time(self) -> None:
-        # The scene passes run_time=, which Scene.play re-applies over any
-        # per-animation scaling: the kwarg itself must be scaled.
-        scene = _FakeScene()
-        scrub.TimingScaler(scene, {}, speed=2.0)
-        scene.play(_FakeAnimation(1.0), run_time=1.0)
-        assert scene.calls[-1] == ("play", [0.5])
-
-    def test_speed_composes_with_a_block_factor(self) -> None:
-        scene = _FakeScene()
-        scrub.TimingScaler(scene, {0: 2.0}, speed=2.0)  # 2.0 / 2.0 -> unchanged
         scene.play(_FakeAnimation(1.0))
         assert scene.calls[-1] == ("play", [1.0])
 
-    def test_speed_scales_waits(self) -> None:
+    def test_speed_scales_the_frame_step_to_run_time(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=2.0)
+        times = scene.get_time_progression(1.0)
+        assert times[1] - times[0] == pytest.approx(2.0 / 30)
+        assert times[-1] == pytest.approx(1.0, abs=2.0 / 30)  # covers the whole block
+
+    def test_half_speed_uses_a_finer_step(self) -> None:
         scene = _FakeScene()
         scrub.TimingScaler(scene, {}, speed=0.5)
+        times = scene.get_time_progression(1.0)
+        assert times[1] - times[0] == pytest.approx(0.5 / 30)
+        assert times[-1] == pytest.approx(1.0, abs=0.5 / 30)
+
+    def test_speed_composes_with_a_block_factor(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {0: 2.0}, speed=2.0)  # retime x2 only; speed is separate
+        scene.play(_FakeAnimation(1.0))
+        assert scene.calls[-1] == ("play", [2.0])
+        times = scene.get_time_progression(2.0)  # the retimed duration
+        assert times[1] - times[0] == pytest.approx(2.0 / 30)
+
+    def test_speed_scales_waits_via_the_time_step(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=2.0)
         scene.wait(1.0)
-        assert scene.calls[-1] == ("wait", 2.0)
+        assert scene.calls[-1] == ("wait", 1.0)  # duration unchanged
+        times = scene.get_time_progression(1.0)
+        assert times[1] - times[0] == pytest.approx(2.0 / 30)
+
+    def test_speed_one_uses_the_scene_default(self) -> None:
+        scene = _FakeScene()
+        scrub.TimingScaler(scene, {}, speed=1.0)
+        times = scene.get_time_progression(1.0)
+        assert times[1] - times[0] == pytest.approx(1.0 / 30)
 
     def test_non_positive_speed_is_treated_as_normal(self) -> None:
         scene = _FakeScene()
         scrub.TimingScaler(scene, {}, speed=0.0)
         scene.play(_FakeAnimation(1.0))
         assert scene.calls[-1] == ("play", [1.0])
+        times = scene.get_time_progression(1.0)
+        assert times[1] - times[0] == pytest.approx(1.0 / 30)

@@ -304,17 +304,22 @@ class ScrubEngine:
 
 
 class TimingScaler:
-    """Scale a scene's ``play``/``wait`` durations from per-block factors.
+    """Retime playback and apply a review-speed multiplier to a scene.
 
-    Real playback runs the user's ``construct`` at manimgl's own speed; wrapping
-    ``play``/``wait`` scales each animation's ``run_time`` (and each wait's
-    duration) so playback reproduces the timeline the user edited, without
-    touching the scene source.  Block indexes come from ``scene.num_plays`` at
-    call entry — exactly the value the tracer records.
+    Real playback runs the user's ``construct`` at manimgl's own pace, so the
+    timeline only becomes real if the replay is adjusted:
 
-    ``speed`` is an extra global multiplier for a review-speed control: ``2.0``
-    plays at double speed (run times halved), ``0.5`` at half speed.  It composes
-    with the per-block retiming factors.
+    * **retiming** (per-block ``factors``) wraps ``play``/``wait`` and scales each
+      animation's ``run_time`` / wait duration, so blocks take the duration the
+      user dragged them to;
+    * **speed** (a global multiplier) instead scales the *frame step* through
+      ``get_time_progression``.  Scaling ``run_time`` would make ``scene.time``
+      stop short of the timeline total (the head would halt partway at 2x), so
+      the animation durations are left alone and only the number of frames per
+      second of scene time changes — ``scene.time`` still reaches the timeline end.
+
+    Block indexes come from ``scene.num_plays`` at call entry, exactly the value
+    the tracer records.
     """
 
     def __init__(self, scene: Any, factors: Mapping[int, float], *, speed: float = 1.0) -> None:
@@ -323,17 +328,18 @@ class TimingScaler:
         self._speed = float(speed) if float(speed) > 0 else 1.0
         self._orig_play = scene.play
         self._orig_wait = scene.wait
+        self._orig_time_progression = scene.get_time_progression
         scene.play = self._play
         scene.wait = self._wait
+        if self._speed != 1.0:
+            scene.get_time_progression = self._time_progression
 
     def _factor(self) -> float:
-        base = 1.0
         try:
             index = int(self._scene.num_plays)
-            base = float(self._factors.get(index, 1.0))
+            return float(self._factors.get(index, 1.0))
         except (AttributeError, TypeError, ValueError):
-            base = 1.0
-        return base / self._speed
+            return 1.0
 
     def _play(self, *args: Any, **kwargs: Any) -> Any:
         factor = self._factor()
@@ -354,6 +360,38 @@ class TimingScaler:
         if args:
             return self._orig_wait(duration * factor, *args[1:], **kwargs)
         return self._orig_wait(**{**kwargs, "duration": duration * factor})
+
+    def _time_progression(
+        self,
+        run_time: float,
+        n_iterations: int | None = None,
+        desc: str = "",
+        override_skip_animations: bool = False,
+    ) -> Any:
+        """Frame times for one play/wait, stepped ``speed``x coarser.
+
+        The per-frame step is ``speed / fps`` of *scene* time, so the loop covers
+        the full ``run_time`` in ``speed``x fewer frames (faster wall-clock) while
+        ``scene.time`` still advances by exactly ``run_time`` — the playhead stays
+        on the timeline.  Skip mode (a single step) and the interactive progress
+        display are left to manimgl.
+        """
+        scene = self._scene
+        if (
+            self._speed == 1.0
+            or getattr(scene, "show_animation_progress", False)
+            or (getattr(scene, "skip_animations", False) and not override_skip_animations)
+            or run_time is None
+            or float(run_time) <= 0
+        ):
+            return self._orig_time_progression(
+                run_time, n_iterations, desc, override_skip_animations
+            )
+        import numpy as np
+
+        fps = float(getattr(scene.camera, "fps", 30) or 30)
+        step = self._speed / max(fps, 1.0)
+        return np.arange(0.0, float(run_time), step) + step
 
 
 class FilmstripCrawler:
