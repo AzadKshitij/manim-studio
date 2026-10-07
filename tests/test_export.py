@@ -77,6 +77,43 @@ class TestBuildExportPlan:
         with pytest.raises(ExportError, match="fps"):
             build_export_plan(_scene_file(tmp_path), fps=30, still=True)
 
+    def test_gif_plan(self, tmp_path: Path) -> None:
+        plan = build_export_plan(_scene_file(tmp_path), output=tmp_path / "loop", gif=True)
+        assert "-i" in plan.argv
+        assert plan.gif
+        assert plan.output_path.suffix == ".gif"
+
+    def test_gif_rejects_still(self, tmp_path: Path) -> None:
+        with pytest.raises(ExportError, match="mutually exclusive"):
+            build_export_plan(_scene_file(tmp_path), still=True, gif=True)
+
+    def test_gif_rejects_non_gif_output(self, tmp_path: Path) -> None:
+        with pytest.raises(ExportError, match="gif"):
+            build_export_plan(_scene_file(tmp_path), output=tmp_path / "mix.mp4", gif=True)
+
+    def test_custom_resolution_skips_preset_flag(self, tmp_path: Path) -> None:
+        plan = build_export_plan(_scene_file(tmp_path), resolution=(360, 240))
+        assert "-r" in plan.argv and "360x240" in plan.argv
+        assert "--hd" not in plan.argv
+        assert plan.resolution == (360, 240)
+
+    def test_resolution_out_of_range_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ExportError, match="out of range"):
+            build_export_plan(_scene_file(tmp_path), resolution=(8192, 1080))
+
+    def test_animation_range_flag(self, tmp_path: Path) -> None:
+        plan = build_export_plan(_scene_file(tmp_path), animation_range=(2, 5))
+        assert "-n" in plan.argv and "2,5" in plan.argv
+        assert plan.animation_range == (2, 5)
+
+    def test_animation_range_backwards_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ExportError, match="range"):
+            build_export_plan(_scene_file(tmp_path), animation_range=(5, 2))
+
+    def test_animation_range_rejected_for_still(self, tmp_path: Path) -> None:
+        with pytest.raises(ExportError, match="not applicable"):
+            build_export_plan(_scene_file(tmp_path), still=True, animation_range=(0, 1))
+
     def test_unknown_quality_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ExportError, match="unknown quality"):
             build_export_plan(_scene_file(tmp_path), quality="insane")

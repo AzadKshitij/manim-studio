@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from manim_editor.cli import _ensure_utf8_console, main
+from manim_editor.cli import _ensure_utf8_console, _parse_range, _parse_resolution, main
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 
@@ -122,6 +122,34 @@ class TestExportErrors:
         with pytest.raises(SystemExit) as excinfo:
             main(["export", str(target), "--quality", "ultra"])
         assert excinfo.value.code == 2
+
+    def test_bad_resolution_is_usage_error(self, tmp_path: Path, capsys) -> None:
+        target = tmp_path / "scene.py"
+        target.write_text("from manimlib import Scene\n")
+        assert main(["export", str(target), "--resolution", "wide"]) == 2
+        assert "invalid --resolution" in capsys.readouterr().err
+
+    def test_bad_range_is_usage_error(self, tmp_path: Path, capsys) -> None:
+        target = tmp_path / "scene.py"
+        target.write_text("from manimlib import Scene\n")
+        assert main(["export", str(target), "--range", "5"]) == 2
+        assert "invalid --range" in capsys.readouterr().err
+
+
+class TestExportOptionParsing:
+    def test_resolution_forms(self) -> None:
+        assert _parse_resolution("360x240") == (360, 240)
+        assert _parse_resolution(" 360X240 ") == (360, 240)
+        assert _parse_resolution(None) is None
+        assert _parse_resolution("360") is None
+        assert _parse_resolution("axb") is None
+
+    def test_range_forms(self) -> None:
+        assert _parse_range("2,5") == (2, 5)
+        assert _parse_range(" 2 , 5 ") == (2, 5)
+        assert _parse_range(None) is None
+        assert _parse_range("2") is None
+        assert _parse_range("a,b") is None
 
 
 @pytest.mark.manim

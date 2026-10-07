@@ -42,7 +42,7 @@ manim-editor gui   [FILE]            open the desktop editor
 manim-editor check FILE              syntax + scene discovery (fast, no GL)
 manim-editor trace FILE [--json]     runtime play/wait trace (blocks, stats)
 manim-editor still FILE -o OUT.png   render the final frame
-manim-editor export FILE -o OUT.mp4  render a video (--quality preview|low|medium|high|4k)
+manim-editor export FILE -o OUT.mp4  render a video (--quality, --fps, --gif, --resolution WxH, --range FROM,TO)
 manim-editor new FILE --template K   scaffold a scene (--list to see templates)
 manim-editor preview FILE            standalone GL preview host
 manim-editor templates --json        scene + insertable snippet templates

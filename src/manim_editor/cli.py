@@ -67,6 +67,32 @@ def _parse_size(text: str) -> tuple[int, int]:
     return parse_size(text)
 
 
+def _parse_resolution(text: str | None) -> tuple[int, int] | None:
+    """``"360x240"`` -> ``(360, 240)``; ``None`` when the text is malformed."""
+    if not text:
+        return None
+    parts = text.strip().lower().split("x")
+    if len(parts) != 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def _parse_range(text: str | None) -> tuple[int, int] | None:
+    """``"2,5"`` -> ``(2, 5)``; ``None`` when the text is malformed."""
+    if not text:
+        return None
+    parts = text.split(",")
+    if len(parts) != 2:
+        return None
+    try:
+        return (int(parts[0].strip()), int(parts[1].strip()))
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
@@ -131,6 +157,14 @@ def cmd_trace(args: argparse.Namespace) -> int:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
+    resolution = _parse_resolution(args.resolution)
+    if args.resolution and resolution is None:
+        print(f"error: invalid --resolution {args.resolution!r}; expected WxH", file=sys.stderr)
+        return 2
+    animation_range = _parse_range(args.range)
+    if args.range and animation_range is None:
+        print(f"error: invalid --range {args.range!r}; expected FROM,TO", file=sys.stderr)
+        return 2
     try:
         plan = build_export_plan(
             args.file,
@@ -139,6 +173,9 @@ def cmd_export(args: argparse.Namespace) -> int:
             quality=args.quality,
             fps=args.fps,
             still=args.still,
+            gif=args.gif,
+            resolution=resolution,
+            animation_range=animation_range,
         )
     except ExportError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -364,6 +401,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export.add_argument("--fps", type=int, default=None)
     export.add_argument("--still", action="store_true", help="render the final frame (PNG)")
+    export.add_argument("--gif", action="store_true", help="render a GIF animation instead of MP4")
+    export.add_argument(
+        "--resolution", default=None, metavar="WxH", help="custom resolution (64..4096 per side)"
+    )
+    export.add_argument(
+        "--range",
+        default=None,
+        metavar="FROM,TO",
+        help="render only animation blocks FROM..TO (0-based, inclusive)",
+    )
     export.add_argument("--json", action="store_true")
     export.set_defaults(func=cmd_export)
 

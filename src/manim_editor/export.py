@@ -55,6 +55,9 @@ class ExportPlan:
     scene_name: str | None
     quality: str
     still: bool = False
+    gif: bool = False
+    resolution: tuple[int, int] | None = None
+    animation_range: tuple[int, int] | None = None
 
     def command_line(self) -> str:
         return " ".join(self.argv)
@@ -81,6 +84,9 @@ def build_export_plan(
     quality: str = "high",
     fps: int | None = None,
     still: bool = False,
+    gif: bool = False,
+    resolution: tuple[int, int] | None = None,
+    animation_range: tuple[int, int] | None = None,
     extra_args: Sequence[str] = (),
 ) -> ExportPlan:
     """Translate editor-friendly options into a ``python -m manimlib`` invocation.
@@ -94,6 +100,10 @@ def build_export_plan(
     ``get_time_progression`` crashes with ``TypeError``.  The config file is written
     eagerly (deterministically and idempotently) because callers may execute the
     argv directly through ``QProcess`` without going through :func:`run_export`.
+
+    ``gif`` maps to manimgl's ``-i`` (GIF output); ``resolution`` maps to ``-r WxH``
+    and overrides the preset ``quality`` flags; ``animation_range`` maps to
+    ``-n start,end`` (0-based, inclusive) so a long scene can be rendered in parts.
     """
     if quality not in QUALITY_FLAGS:
         raise ExportError(f"unknown quality {quality!r}; choose from {sorted(QUALITY_FLAGS)}")
@@ -102,34 +112,59 @@ def build_export_plan(
         raise ExportError(f"scene file does not exist: {scene_file}")
     if still and fps is not None:
         raise ExportError("fps is not applicable when exporting a still")
+    if still and gif:
+        raise ExportError("gif and still are mutually exclusive")
     if fps is not None and not 1 <= int(fps) <= 240:
         raise ExportError(f"fps {fps!r} out of range (1..240)")
+    if resolution is not None:
+        width, height = (int(value) for value in resolution)
+        if not (64 <= width <= 4096 and 64 <= height <= 4096):
+            raise ExportError(f"resolution {width}x{height} out of range (64..4096 per side)")
+    if animation_range is not None:
+        start, end = (int(value) for value in animation_range)
+        if not 0 <= start <= end:
+            raise ExportError(f"invalid animation range {animation_range!r}; expected start <= end")
+        if still:
+            raise ExportError("animation range is not applicable when exporting a still")
 
     requested = Path(output) if output is not None else None
     if requested is not None:
         suffix = requested.suffix.lower()
         if suffix and suffix not in _EXTENSIONS.values():
             raise ExportError(f"unsupported output extension {suffix!r}")
-        extension = suffix if suffix else _EXTENSIONS["png" if still else "mp4"]
+        if gif and suffix and suffix != ".gif":
+            raise ExportError("gif output must use a .gif extension")
+        if still and suffix and suffix != ".png":
+            raise ExportError("still output must use a .png extension")
+        extension = suffix if suffix else _EXTENSIONS["gif" if gif else ("png" if still else "mp4")]
         output_path = requested.with_suffix(extension)
         output_dir = output_path.parent
         file_name = output_path.stem
     else:
-        extension = ".png" if still else ".mp4"
+        extension = _EXTENSIONS["gif" if gif else ("png" if still else "mp4")]
         output_dir = Path.cwd() / "videos"
         stem = scene_name or scene_file.stem
         file_name = stem
         output_path = output_dir / f"{stem}{extension}"
 
+    quality_flags: tuple[str, ...] = () if resolution is not None else QUALITY_FLAGS[quality]
+    resolution_flags: tuple[str, ...] = (
+        ("-r", f"{int(resolution[0])}x{int(resolution[1])}") if resolution is not None else ()
+    )
     module_args: list[str] = [
         str(scene_file),
         *([scene_name] if scene_name else []),
         "-w",
         "--quiet",
-        *QUALITY_FLAGS[quality],
+        *quality_flags,
+        *resolution_flags,
     ]
     if still:
         module_args.append("-s")
+    if gif:
+        module_args.append("-i")
+    if animation_range is not None:
+        module_args.extend(["-n", f"{int(animation_range[0])},{int(animation_range[1])}"])
     module_args.extend(["--video_dir", str(output_dir), "--file_name", file_name])
     if fps is not None:
         module_args.extend(["--config_file", str(_fps_config_path(int(fps)))])
@@ -142,6 +177,9 @@ def build_export_plan(
         scene_name=scene_name,
         quality=quality,
         still=still,
+        gif=gif,
+        resolution=resolution,
+        animation_range=animation_range,
     )
 
 
