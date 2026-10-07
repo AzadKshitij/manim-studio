@@ -419,6 +419,33 @@ class TestHostIntegration:
         assert stopped["user_stopped"] is True
         assert stopped["time"] < 30  # stopped early, not after a full playthrough
 
+    def test_play_at_double_speed_reaches_the_timeline_end(self, host_session: Any) -> None:
+        """Review speed must not shorten scene time (the head reaches the end)."""
+        peer, _, _, _, log_event = host_session
+        total = float(log_event["total_duration"])
+        peer.drain()
+        peer.send(Command.PLAY, **{"from": 0, "rate": 2.0})
+        peer.wait_event(
+            lambda event: event.get("event") == Event.STATUS and event.get("state") == "playing"
+        )
+        stopped = peer.wait_event(lambda event: event.get("event") == Event.STOPPED, timeout=60)
+        assert stopped["time"] == pytest.approx(total, abs=0.4), (stopped["time"], total)
+
+    def test_play_double_speed_is_faster(self, host_session: Any) -> None:
+        """2x really plays faster in wall-clock time (not just a relabelled 1x)."""
+        peer = host_session[0]
+
+        def run(rate: float) -> float:
+            peer.drain()
+            start = time.monotonic()
+            peer.send(Command.PLAY, **{"from": 0, "rate": rate})
+            peer.wait_event(lambda event: event.get("event") == Event.STOPPED, timeout=90)
+            return time.monotonic() - start
+
+        normal = run(1.0)
+        fast = run(2.0)
+        assert fast < normal * 0.85, (normal, fast)
+
     def test_repeated_reloads_are_error_free(self, host_session: Any) -> None:
         """Regression: reloading while an offscreen frame is bound used to raise
         GLError 1282 (deleted window_fbo) on every cycle after the first."""

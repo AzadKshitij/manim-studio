@@ -329,10 +329,14 @@ class TimingScaler:
         self._orig_play = scene.play
         self._orig_wait = scene.wait
         self._orig_time_progression = scene.get_time_progression
+        self._orig_update_frame = scene.update_frame
+        self._pace_virtual: float | None = None
+        self._pace_real = 0.0
         scene.play = self._play
         scene.wait = self._wait
         if self._speed != 1.0:
             scene.get_time_progression = self._time_progression
+            scene.update_frame = self._update_frame
 
     def _factor(self) -> float:
         try:
@@ -392,6 +396,27 @@ class TimingScaler:
         fps = float(getattr(scene.camera, "fps", 30) or 30)
         step = self._speed / max(fps, 1.0)
         return np.arange(0.0, float(run_time), step) + step
+
+    def _update_frame(self, dt: float = 0, force_draw: bool = False) -> Any:
+        """Render a frame, but let the wall clock run ``speed``x faster.
+
+        manimgl paces playback to real time (``time.sleep(max(vt - rt, 0))`` where
+        ``vt`` is scene time since the block started and ``rt`` is wall time), so
+        halving the frame count alone would just lengthen each sleep.  Shifting
+        ``real_animation_start_time`` to ``block_start - vt*(1 - 1/speed)`` makes the
+        sleep target ``vt/speed`` — one ``speed``-th of the wall time for the same
+        scene time — so the animation really plays ``speed``x faster.
+        """
+        scene = self._scene
+        if getattr(scene, "window", None) and not getattr(scene, "skip_animations", False):
+            virtual_start = float(getattr(scene, "virtual_animation_start_time", 0.0))
+            if self._pace_virtual != virtual_start:
+                # manimgl resets both clocks at the start of every play/wait.
+                self._pace_virtual = virtual_start
+                self._pace_real = float(getattr(scene, "real_animation_start_time", 0.0))
+            target = (float(scene.time) - virtual_start) + dt
+            scene.real_animation_start_time = self._pace_real - target * (1.0 - 1.0 / self._speed)
+        return self._orig_update_frame(dt, force_draw)
 
 
 class FilmstripCrawler:

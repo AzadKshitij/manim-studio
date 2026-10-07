@@ -31,6 +31,14 @@ class _FakeScene:
         self.skip_animations = False
         self.show_animation_progress = False
         self.camera = types.SimpleNamespace(fps=30)
+        # Real-time pacing fields manimgl touches in update_frame.
+        self.time = 0.0
+        self.window: Any = None
+        self.virtual_animation_start_time = 0.0
+        self.real_animation_start_time = 0.0
+
+    def update_frame(self, dt: float = 0, force_draw: bool = False) -> None:
+        self.time += dt
 
     def play(self, *animations: Any, run_time: float | None = None, **kwargs: Any) -> None:
         # manimgl's Scene.play applies an explicit run_time to every animation,
@@ -181,3 +189,23 @@ class TestTimingScalerSpeed:
         assert scene.calls[-1] == ("play", [1.0])
         times = scene.get_time_progression(1.0)
         assert times[1] - times[0] == pytest.approx(1.0 / 30)
+
+    def test_update_frame_shortens_the_pacing_clock(self) -> None:
+        scene = _FakeScene()
+        scene.window = object()  # a window makes manimgl pace to real time
+        scene.virtual_animation_start_time = 0.0
+        scene.real_animation_start_time = 100.0
+        scene.time = 0.5
+        scaler = scrub.TimingScaler(scene, {}, speed=2.0)
+        scaler._update_frame(0.1)
+        # target = 0.6; start shifted by target*(1 - 1/2) = 0.3.
+        assert scene.real_animation_start_time == pytest.approx(99.7)
+        scene.time = 0.6
+        scaler._update_frame(0.1)  # same block reuses the captured start
+        assert scene.real_animation_start_time == pytest.approx(100.0 - 0.7 * 0.5)
+
+    def test_update_frame_is_a_passthrough_without_a_window(self) -> None:
+        scene = _FakeScene()
+        scaler = scrub.TimingScaler(scene, {}, speed=2.0)
+        scaler._update_frame(0.1)
+        assert scene.real_animation_start_time == 0.0  # untouched
