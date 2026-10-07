@@ -158,7 +158,6 @@ class CodeEditor(ScintillaEdit):
         self.setIndentationGuides(True)
         self.setScrollWidthTracking(True)
         self.setCaretLineVisible(True)
-        self.setCaretLineBack(_colorref(0x2A2D2E))
         self.setCaretFore(_colorref(0xFFFFFF))
         # Margin 0: line numbers. Margin 1: error glyphs.
         self.setMarginTypeN(0, SC_MARGIN_NUMBER)
@@ -203,6 +202,18 @@ class CodeEditor(ScintillaEdit):
         self.autoCSetIgnoreCase(True)
         self.autoCSetDropRestOfWord(True)
         self.autoCSetMaxHeight(8)
+        # Selection highlight.  Keep the Pygments token colours inside the
+        # selection (setSelFore(False, ...)) and use a theme-appropriate band,
+        # rather than Scintilla's opaque light-grey default which made the
+        # light token colours unreadable on the dark theme.
+        self.setSelBack(True, _colorref(palette["selection_bg"]))
+        self.setSelFore(False, 0)
+        self.setSelAlpha(palette["selection_alpha"])
+        self.setAdditionalSelBack(_colorref(palette["selection_bg"]))
+        self.setAdditionalSelAlpha(palette["selection_alpha"])
+        # Current-line highlight follows the theme too (it used to be pinned dark).
+        self.setCaretLineBack(_colorref(palette["caret_line_bg"]))
+        self.setCaretLineBackAlpha(palette["caret_line_alpha"])
         self.restyle()
 
     @staticmethod
@@ -587,11 +598,20 @@ def _dedent(lines: list[str]) -> list[str]:
     return [line[common:] if len(line) >= common else line for line in lines]
 
 
+# Selection bands sit under the Pygments token colours (setSelFore keeps the
+# token foreground), so they must contrast with the background but stay dark
+# enough on the dark theme for the light token colours (e.g. #F8F8F2) to read.
+# Scintilla's unstyled default is an opaque light grey (#C0C0C0), which washed
+# them out on the dark theme.
 _DARK: dict[str, Any] = {
     "default_fg": 0xD4D4D4,
     "default_bg": 0x1E1E1E,
     "gutter_bg": 0x252526,
     "line_number_fg": 0x858585,
+    "selection_bg": 0x264F78,
+    "selection_alpha": 256,
+    "caret_line_bg": 0x2A2D2E,
+    "caret_line_alpha": 256,
 }
 
 _LIGHT: dict[str, Any] = {
@@ -599,4 +619,8 @@ _LIGHT: dict[str, Any] = {
     "default_bg": 0xFFFFFF,
     "gutter_bg": 0xF3F3F3,
     "line_number_fg": 0x7A7A7A,
+    "selection_bg": 0xADD6FF,
+    "selection_alpha": 256,
+    "caret_line_bg": 0xEDEDED,
+    "caret_line_alpha": 256,
 }

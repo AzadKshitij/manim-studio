@@ -9,6 +9,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
 from manim_studio.editor.code_editor import (
+    _DARK,
+    _LIGHT,
     PY_BUILTIN,
     PY_CLASSNAME,
     PY_COMMENT,
@@ -44,6 +46,31 @@ def editor(qtbot) -> CodeEditor:
     widget.resize(600, 400)
     widget.show()
     return widget
+
+
+# Three multi-line statements, all longer than the sampled x window so the
+# whole region is inside the selection.
+_SELECTION_SOURCE = "grid = NumberPlane()\nself.play(grid.animate.shift(LEFT))\nself.wait()\n"
+
+
+def _region_colours(editor: CodeEditor, *, x0: int = 70, x1: int = 125) -> dict[str, int]:
+    """Colour histogram of the first three text lines of a rendered editor."""
+    image = editor.grab().toImage()
+    counts: dict[str, int] = {}
+    for y in range(2, min(46, image.height())):
+        for x in range(x0, min(x1, image.width())):
+            name = image.pixelColor(x, y).name()
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _dominant_colour(editor: CodeEditor) -> str:
+    counts = _region_colours(editor)
+    return max(counts, key=lambda name: counts[name])
+
+
+def _hex(rgb: int) -> str:
+    return f"#{rgb:06x}"
 
 
 class TestText:
@@ -224,6 +251,38 @@ class TestHighlighting:
         editor.apply_theme(dark=True)
         editor.apply_theme(dark=False)
         assert editor.styleAt(0) == PY_IDENTIFIER
+
+    def test_theme_applies_selection_and_caret_alpha(self, editor: CodeEditor) -> None:
+        editor.apply_theme(dark=True)
+        assert editor.selAlpha() == _DARK["selection_alpha"]
+        assert editor.additionalSelAlpha() == _DARK["selection_alpha"]
+        assert editor.caretLineBackAlpha() == _DARK["caret_line_alpha"]
+        editor.apply_theme(dark=False)
+        assert editor.selAlpha() == _LIGHT["selection_alpha"]
+        assert editor.caretLineBackAlpha() == _LIGHT["caret_line_alpha"]
+
+    def test_selection_band_uses_dark_palette(self, editor: CodeEditor) -> None:
+        editor.set_text(_SELECTION_SOURCE)
+        editor.apply_theme(dark=True)
+        editor.setSel(0, editor.textLength())
+        # A dark-theme band, not Scintilla's opaque light-grey default.
+        assert _dominant_colour(editor) == _hex(_DARK["selection_bg"])
+
+    def test_selection_band_uses_light_palette(self, editor: CodeEditor) -> None:
+        editor.set_text(_SELECTION_SOURCE)
+        editor.apply_theme(dark=False)
+        editor.setSel(0, editor.textLength())
+        assert _dominant_colour(editor) == _hex(_LIGHT["selection_bg"])
+
+    def test_selection_keeps_token_colours(self, editor: CodeEditor) -> None:
+        editor.set_text(_SELECTION_SOURCE)
+        editor.apply_theme(dark=True)
+        editor.setSel(0, editor.textLength())
+        colours = set(_region_colours(editor))
+        # Monokai's name/class green and default text still paint inside the
+        # band: the selection foreground is the token colour, not flattened.
+        assert "#a6e22e" in colours
+        assert "#f8f8f2" in colours
 
 
 class TestCompletion:
