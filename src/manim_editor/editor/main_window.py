@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QProcess, QSettings, Qt, QTimer
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -32,17 +32,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from manim_editor import APP_NAME, ipc
+from manim_editor import APP_NAME
 from manim_editor.editor import api_cache, scene_files
 from manim_editor.editor.code_editor import CodeEditor
 from manim_editor.editor.completion_worker import CompletionWorker
+from manim_editor.editor.export_controller import ExportController
 from manim_editor.editor.file_watcher import FileWatcher
 from manim_editor.editor.icon import load_icon
 from manim_editor.editor.preview_controller import PreviewController
 from manim_editor.editor.preview_panel import PreviewPanel
 from manim_editor.editor.timeline_controller import MediaTransport
 from manim_editor.editor.timeline_widget import TimelineWidget
-from manim_editor.export import build_export_plan
 from manim_editor.scene_runner import check_scene_file
 from manim_editor.stats import format_bytes, process_rss_bytes, usage_percent
 from manim_editor.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
@@ -51,8 +51,6 @@ from manim_editor.timeline_model import TimelineLog, format_duration, parse_log
 __all__ = ["MainWindow"]
 
 log = logging.getLogger(__name__)
-
-PREVIEW_FPS = 15
 
 
 class MainWindow(QMainWindow):
@@ -84,8 +82,6 @@ class MainWindow(QMainWindow):
         self._playing = False
         self._play_from_index: int | None = None
         self._total_duration = 0.0
-        self._preview_process: QProcess | None = None
-        self._export_process: QProcess | None = None
         self._settings = QSettings("ManimEditor", "ManimEditor")
         self._api_names = api_cache.load_api_names()
         self._stats_cache: dict[str, Any] = {}
@@ -95,6 +91,7 @@ class MainWindow(QMainWindow):
         self.preview_panel = PreviewPanel(self)
         self.timeline = TimelineWidget(self)
         self.controller = PreviewController(self)
+        self.exports = ExportController(self)
         self.transport = MediaTransport(self)
         self.watcher = FileWatcher(parent=self)
 
@@ -332,6 +329,11 @@ class MainWindow(QMainWindow):
         self.transport.positionChanged.connect(self._on_transport_position)
         self.transport.durationChanged.connect(self._on_transport_duration)
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
+        self.exports.statusChanged.connect(self._set_status)
+        self.exports.outputLine.connect(self._append_shell_output)
+        self.exports.previewVideoReady.connect(self._on_preview_video_ready)
+        self.exports.previewVideoFailed.connect(self._on_preview_video_failed)
+        self.exports.exportFinished.connect(self._on_export_finished)
         self.editor.completionsRequested.connect(self._on_completions_requested)
         self.editor.signaturesRequested.connect(self._on_signatures_requested)
 
@@ -649,23 +651,9 @@ class MainWindow(QMainWindow):
         if self._path is None:
             self._set_status("open a scene first")
             return
-        if (
-            self._preview_process is not None
-            and self._preview_process.state() != QProcess.ProcessState.NotRunning
-        ):
-            self._set_status("preview render already running")
-            return
-        output = self.preview_video_path()
-        assert output is not None
-        plan = build_export_plan(
-            self._path,
-            self._scene_name(),
-            output=output,
-            quality="preview",
-            fps=PREVIEW_FPS,
+        self.exports.render_preview_video(
+            self._path, self._scene_name(), scene_files.preview_video_path(self._path)
         )
-        self._preview_process = self._spawn_render(plan.argv, self._on_preview_render_finished)
-        self._set_status(f"rendering preview video ({output.name})…")
 
     def export_video_dialog(self) -> None:
         if self._path is None:
@@ -681,17 +669,7 @@ class MainWindow(QMainWindow):
         if self._path is None:
             self._set_status("open a scene first")
             return
-        if (
-            self._export_process is not None
-            and self._export_process.state() != QProcess.ProcessState.NotRunning
-        ):
-            self._set_status("export already running")
-            return
-        plan = build_export_plan(
-            self._path, self._scene_name(), output=output, quality=quality, fps=fps
-        )
-        self._export_process = self._spawn_render(plan.argv, self._on_export_finished)
-        self._set_status(f"exporting {plan.output_path}…")
+        self.exports.export_video(self._path, self._scene_name(), output, quality=quality, fps=fps)
 
     def export_still_dialog(self) -> None:
         if self._path is None:
@@ -699,35 +677,17 @@ class MainWindow(QMainWindow):
         default = str(self._path.with_suffix(".png"))
         path, _ = QFileDialog.getSaveFileName(self, "Export still", default, "PNG image (*.png)")
         if path:
-            plan = build_export_plan(self._path, self._scene_name(), output=path, still=True)
-            self._export_process = self._spawn_render(plan.argv, self._on_export_finished)
-            self._set_status(f"exporting still {plan.output_path.name}…")
+            self.exports.export_still(self._path, self._scene_name(), path)
 
-    def _spawn_render(self, argv: tuple[str, ...], finished_slot: Any) -> QProcess:
-        process = QProcess(self)
-        process.readyReadStandardOutput.connect(lambda: self._drain_render_output(process))
-        process.readyReadStandardError.connect(lambda: self._drain_render_output(process))
-        process.finished.connect(finished_slot)
-        process.start(argv[0], list(argv[1:]))
-        return process
+    def _on_preview_video_ready(self, output: Path) -> None:
+        self.transport.load(output)
+        self._scrub_slider.setEnabled(True)
+        self._set_status(f"preview video ready: {output}")
 
-    def _drain_render_output(self, process: QProcess) -> None:
-        for stream in (process.readAllStandardOutput(), process.readAllStandardError()):
-            text = ipc.as_bytes(stream).decode("utf-8", "replace")
-            for line in text.splitlines():
-                if line.strip():
-                    self._append_shell_output(line)
+    def _on_preview_video_failed(self, exit_code: int) -> None:
+        self._set_status(f"preview render failed (exit {exit_code})")
 
-    def _on_preview_render_finished(self, exit_code: int, _status: Any) -> None:
-        output = self.preview_video_path()
-        if exit_code == 0 and output is not None and output.is_file():
-            self.transport.load(output)
-            self._scrub_slider.setEnabled(True)
-            self._set_status(f"preview video ready: {output}")
-        else:
-            self._set_status(f"preview render failed (exit {exit_code})")
-
-    def _on_export_finished(self, exit_code: int, _status: Any) -> None:
+    def _on_export_finished(self, exit_code: int) -> None:
         self._set_status(
             "export finished" if exit_code == 0 else f"export failed (exit {exit_code})"
         )
@@ -989,11 +949,8 @@ class MainWindow(QMainWindow):
         if self._completion_worker is not None:
             self._completion_worker.stop()
         self.controller.shutdown()
+        self.exports.shutdown()
         self.transport.stop()
-        for process in (self._preview_process, self._export_process):
-            if process is not None and process.state() != QProcess.ProcessState.NotRunning:
-                process.kill()
-                process.waitForFinished(1500)
         if self._restore_settings:
             self._settings.setValue("window/geometry", self.saveGeometry())
         event.accept()
