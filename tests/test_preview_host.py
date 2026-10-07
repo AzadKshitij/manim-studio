@@ -363,9 +363,11 @@ def host_session() -> Any:
 @pytest.mark.gl
 class TestHostIntegration:
     def test_hello_events(self, host_session: Any) -> None:
+        from manim_editor.ipc import PROTOCOL_VERSION
+
         _, _, control_hello, frames_hello, _ = host_session
         assert control_hello["role"] == "host"
-        assert control_hello["protocol"] == 1
+        assert control_hello["protocol"] == PROTOCOL_VERSION
         assert control_hello["embedded"] is True
         assert control_hello["size"] == [320, 180]
         assert frames_hello["role"] == "host"
@@ -682,3 +684,60 @@ class TestCrawlerGuard:
         # A disabled crawl is not restarted by the idle loop.
         host._ensure_crawler()
         assert host._crawler is None
+
+
+class _CaptureControl:
+    """Control-channel double that records emitted messages."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    def send(self, message: dict[str, Any]) -> bool:
+        self.sent.append(dict(message))
+        return True
+
+
+class TestHostStatsPayloads:
+    """STATS/FILMSTRIP payloads carry RAM accounting without needing GL."""
+
+    def _host(self) -> Any:
+        from manim_editor.filmstrip import Filmstrip
+        from manim_editor.preview_host import HostConfig, SceneHost
+
+        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
+        strip = Filmstrip()
+        strip.put(0, b"x" * 1024)
+        strip.put(1, b"y" * 2048)
+        host._filmstrip = strip
+        pump = _NullPump()
+        pump.frames_sent = 7
+        pump.frames_dropped = 2
+        host.frame_pump = pump  # type: ignore[assignment]
+        host.control = _CaptureControl()  # type: ignore[assignment]
+        return host
+
+    def test_filmstrip_payload_reports_bytes_and_budgets(self) -> None:
+        host = self._host()
+        payload = host._filmstrip_payload(frames=2, done=False, capped=False)
+        assert payload["frames"] == 2
+        assert payload["bytes"] == 3072
+        assert payload["max_bytes"] > 0
+        assert payload["max_frames"] > 0
+        assert payload["sent"] == 7
+        assert payload["dropped"] == 2
+        assert "host_rss" in payload
+
+    def test_stats_command_emits_stats_event(self) -> None:
+        from manim_editor.ipc import Command, Event
+
+        host = self._host()
+        host._handle({"cmd": Command.STATS})
+        assert host.control is not None
+        events = [m for m in host.control.sent if m.get("event") == Event.STATS]
+        assert len(events) == 1
+        payload = events[0]
+        assert payload["frames"] == 2
+        assert payload["bytes"] == 3072
+        assert payload["sent"] == 7
+        assert payload["dropped"] == 2
+        assert payload["fps"] == 30

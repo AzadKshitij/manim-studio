@@ -30,6 +30,12 @@ class TestJsonMessages:
         message = {"cmd": Command.SEEK, "index": 3, "note": "héllo"}
         assert decode_message(encode_message(message)) == message
 
+    def test_stats_command_and_event_exist(self) -> None:
+        assert Command.STATS == "stats"
+        assert Event.STATS == "stats"
+        message = {"cmd": Command.STATS}
+        assert decode_message(encode_message(message)) == message
+
     def test_encode_rejects_non_serializable(self) -> None:
         with pytest.raises(ProtocolError):
             encode_message({"bad": object()})

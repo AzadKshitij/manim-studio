@@ -51,6 +51,7 @@ from manim_editor.scene_runner import (
     select_scene_class,
 )
 from manim_editor.scrub import FilmstripCrawler, ScrubEngine, ScrubError, read_upright_rgba
+from manim_editor.stats import process_rss_bytes
 from manim_editor.timeline_model import TimelineBlock
 from manim_editor.tracer import TraceEvent, TraceRecorder
 
@@ -584,16 +585,48 @@ class SceneHost:
                 self._crawler_engine = None
 
     def _on_crawl_progress(self, frames: int, done: bool, capped: bool) -> None:
-        self.emit(
-            Event.FILMSTRIP,
-            trace_id=self._trace_id,
-            frames=frames,
-            done=done,
-            capped=capped,
-            fps=self._fps,
-        )
+        self.emit(Event.FILMSTRIP, **self._filmstrip_payload(frames, done, capped))
         if done:
             self.log.info("filmstrip: %d frames ready (capped=%s)", frames, capped)
+
+    def _filmstrip_payload(self, frames: int, done: bool, capped: bool) -> dict[str, Any]:
+        """Filmstrip progress plus RAM accounting for the editor's stats readout."""
+        strip = self._filmstrip
+        pump = self.frame_pump
+        return {
+            "trace_id": self._trace_id,
+            "frames": frames,
+            "done": done,
+            "capped": capped,
+            "fps": self._fps,
+            "bytes": strip.byte_size if strip is not None else 0,
+            "max_bytes": strip.max_bytes if strip is not None else 0,
+            "max_frames": strip.max_frames if strip is not None else 0,
+            "host_rss": process_rss_bytes(),
+            "sent": pump.frames_sent if pump is not None else 0,
+            "dropped": pump.frames_dropped if pump is not None else 0,
+        }
+
+    def _stats_payload(self) -> dict[str, Any]:
+        """Full on-demand snapshot for the editor's App stats dialog."""
+        strip = self._filmstrip
+        pump = self.frame_pump
+        total = self.blocks[-1].end if self.blocks else 0.0
+        return {
+            "trace_id": self._trace_id,
+            "frames": strip.frames if strip is not None else 0,
+            "bytes": strip.byte_size if strip is not None else 0,
+            "max_bytes": strip.max_bytes if strip is not None else 0,
+            "max_frames": strip.max_frames if strip is not None else 0,
+            "host_rss": process_rss_bytes(),
+            "sent": pump.frames_sent if pump is not None else 0,
+            "dropped": pump.frames_dropped if pump is not None else 0,
+            "fps": self._fps,
+            "blocks": len(self.blocks),
+            "total_duration": total,
+            "size": list(self.config.size),
+            "scene_name": self.scene_class.__name__ if self.scene_class is not None else None,
+        }
 
     def _block_at(self, time_seconds: float) -> TimelineBlock | None:
         if not self.blocks:
@@ -689,6 +722,8 @@ class SceneHost:
                 self._cmd_exec(message)
             elif command == Command.PING:
                 self.emit(Event.PONG, t=time.time())
+            elif command == Command.STATS:
+                self.emit(Event.STATS, **self._stats_payload())
             elif command in (Command.LOAD, Command.RELOAD):
                 self.stop_event.clear()
                 path = message.get("path")

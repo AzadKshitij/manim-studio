@@ -1,4 +1,4 @@
-# Preview protocol (v1)
+# Preview protocol (v2)
 
 The editor (Qt) and the preview host (`manim_editor.preview_host`) communicate over
 loopback TCP. The editor listens; the host connects back to the port passed on argv.
@@ -12,7 +12,7 @@ The editor accepts two connections per host process. Every connection starts wit
 `hello` message that declares its channel:
 
 ```json
-{"event": "hello", "channel": "control", "protocol": 1, "role": "host",
+{"event": "hello", "channel": "control", "protocol": 2, "role": "host",
  "pid": 1234, "scene": "C:/path/scene.py", "scene_name": "Demo",
  "embedded": true, "size": [1280, 720], "fps": 30}
 ```
@@ -36,6 +36,7 @@ The frames channel is only opened in `--embedded` mode.
 | `scrub` | `time` | show the scene at an exact time (filmstrip-first, replay on miss) |
 | `exec` | `code` | run Python in the live scene namespace (IPython) |
 | `ping` | — | liveness check |
+| `stats` | — | report full RAM/cache snapshot (v2) |
 | `quit` | — | clean shutdown |
 
 ## Events (host → editor)
@@ -48,7 +49,8 @@ The frames channel is only opened in `--embedded` mode.
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |
 | `error` | `message`, `traceback`, `line?`, `scene_file?`, `context` | user-scene or command failure |
 | `exec_result` | `ok`, `stdout`, `stderr`, `result`, `error` | reply to `exec` |
-| `filmstrip` | `trace_id`, `frames`, `done`, `capped`, `fps` | background frame-cache progress |
+| `filmstrip` | `trace_id`, `frames`, `done`, `capped`, `fps`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped` | background frame-cache progress with RAM accounting (v2 fields additive; older editors ignore them) |
+| `stats` | `trace_id`, `frames`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `fps`, `blocks`, `total_duration`, `size`, `scene_name?` | on-demand snapshot for the App stats dialog (v2) |
 | `pong` | `t` | reply to `ping` |
 
 `log.blocks` is the spec `log.json` shape:
