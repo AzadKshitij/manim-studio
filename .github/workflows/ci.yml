@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # Qt widgets must never require a display server in CI.
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install Linux GUI libraries (PySide6 headless)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
+            libdbus-1-3 libfontconfig1 \
+            libpango-1.0-0 libpangoft2-1.0-0 libcairo2
+
+      - name: Sync environment
+        run: uv sync --all-groups
+
+      - name: Format check
+        run: uv run ruff format --check src tests
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Tests
+        run: uv run pytest -m "not gl and not slow"

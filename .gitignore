@@ -21,6 +21,9 @@ trace.json
 media/
 videos/
 
+# Local scratch scenes (generated; tests/scenes is tracked)
+/scenes/
+
 # Renders / exports
 *.mp4
 *.mov
