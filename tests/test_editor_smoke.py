@@ -28,6 +28,7 @@ class _StubController:
         self.scrubs: list[float] = []
         self.seeks: list[int] = []
         self.plays: list[int] = []
+        self.timings: list[tuple[list[dict[str, float]], float]] = []
         self.stops = 0
         self.is_running = True
 
@@ -53,6 +54,10 @@ class _StubController:
 
     def stop_playback(self) -> bool:
         self.stops += 1
+        return True
+
+    def set_timing(self, timings, time_seconds: float = 0.0) -> bool:
+        self.timings.append((list(timings), float(time_seconds)))
         return True
 
     def shutdown(self) -> None:
@@ -590,6 +595,58 @@ class TestPlayFromPlayhead:
             assert stub.plays == [0]
         finally:
             window.controller = original  # type: ignore[assignment]
+
+
+class TestNumericDuration:
+    """Double-clicking a block asks for an exact duration and retimes it."""
+
+    def _stub(self, window: MainWindow) -> _StubController:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window._original_controller = original  # type: ignore[attr-defined]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(SAMPLE_LOG_EVENT)
+        # events.on_log was called directly, bypassing the controller signal that
+        # normally rebuilds the timing stack; do it explicitly.
+        window._on_trace_log(SAMPLE_LOG_EVENT)
+        return stub
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_applies_the_typed_duration(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stub = self._stub(window)
+        try:
+            monkeypatch.setattr(
+                main_window_module,
+                "QInputDialog",
+                type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (2.5, True))}),
+            )
+            window.timeline.blockDurationEditRequested.emit(1)
+            assert window.timeline.log.block_by_index(1).duration == pytest.approx(2.5)
+            assert stub.timings and stub.timings[-1][0] == [{"index": 1, "duration": 2.5}]
+        finally:
+            self._restore(window)
+
+    def test_cancelling_changes_nothing(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stub = self._stub(window)
+        try:
+            before = window.timeline.log.block_by_index(1).duration
+            monkeypatch.setattr(
+                main_window_module,
+                "QInputDialog",
+                type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (9.0, False))}),
+            )
+            window.timeline.blockDurationEditRequested.emit(1)
+            assert window.timeline.log.block_by_index(1).duration == pytest.approx(before)
+            assert stub.timings == []
+        finally:
+            self._restore(window)
 
 
 class TestFramesAndPreview:

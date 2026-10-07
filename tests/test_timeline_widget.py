@@ -210,14 +210,15 @@ class TestResizing:
         assert activated.count() == 1
         assert activated.at(0)[0] == 0
 
-    def test_plain_double_click_zooms_without_activating(
+    def test_plain_double_click_requests_a_duration_edit(
         self, timeline: TimelineWidget, qtbot
     ) -> None:
+        duration = QSignalSpy(timeline.blockDurationEditRequested)
         activated = QSignalSpy(timeline.blockActivated)
-        before = timeline.view().span
         qtbot.mouseDClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(60, 60))
+        assert duration.count() == 1
+        assert duration.at(0)[0] == 0
         assert activated.count() == 0
-        assert timeline.view().span < before
 
     def test_set_log_clears_a_pending_preview(self, timeline: TimelineWidget, qtbot) -> None:
         qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 60))
@@ -244,10 +245,9 @@ class TestViewNavigation:
         timeline.wheelEvent(_wheel(-120, Qt.KeyboardModifier.ControlModifier))
         assert timeline.view().span == pytest.approx(4.0, abs=0.01)
 
-    def test_double_click_zooms_to_block(self, timeline: TimelineWidget, qtbot) -> None:
+    def test_zoom_to_block_frames_the_block(self, timeline: TimelineWidget) -> None:
         # Block 2 spans [2,4] -> span 2.3s, start clamped so the view stays inside [0,4]
-        pos = QPoint(int(3.0 / 4.0 * 600), 60)
-        qtbot.mouseDClick(timeline, Qt.MouseButton.LeftButton, pos=pos)
+        timeline.zoom_to_block(2)
         assert timeline.view().span == pytest.approx(2.0 * 1.15, abs=0.05)
         assert timeline.view().start == pytest.approx(4.0 - 2.3, abs=0.05)
 

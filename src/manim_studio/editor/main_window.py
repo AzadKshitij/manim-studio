@@ -322,6 +322,7 @@ class MainWindow(QMainWindow):
         self.timeline.playToggleRequested.connect(self._toggle_play)
         self.timeline.blockResized.connect(self._on_block_resized)
         self.timeline.blockActivated.connect(self._on_block_activated)
+        self.timeline.blockDurationEditRequested.connect(self._edit_block_duration)
         self.timeline.undoRequested.connect(self._undo_timing)
         self.timeline.redoRequested.connect(self._redo_timing)
         self.controller.logReceived.connect(self._on_trace_log)
@@ -677,6 +678,26 @@ class MainWindow(QMainWindow):
         if not self._timing.set_duration(index, duration):
             return
         self._push_timing()
+
+    def _edit_block_duration(self, index: int) -> None:
+        """Double-click a block: prompt for an exact duration and retime it."""
+        if self._path is None or not self.controller.is_running:
+            return
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        minimum = 1.0 / 30.0
+        duration, accepted = QInputDialog.getDouble(
+            self,
+            "Block duration",
+            f"Block {index} · {block.name}\nduration in seconds:",
+            block.duration,
+            minimum,
+            3600.0,
+            3,
+        )
+        if accepted:
+            self._on_block_resized(index, duration)
 
     def _on_block_activated(self, index: int) -> None:
         """Ctrl+double-click on a block: jump the editor to its call site."""
