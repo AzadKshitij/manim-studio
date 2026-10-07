@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QProcess, QSettings, QStandardPaths, Qt
+from PySide6.QtCore import QProcess, QSettings, QStandardPaths, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -46,6 +46,7 @@ from manim_editor.editor.timeline_controller import MediaTransport
 from manim_editor.editor.timeline_widget import TimelineWidget
 from manim_editor.export import build_export_plan
 from manim_editor.scene_runner import check_scene_file
+from manim_editor.stats import format_bytes, process_rss_bytes, usage_percent
 from manim_editor.templates import (
     SCENE_TEMPLATES,
     SNIPPET_TEMPLATES,
@@ -94,6 +95,8 @@ class MainWindow(QMainWindow):
         self._export_process: QProcess | None = None
         self._settings = QSettings("ManimEditor", "ManimEditor")
         self._api_names = self._load_api_names()
+        self._stats_cache: dict[str, Any] = {}
+        self._stats_dialog: Any = None
 
         self.editor = CodeEditor(self)
         self.preview_panel = PreviewPanel(self)
@@ -221,6 +224,7 @@ class MainWindow(QMainWindow):
         self._add_action(tools_menu, "LaTeX setup…", self.open_latex_setup)
 
         help_menu = menu_bar.addMenu("&Help")
+        self._add_action(help_menu, "App stats…", self.show_app_stats)
         self._add_action(help_menu, "About", self.show_about)
 
         toolbar = QToolBar("Main", self)
@@ -261,12 +265,19 @@ class MainWindow(QMainWindow):
         bar = QStatusBar(self)
         self.setStatusBar(bar)
         self._host_state_label = QLabel("preview: off")
+        self._mem_label = QLabel("cache: —")
+        self._mem_label.setToolTip("Filmstrip cache RAM and process memory (Help > App stats…)")
         self._latex_label = QLabel("")
         self._cursor_label = QLabel("Ln 1, Col 1")
         bar.addPermanentWidget(self._cursor_label)
         bar.addPermanentWidget(self._latex_label)
+        bar.addPermanentWidget(self._mem_label)
         bar.addPermanentWidget(self._host_state_label)
         self.refresh_latex_indicator()
+        self._mem_timer = QTimer(self)
+        self._mem_timer.setInterval(2000)
+        self._mem_timer.timeout.connect(self._refresh_memory_label)
+        self._mem_timer.start()
 
     def refresh_latex_indicator(self) -> None:
         from manim_editor.latex import latex_status
@@ -315,6 +326,7 @@ class MainWindow(QMainWindow):
         self.controller.errorReceived.connect(self._on_error)
         self.controller.execResultReceived.connect(self._on_exec_result)
         self.controller.filmstripReceived.connect(self._on_filmstrip)
+        self.controller.statsReceived.connect(self._on_stats)
         self.controller.frameReceived.connect(self._on_frame)
         self.controller.hostLogReceived.connect(self._append_shell_output)
         self.controller.stateChanged.connect(self._on_host_state)
@@ -801,14 +813,72 @@ class MainWindow(QMainWindow):
         self.preview_panel.set_time(time_seconds, self._total_duration)
 
     def _on_filmstrip(self, message: dict[str, Any]) -> None:
+        self._stats_cache = dict(message)
         frames = int(message.get("frames", 0))
         done = bool(message.get("done", False))
         capped = bool(message.get("capped", False))
-        if done:
-            text = f"cache: {frames} frames" + (" (capped)" if capped else "")
+        byte_size = message.get("bytes")
+        if isinstance(byte_size, (int, float)) and byte_size > 0:
+            cache_text = f"cache: {frames} frames · {format_bytes(byte_size)}"
         else:
-            text = f"cache: {frames} frames…"
-        self.preview_panel.set_cache_status(text)
+            cache_text = f"cache: {frames} frames"
+        suffix = (" (capped)" if capped else "") if done else "…"
+        self.preview_panel.set_cache_status(cache_text + suffix)
+        self._refresh_memory_label()
+
+    def _on_stats(self, message: dict[str, Any]) -> None:
+        """Host answered a STATS poll: cache numbers double as filmstrip state."""
+        self._stats_cache = dict(message)
+        self._refresh_memory_label()
+        if self._stats_dialog is not None:
+            try:
+                self._stats_dialog.set_host_stats(message)
+            except Exception:  # never let the dialog break the control channel
+                log.debug("stats dialog update failed", exc_info=True)
+
+    def _refresh_memory_label(self) -> None:
+        """Compact status-bar readout: cache MiB + host/editor RSS."""
+        cache = self._stats_cache
+        byte_size = cache.get("bytes")
+        max_bytes = cache.get("max_bytes")
+        frames = cache.get("frames")
+        host_rss = cache.get("host_rss")
+        if (
+            isinstance(byte_size, (int, float))
+            and isinstance(max_bytes, (int, float))
+            and max_bytes > 0
+        ):
+            percent = usage_percent(byte_size, max_bytes)
+            percent_text = f" {percent:.0f}%" if percent is not None else ""
+            cache_text = f"cache {format_bytes(byte_size)}{percent_text}"
+        elif isinstance(frames, int):
+            cache_text = f"cache {frames} frames"
+        else:
+            cache_text = "cache —"
+        host_text = f"host {format_bytes(host_rss)}" if host_rss is not None else "host —"
+        editor_text = f"editor {format_bytes(process_rss_bytes())}"
+        self._mem_label.setText(f"{cache_text} · {host_text} · {editor_text}")
+
+    def _editor_stats_snapshot(self) -> dict[str, Any]:
+        return {
+            "editor_rss": process_rss_bytes(),
+            "api_names": len(self._api_names),
+            "blocks": self.timeline.log.num_blocks,
+            "total_duration": self._total_duration,
+            "preview_size": self._preview_size,
+        }
+
+    def show_app_stats(self) -> None:
+        from manim_editor.editor.stats_dialog import AppStatsDialog
+
+        if self._stats_dialog is None:
+            self._stats_dialog = AppStatsDialog(self.controller, self._editor_stats_snapshot, self)
+        dialog = self._stats_dialog
+        if self._stats_cache:
+            dialog.set_host_stats(self._stats_cache)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _on_stopped(self, message: dict[str, Any]) -> None:
         self.timeline.set_playing(False)

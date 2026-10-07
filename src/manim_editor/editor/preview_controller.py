@@ -35,6 +35,7 @@ class PreviewController(QObject):
     errorReceived = Signal(dict)
     execResultReceived = Signal(dict)
     filmstripReceived = Signal(dict)
+    statsReceived = Signal(dict)
     frameReceived = Signal(QImage)
     hostLogReceived = Signal(str)
     stateChanged = Signal(str)  # starting | running | stopped | crashed
@@ -198,6 +199,10 @@ class PreviewController(QObject):
     def ping(self) -> bool:
         return self.send(Command.PING)
 
+    def stats(self) -> bool:
+        """Ask the host for a full RAM/cache snapshot (answered via ``statsReceived``)."""
+        return self.send(Command.STATS)
+
     # ------------------------------------------------------------------
     # Socket handling
     # ------------------------------------------------------------------
@@ -309,6 +314,8 @@ class PreviewController(QObject):
             self.execResultReceived.emit(message)
         elif event == Event.FILMSTRIP:
             self.filmstripReceived.emit(message)
+        elif event == Event.STATS:
+            self.statsReceived.emit(message)
         elif event == Event.PONG:
             pass
         else:
