@@ -32,6 +32,7 @@ __all__ = [
     "parse_log",
     "save_log",
     "snap_index",
+    "snap_time",
 ]
 
 
@@ -273,6 +274,42 @@ def block_for_line(call_lines: Sequence[int | None], line: int) -> int | None:
             best = index
             best_line = call_line
     return best
+
+
+def snap_time(
+    time: float,
+    *,
+    fps: float,
+    candidates: Sequence[float] = (),
+    tolerance: float,
+    step: float = 0.1,
+) -> float:
+    """Snap ``time`` to a nearby block edge/playhead, else to a frame/0.1s grid.
+
+    ``candidates`` (block boundaries, the playhead) win when one is within
+    ``tolerance`` seconds, so an edit snaps to a meaningful boundary even when a
+    plain frame is fractionally closer.  Otherwise the nearest of the frame grid
+    (``1/fps``) and the ``step`` grid is returned, which keeps the result on a
+    frame boundary at every zoom level.  Never returns a negative time.
+    """
+    value = max(0.0, float(time))
+    best_candidate: float | None = None
+    best_distance = max(0.0, float(tolerance))
+    for candidate in candidates:
+        distance = abs(candidate - value)
+        if distance <= best_distance:
+            best_candidate = candidate
+            best_distance = distance
+    if best_candidate is not None:
+        return max(0.0, float(best_candidate))
+    grids: list[float] = []
+    if fps > 0:
+        grids.append(round(value * fps) / fps)
+    if step > 0:
+        grids.append(round(value / step) * step)
+    if not grids:
+        return value
+    return max(0.0, min(grids, key=lambda grid: abs(grid - value)))
 
 
 def format_duration(seconds: float) -> str:

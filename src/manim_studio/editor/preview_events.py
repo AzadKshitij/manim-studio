@@ -118,6 +118,7 @@ class PreviewEvents(QObject):
             self._shell.append(f"bad trace payload: {exc}")
             return
         self._timeline.set_log(timeline_log)
+        self._timeline.set_fps(message.get("fps"))
         self._total_duration = timeline_log.total_duration
         self._call_lines = parse_call_lines(message.get("call_sites"))
         # A successful trace means the scene now compiles/runs: clear any marker

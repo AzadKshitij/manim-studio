@@ -109,6 +109,44 @@ class TestActiveBlock:
         assert timeline.active_block is None
 
 
+class TestSnapping:
+    def test_defaults_to_on(self, timeline: TimelineWidget) -> None:
+        assert timeline.snapping is True
+        timeline.set_snapping(False)
+        assert timeline.snapping is False
+
+    def test_scrub_snaps_onto_a_block_edge(self, timeline: TimelineWidget, qtbot) -> None:
+        # 2.0s is the end of block 1; x=306 is 2.04s — inside the 8px snap window
+        # but outside the 5px edge-grab window, so it scrubs (not retimes).
+        spy = QSignalSpy(timeline.scrubRequested)
+        qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(306, 60))
+        assert spy.count() >= 1
+        assert spy.at(spy.count() - 1)[0] == pytest.approx(2.0, abs=1e-6)
+
+    def test_scrub_stays_free_when_snapping_is_off(self, timeline: TimelineWidget, qtbot) -> None:
+        timeline.set_snapping(False)
+        spy = QSignalSpy(timeline.scrubRequested)
+        qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(306, 60))
+        assert spy.count() >= 1
+        assert spy.at(spy.count() - 1)[0] == pytest.approx(306 / 600 * 4.0, abs=0.02)
+
+    def test_retime_snaps_to_a_neighbouring_edge(self, timeline: TimelineWidget, qtbot) -> None:
+        # Drag block 0's right edge to ~2.013s; it should snap onto 2.0.
+        resized = QSignalSpy(timeline.blockResized)
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 60))
+        qtbot.mouseMove(timeline, QPoint(302, 60))
+        qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(302, 60))
+        assert resized.count() == 1
+        assert resized.at(0)[1] == pytest.approx(2.0, abs=1e-6)
+
+    def test_set_fps_ignores_bad_values(self, timeline: TimelineWidget) -> None:
+        timeline.set_fps(60)
+        assert timeline._fps == pytest.approx(60.0)
+        timeline.set_fps(None)
+        timeline.set_fps("nope")
+        assert timeline._fps == pytest.approx(60.0)
+
+
 class TestResizing:
     def test_right_edge_press_resizes_instead_of_scrubbing(
         self, timeline: TimelineWidget, qtbot

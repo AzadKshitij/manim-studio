@@ -50,6 +50,9 @@ class _StubTimeline:
     def set_playing(self, playing: bool) -> None:
         self.playing = playing
 
+    def set_fps(self, fps: float | int | None) -> None:
+        self.fps = fps
+
 
 class _StubPanel:
     def __init__(self) -> None:

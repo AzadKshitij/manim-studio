@@ -27,7 +27,13 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from manim_studio.timeline_model import TimelineBlock, TimelineLog, TimelineView, format_duration
+from manim_studio.timeline_model import (
+    TimelineBlock,
+    TimelineLog,
+    TimelineView,
+    format_duration,
+    snap_time,
+)
 
 __all__ = ["TimelineWidget"]
 
@@ -37,6 +43,10 @@ CLICK_SLOP_PX = 4.0
 FRAME_STEP = 1.0 / 30.0
 EDGE_GRAB_PX = 5.0
 MIN_BLOCK_DURATION = 1.0 / 30.0
+#: How close (in pixels) a scrub/retime must be to snap onto a boundary.  Kept a
+#: little larger than the edge-grab window so a pointer can snap onto an edge
+#: before it becomes a resize handle.
+SNAP_PX = 8.0
 
 
 def block_color(name: str) -> QColor:
@@ -73,6 +83,8 @@ class TimelineWidget(QWidget):
         self._playing = False
         self._hover_index: int | None = None
         self._active_index: int | None = None  # block under the editor caret
+        self._snapping = True
+        self._fps = 1.0 / FRAME_STEP
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
         self._press_pos: QPoint | None = None
         self._last_mouse_x = 0.0
@@ -116,6 +128,24 @@ class TimelineWidget(QWidget):
         if index != self._active_index:
             self._active_index = index
             self.update()
+
+    @property
+    def snapping(self) -> bool:
+        """Whether scrubbing/retiming snaps to frames, 0.1s and block edges."""
+        return self._snapping
+
+    def set_snapping(self, enabled: bool) -> None:
+        """Toggle snapping (the ``View > Snap timeline`` action drives this)."""
+        self._snapping = bool(enabled)
+
+    def set_fps(self, fps: float | int | None) -> None:
+        """Set the frame rate used for frame snapping (defaults to 30)."""
+        try:
+            value = float(fps)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        if value > 0:
+            self._fps = value
 
     def set_log(self, log: TimelineLog, *, keep_view: bool = False) -> None:
         self._log = log
@@ -175,11 +205,35 @@ class TimelineWidget(QWidget):
         )
         super().resizeEvent(event)
 
-    def _request_scrub(self, x: float) -> None:
+    def _request_scrub(self, x: float, *, snap: bool = True) -> None:
         time = self._view.x_to_time(x)
+        if snap:
+            time = self._snap(time)
         self._playhead = time
         self.update()
         self.scrubRequested.emit(time)
+
+    def _snap(
+        self, time: float, *, exclude: int | None = None, include_playhead: bool = False
+    ) -> float:
+        """Snap ``time`` onto a block edge/playhead, else the frame/0.1s grid."""
+        if not self._snapping:
+            return time
+        tolerance = SNAP_PX * (self._view.span or 1.0) / max(self.width(), 1)
+        candidates = self._snap_candidates(exclude=exclude, include_playhead=include_playhead)
+        return snap_time(time, fps=self._fps, candidates=candidates, tolerance=tolerance)
+
+    def _snap_candidates(self, *, exclude: int | None, include_playhead: bool) -> tuple[float, ...]:
+        """Block boundaries (minus the block being dragged) and optionally the playhead."""
+        points: list[float] = []
+        for block in self._log.blocks:
+            if block.index == exclude:
+                continue
+            points.append(block.start)
+            points.append(block.end)
+        if include_playhead:
+            points.append(self._playhead)
+        return tuple(points)
 
     def _edge_hit(self, x: float) -> TimelineBlock | None:
         """Return the block whose right edge is within ``EDGE_GRAB_PX`` of ``x``.
@@ -247,8 +301,12 @@ class TimelineWidget(QWidget):
         if self._mode == "resize" and self._resize_index is not None:
             block = self._log.block_by_index(self._resize_index)
             if block is not None:
-                duration = self._view.x_to_time(event.position().x()) - block.start
-                self._resize_duration = max(MIN_BLOCK_DURATION, duration)
+                edge = self._snap(
+                    self._view.x_to_time(event.position().x()),
+                    exclude=self._resize_index,
+                    include_playhead=True,
+                )
+                self._resize_duration = max(MIN_BLOCK_DURATION, edge - block.start)
             self.update()
             return
         block = self._log.block_at(self._view.x_to_time(event.position().x()))
@@ -317,7 +375,8 @@ class TimelineWidget(QWidget):
                 return
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
             delta = -step if event.key() == Qt.Key.Key_Left else step
-            self._request_scrub(self._view.time_to_x(self._playhead + delta))
+            # Frame stepping must be exact: never let it snap back to an edge.
+            self._request_scrub(self._view.time_to_x(self._playhead + delta), snap=False)
             event.accept()
             return
         if event.key() == Qt.Key.Key_Home:

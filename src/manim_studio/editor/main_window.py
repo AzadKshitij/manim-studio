@@ -234,6 +234,13 @@ class MainWindow(QMainWindow):
         self._embedded_action.triggered.connect(self.set_embedded)
         view_menu.addAction(self._embedded_action)
         self._add_action(view_menu, "Fit timeline", self.timeline.fit, "Ctrl+0")
+        self._snap_action = QAction("Snap timeline", self, checkable=True)
+        self._snap_action.setChecked(self.timeline.snapping)
+        self._snap_action.setToolTip(
+            "Snap scrubbing and retiming to frames, 0.1s and block boundaries"
+        )
+        self._snap_action.toggled.connect(self.timeline.set_snapping)
+        view_menu.addAction(self._snap_action)
 
         tools_menu = menu_bar.addMenu("&Tools")
         self._add_action(tools_menu, "LaTeX setup…", self.open_latex_setup)

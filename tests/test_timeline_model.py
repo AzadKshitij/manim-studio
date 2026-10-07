@@ -19,6 +19,7 @@ from manim_studio.timeline_model import (
     parse_log,
     save_log,
     snap_index,
+    snap_time,
 )
 
 
@@ -290,3 +291,27 @@ class TestBlockForLine:
 
     def test_empty(self) -> None:
         assert block_for_line((), 1) is None
+
+
+class TestSnapTime:
+    def test_snaps_to_a_candidate_within_tolerance(self) -> None:
+        # A block edge 0.03s away wins even though a frame is closer.
+        assert snap_time(1.03, fps=30, candidates=(1.0,), tolerance=0.05) == 1.0
+
+    def test_ignores_candidates_outside_tolerance(self) -> None:
+        assert snap_time(1.5, fps=30, candidates=(1.0, 2.0), tolerance=0.05) == pytest.approx(1.5)
+
+    def test_falls_back_to_the_frame_grid(self) -> None:
+        assert snap_time(1.01, fps=30, candidates=(), tolerance=0.001) == pytest.approx(1.0)
+
+    def test_decisecond_grid_matters_off_frame_multiples(self) -> None:
+        # 24fps: 0.1s is not a frame multiple, and 0.101 is nearer 0.1 than 0.0833.
+        assert snap_time(0.101, fps=24, candidates=(), tolerance=0.0) == pytest.approx(0.1)
+
+    def test_never_negative(self) -> None:
+        assert snap_time(-5.0, fps=30, candidates=(), tolerance=0.5) == 0.0
+
+    def test_no_grids_returns_the_input(self) -> None:
+        assert snap_time(1.234, fps=0, candidates=(), tolerance=0.0, step=0.0) == pytest.approx(
+            1.234
+        )

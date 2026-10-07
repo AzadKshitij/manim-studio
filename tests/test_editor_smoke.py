@@ -102,6 +102,13 @@ class TestConstruction:
     def test_completion_disabled_by_flag(self, window: MainWindow) -> None:
         assert window.completions.worker is None
 
+    def test_snap_toggle_wires_to_the_timeline(self, window: MainWindow) -> None:
+        assert window.timeline.snapping is True
+        window._snap_action.setChecked(False)
+        assert window.timeline.snapping is False
+        window._snap_action.setChecked(True)
+        assert window.timeline.snapping is True
+
 
 class TestCompletionWiring:
     def test_worker_created_when_enabled(self, qtbot) -> None:
