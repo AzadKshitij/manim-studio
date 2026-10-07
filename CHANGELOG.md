@@ -24,9 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Community files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, and
   GitHub issue/PR templates.
 
-## [1.1.0] - 2026-10-06
+## [1.0.0] - 2026-10-07
 
-First versioned update after the initial shareable 0.1.0 build.
+First public release.
 
 ### Added
 
@@ -58,6 +58,6 @@ First versioned update after the initial shareable 0.1.0 build.
   export via `manimgl -w`, and the headless CLI (`check`, `trace`, `export`,
   `new`, `preview`).
 
-[Unreleased]: https://github.com/AzadKshitij/manim-studio/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/AzadKshitij/manim-studio/releases/tag/v1.1.0
+[Unreleased]: https://github.com/AzadKshitij/manim-studio/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/AzadKshitij/manim-studio/releases/tag/v1.0.0
 [0.1.0]: https://github.com/AzadKshitij/manim-studio/releases/tag/v0.1.0

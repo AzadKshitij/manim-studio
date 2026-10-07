@@ -1,8 +1,7 @@
-# Manim Studio 1.1.0 — Release Notes
+# Manim Studio 1.0.0 — Release Notes
 
-First versioned update after the initial shareable 0.1.0 build. All changes below
-landed after the 0.1.0 bundle (2026-10-06) and are included in the frozen
-`ManimStudio-1.1.0-portable.zip` and `ManimStudio-Setup-1.1.0.exe`.
+First public release of Manim Studio. All changes below are included in the
+frozen `ManimStudio-1.0.0-portable.zip` and `ManimStudio-Setup-1.0.0.exe`.
 
 ## Highlights
 
@@ -45,9 +44,9 @@ d3c385d feat(packaging): frozen build support (ADR 0005)
 
 ## Install
 
-- **Portable:** unzip `ManimStudio-1.1.0-portable.zip` anywhere, run
+- **Portable:** unzip `ManimStudio-1.0.0-portable.zip` anywhere, run
   `ManimStudio.exe`. No install, no admin.
-- **Installer:** run `ManimStudio-Setup-1.1.0.exe` (per-user, no admin prompt,
+- **Installer:** run `ManimStudio-Setup-1.0.0.exe` (per-user, no admin prompt,
   Windows 10+ x64).
 - First launch may trigger Windows SmartScreen (unsigned build):
   More info → Run anyway.
