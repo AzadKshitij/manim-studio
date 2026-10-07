@@ -128,8 +128,11 @@ def _windows_rss() -> int | None:
                 ("PeakPagefileUsage", ctypes.c_size_t),
             ]
 
-        kernel32 = ctypes.windll.kernel32
-        psapi = ctypes.windll.psapi
+        windll = getattr(ctypes, "windll", None)  # Windows-only; absent elsewhere
+        if windll is None:
+            return None
+        kernel32 = windll.kernel32
+        psapi = windll.psapi
         process = kernel32.GetCurrentProcess()
         counters = _Counters()
         counters.cb = ctypes.sizeof(counters)
