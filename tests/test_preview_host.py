@@ -103,6 +103,27 @@ class TestFramePump:
         finally:
             receiver.close()
 
+    def test_bad_raw_frame_does_not_kill_pump(self) -> None:
+        """Encoding on the pump thread must not let one bad frame stop the stream."""
+        sender, receiver = socket.socketpair()
+        try:
+            pump = FramePump(sender)
+            pump.start()
+            pump.offer(b"\x00" * 7, 2, 2)  # wrong payload length -> ProtocolError
+            time.sleep(0.05)
+            pump.offer(self._rgba(2, 2), 2, 2)
+            receiver.settimeout(10)
+            parser = FrameParser()
+            frames: list[Frame] = []
+            deadline = time.monotonic() + 10
+            while not frames and time.monotonic() < deadline:
+                frames.extend(parser.feed(receiver.recv(65536)))
+            assert len(frames) == 1
+            assert frames[0].rgba == self._rgba(2, 2)
+        finally:
+            pump.close()
+            receiver.close()
+
     def test_records_encode_and_send_timings(self) -> None:
         sender, receiver = socket.socketpair()
         timings = TimingStats()

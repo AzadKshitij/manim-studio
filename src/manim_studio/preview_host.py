@@ -104,10 +104,10 @@ class TickThrottler:
 class FramePump:
     """Latest-frame-wins streamer.
 
-    Callers hand over already-encoded payloads (``offer_encoded``); ``offer`` is a
-    convenience that encodes raw RGBA first.  Sending happens on the pump thread,
-    so the GL thread never blocks on the socket.  When the transport cannot keep
-    up, frames are dropped instead of queued.  With ``timings`` set, encoding and
+    Callers hand over frames either raw (``offer``) or already encoded
+    (``offer_encoded``).  Encoding and sending both happen on the pump thread, so
+    the GL thread never blocks on compression.  When the transport cannot keep up,
+    frames are dropped instead of queued.  With ``timings`` set, encoding and
     sending are recorded as the ``encode``/``send`` phases.
     """
 
@@ -124,7 +124,7 @@ class FramePump:
         self.frames_sent = 0
         self.frames_dropped = 0
         self._cond = threading.Condition()
-        self._slot: bytes | None = None
+        self._slot: bytes | tuple[bytes, int, int] | None = None
         self._running = True
         self._started = False
         self._thread = threading.Thread(target=self._loop, name="frame-pump", daemon=True)
@@ -134,13 +134,14 @@ class FramePump:
         self._thread.start()
 
     def offer(self, rgba: bytes, width: int, height: int) -> None:
-        """Encode raw upright RGBA and queue it (latest wins)."""
-        if self.timings is None:
-            self.offer_encoded(ipc.encode_frame(width, height, rgba, level=self.level))
-            return
-        with self.timings.phase("encode"):
-            blob = ipc.encode_frame(width, height, rgba, level=self.level)
-        self.offer_encoded(blob)
+        """Queue raw upright RGBA; it is encoded on the pump thread (latest wins)."""
+        with self._cond:
+            if not self._running:
+                return
+            if self._slot is not None:
+                self.frames_dropped += 1
+            self._slot = (rgba, width, height)
+            self._cond.notify()
 
     def offer_encoded(self, blob: bytes) -> None:
         """Queue a complete encoded frame payload (latest wins)."""
@@ -159,9 +160,21 @@ class FramePump:
                     self._cond.wait(0.5)
                 if not self._running:
                     return
-                blob = self._slot
+                item = self._slot
                 self._slot = None
-            assert blob is not None
+            assert item is not None
+            if isinstance(item, tuple):
+                rgba, width, height = item
+                try:
+                    if self.timings is None:
+                        blob = ipc.encode_frame(width, height, rgba, level=self.level)
+                    else:
+                        with self.timings.phase("encode"):
+                            blob = ipc.encode_frame(width, height, rgba, level=self.level)
+                except (ipc.ProtocolError, ValueError):
+                    continue  # a bad frame must not kill the pump thread
+            else:
+                blob = item
             try:
                 if self.timings is None:
                     self._sock.sendall(blob)
@@ -718,7 +731,8 @@ class SceneHost:
             getattr(camera.fbo, "glo", "?"),
             raw[:12].hex(),
         )
-        self.frame_pump.offer(upright, width, height)
+        with self.timings.phase("handoff"):
+            self.frame_pump.offer(upright, width, height)
 
     # ------------------------------------------------------------------
     # Commands

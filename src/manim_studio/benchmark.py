@@ -168,6 +168,12 @@ def format_report(report: dict[str, Any]) -> str:
     parser = report.get("parser")
     if isinstance(parser, dict):
         lines.append(f"parser round trip: {parser.get('round_trip_ms')} ms")
+    pump = report.get("pump")
+    if isinstance(pump, dict):
+        lines.append(
+            f"pump handoff: {pump.get('handoff_ms')} ms/frame "
+            f"(vs {pump.get('encode_ref_ms')} ms encode, {pump.get('caller_speedup')}x)"
+        )
     end_to_end = report.get("end_to_end")
     if isinstance(end_to_end, dict):
         for name, value in sorted(end_to_end.items()):

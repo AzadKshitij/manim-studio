@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import queue
+import socket
 import subprocess
 import time
 from typing import Any
@@ -31,6 +32,7 @@ import pytest
 
 from manim_studio import benchmark
 from manim_studio.ipc import Command, Event
+from manim_studio.preview_host import FramePump
 from tests.host_harness import HostPeer
 
 WIDTH, HEIGHT = 1280, 720
@@ -77,16 +79,42 @@ def _drain_frames(peer: HostPeer) -> int:
 class TestMicroBenchmark:
     def test_frame_codecs_and_parser(self) -> None:
         rgba = _render_like_frame(WIDTH, HEIGHT)
+        micro = benchmark.bench_codecs(rgba, repeats=15)
         report = {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "machine": benchmark.machine_info(),
             "frame": {"width": WIDTH, "height": HEIGHT, "bytes": len(rgba)},
-            "micro": benchmark.bench_codecs(rgba, repeats=15),
+            "micro": micro,
             "parser": benchmark.bench_parser(WIDTH, HEIGHT, rgba, repeats=15),
+            "pump": _pump_handoff(rgba, encode_ref_ms=micro["zlib-1"]["encode_ms"]),
         }
         _record(report)
         assert report["micro"]["zlib-1"]["encode_ms"] >= 0.0
         assert report["parser"]["round_trip_ms"] >= 0.0
+        assert report["pump"]["handoff_ms"] >= 0.0
+
+
+def _pump_handoff(rgba: bytes, *, encode_ref_ms: float) -> dict[str, float]:
+    """Caller-side ``FramePump.offer`` cost per 720p frame.
+
+    Encoding runs on the pump thread now, so the caller (GL/idle loop) only pays
+    a lock + buffer swap. Compare this with ``encode_ref_ms`` for the same codec.
+    """
+    sender, receiver = socket.socketpair()
+    pump = FramePump(sender)
+    pump.start()
+    try:
+        handoff_ms = (
+            benchmark.median_seconds(lambda: pump.offer(rgba, WIDTH, HEIGHT), repeats=50) * 1000.0
+        )
+    finally:
+        pump.close()
+        receiver.close()
+    return {
+        "handoff_ms": round(handoff_ms, 4),
+        "encode_ref_ms": encode_ref_ms,
+        "caller_speedup": round(encode_ref_ms / max(handoff_ms, 1e-6), 1),
+    }
 
 
 @pytest.mark.gl

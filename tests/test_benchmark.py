@@ -94,12 +94,14 @@ class TestFormatReport:
                 "frame": {"width": 8, "height": 4, "bytes": 128},
                 "micro": {"zlib-1": {"encode_ms": 0.5, "decode_ms": 0.2, "ratio": 3.0}},
                 "parser": {"round_trip_ms": 0.7},
+                "pump": {"handoff_ms": 0.03, "encode_ref_ms": 33.0, "caller_speedup": 1100.0},
                 "end_to_end": {"crawl_fps": 42.0},
             }
         )
         assert "8x4" in text
         assert "zlib-1: encode 0.5 ms / decode 0.2 ms (ratio 3.0x)" in text
         assert "parser round trip: 0.7 ms" in text
+        assert "pump handoff: 0.03 ms/frame" in text
         assert "e2e crawl_fps: 42.0" in text
 
     def test_empty_report(self) -> None:

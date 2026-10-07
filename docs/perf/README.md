@@ -79,3 +79,21 @@ zstd-1 compresses ~6× faster than zlib-1, decompresses ~2.5× faster, and at a
 ~3× better ratio. lz4 encodes marginally faster but ships ~2.8× more bytes and
 decodes slower than zstd, so **zstd-1 is the chosen wire codec**, with a raw
 (uncompressed) fallback when a payload would not shrink.
+
+## Change log
+
+### P1.1 — encode on the pump thread (2026-10-07)
+
+`FramePump.offer` now queues **raw** pixels; the pump thread encodes and sends
+them, so the GL thread only pays a lock + buffer swap. Recorded in
+`after-p1.1.json`:
+
+| metric | baseline | after P1.1 |
+| --- | --- | --- |
+| pump handoff (caller thread) | 34.3 ms (= inline encode) | **0.0029 ms/frame** |
+| crawl | 22.96 fps | 26.96 fps |
+| playback | 25.02 fps, ratio 1.233 | 27.67 fps, ratio 1.115 |
+
+The handoff number is deterministic and is the real proof: the GL thread no
+longer blocks on compression. The end-to-end numbers carry several-percent
+run-to-run noise (this box is shared), so treat them as directional.
