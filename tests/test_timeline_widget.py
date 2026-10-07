@@ -353,6 +353,31 @@ class TestContextMenu:
         assert [a.text() for a in timeline.context_menu(None).actions()] == ["Fit timeline"]
 
 
+class TestZoomControls:
+    def test_zoom_by_scales_the_span(self, timeline: TimelineWidget) -> None:
+        before = timeline.view().span
+        timeline.zoom_by(2.0)
+        assert timeline.view().span < before
+        timeline.zoom_by(0.5)
+        assert timeline.view().span == pytest.approx(before, abs=0.05)
+
+    def test_fit_selection_frames_the_range(self, timeline: TimelineWidget) -> None:
+        timeline.set_range(1.0, 2.0)
+        timeline.fit_selection()
+        assert timeline.view().span == pytest.approx(1.15, abs=0.05)
+        assert timeline.view().start == pytest.approx(1.0 - 0.05 * 1.15, abs=0.05)
+
+    def test_fit_selection_falls_back_to_the_active_block(self, timeline: TimelineWidget) -> None:
+        timeline.set_active_block(2)  # block 2 spans [2, 4]
+        timeline.fit_selection()
+        assert timeline.view().span == pytest.approx(2.0 * 1.15, abs=0.05)
+
+    def test_fit_selection_without_a_selection_fits_all(self, timeline: TimelineWidget) -> None:
+        timeline.zoom_to_block(2)
+        timeline.fit_selection()
+        assert timeline.view().span == pytest.approx(4.0, abs=0.01)
+
+
 class TestKeyboard:
     def test_arrow_steps_one_frame(self, timeline: TimelineWidget, qtbot) -> None:
         spy = QSignalSpy(timeline.scrubRequested)

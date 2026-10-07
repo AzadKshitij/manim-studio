@@ -32,6 +32,7 @@ class TimelineTransport(QWidget):
     jumpRequested = Signal(str)  # "start" | "end"
     loopToggled = Signal(bool)
     speedChanged = Signal(float)
+    zoomRequested = Signal(str)  # "fit" | "selection" | "in" | "out"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -62,6 +63,19 @@ class TimelineTransport(QWidget):
         self._speed_combo.setToolTip("Playback speed (1x = the scene's own timing)")
         self._speed_combo.currentIndexChanged.connect(self._emit_speed)
 
+        self._fit_button = QPushButton("Fit", self)
+        self._fit_button.setToolTip("Fit the whole timeline (Ctrl+0)")
+        self._selection_button = QPushButton("Fit selection", self)
+        self._selection_button.setToolTip("Zoom to the selected range (or the caret's block)")
+        self._zoom_out_button = QPushButton("-", self)
+        self._zoom_out_button.setToolTip("Zoom out")
+        self._zoom_in_button = QPushButton("+", self)
+        self._zoom_in_button.setToolTip("Zoom in")
+        self._fit_button.clicked.connect(lambda: self.zoomRequested.emit("fit"))
+        self._selection_button.clicked.connect(lambda: self.zoomRequested.emit("selection"))
+        self._zoom_out_button.clicked.connect(lambda: self.zoomRequested.emit("out"))
+        self._zoom_in_button.clicked.connect(lambda: self.zoomRequested.emit("in"))
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(4)
@@ -78,6 +92,14 @@ class TimelineTransport(QWidget):
         layout.addSpacing(6)
         layout.addWidget(QLabel("Speed:"))
         layout.addWidget(self._speed_combo)
+        layout.addSpacing(6)
+        for widget in (
+            self._fit_button,
+            self._selection_button,
+            self._zoom_out_button,
+            self._zoom_in_button,
+        ):
+            layout.addWidget(widget)
         layout.addStretch(1)
 
     # ------------------------------------------------------------------

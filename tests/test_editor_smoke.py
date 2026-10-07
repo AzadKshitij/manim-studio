@@ -741,6 +741,19 @@ class TestTransport:
         finally:
             self._restore(window)
 
+    def test_zoom_actions_drive_the_timeline(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            window._on_zoom_requested("in")
+            zoomed = window.timeline.view().span
+            window._on_zoom_requested("fit")
+            assert window.timeline.view().span > zoomed
+            window.timeline.set_range(1.0, 1.5)
+            window._on_zoom_requested("selection")
+            assert window.timeline.view().span < 4.0
+        finally:
+            self._restore(window)
+
 
 class _StubExports:
     def __init__(self) -> None:

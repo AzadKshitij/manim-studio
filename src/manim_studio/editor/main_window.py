@@ -341,6 +341,7 @@ class MainWindow(QMainWindow):
         self.transport_bar.jumpRequested.connect(self._on_transport_jump)
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
         self.transport_bar.speedChanged.connect(self._on_transport_speed)
+        self.transport_bar.zoomRequested.connect(self._on_zoom_requested)
         self.controller.statusChanged.connect(
             lambda state, _message: self.transport_bar.set_playing(state == "playing")
         )
@@ -651,6 +652,17 @@ class MainWindow(QMainWindow):
 
     def _on_range_changed(self, start: float, end: float) -> None:
         self._set_status(f"range {format_duration(start)} - {format_duration(end)}")
+
+    def _on_zoom_requested(self, action: str) -> None:
+        """Zoom buttons: fit / fit-selection / zoom in / zoom out."""
+        if action == "fit":
+            self.timeline.fit()
+        elif action == "selection":
+            self.timeline.fit_selection()
+        elif action == "in":
+            self.timeline.zoom_by(1.25)
+        elif action == "out":
+            self.timeline.zoom_by(0.8)
 
     def _play_block(self, index: int) -> None:
         """Context menu: replay from this block."""

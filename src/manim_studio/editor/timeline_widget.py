@@ -273,6 +273,37 @@ class TimelineWidget(QWidget):
         self.update()
         self.viewChanged.emit()
 
+    def zoom_by(self, factor: float) -> None:
+        """Zoom in/out around the widget centre (``factor`` > 1 zooms in)."""
+        if factor <= 0:
+            return
+        self._view = self._view.zoom_at(self.width() / 2, factor)
+        self.update()
+        self.viewChanged.emit()
+
+    def fit_selection(self) -> None:
+        """Frame the selected range, else the caret's block, else fit everything."""
+        start: float | None = None
+        end: float | None = None
+        if self._range is not None:
+            start, end = self._range
+        elif self._active_index is not None:
+            block = self._log.block_by_index(self._active_index)
+            if block is not None:
+                start, end = block.start, block.end
+        if start is None or end is None:
+            self.fit()
+            return
+        span = max(end - start, 0.05) * 1.15
+        self._view = TimelineView(
+            total=self._view.total,
+            width=float(max(self.width(), 1)),
+            start=start - 0.05 * span,
+            span=span,
+        )
+        self.update()
+        self.viewChanged.emit()
+
     def zoom_to_block(self, index: int) -> None:
         block = self._log.block_by_index(index)
         if block is None:

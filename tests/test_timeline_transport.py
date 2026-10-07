@@ -64,3 +64,18 @@ class TestState:
     def test_unknown_speed_is_ignored(self, transport: TimelineTransport) -> None:
         transport.set_speed(3.14159)  # not in SPEEDS
         assert transport.speed() == pytest.approx(1.0)
+
+
+class TestZoomButtons:
+    def test_zoom_buttons_report_the_action(self, transport: TimelineTransport, qtbot) -> None:
+        spy = QSignalSpy(transport.zoomRequested)
+        qtbot.mouseClick(transport._fit_button, Qt.MouseButton.LeftButton)
+        qtbot.mouseClick(transport._selection_button, Qt.MouseButton.LeftButton)
+        qtbot.mouseClick(transport._zoom_out_button, Qt.MouseButton.LeftButton)
+        qtbot.mouseClick(transport._zoom_in_button, Qt.MouseButton.LeftButton)
+        assert [spy.at(i)[0] for i in range(spy.count())] == [
+            "fit",
+            "selection",
+            "out",
+            "in",
+        ]
