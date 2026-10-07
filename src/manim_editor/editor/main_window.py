@@ -37,6 +37,7 @@ from manim_editor.editor import api_cache, scene_files
 from manim_editor.editor.code_editor import CodeEditor
 from manim_editor.editor.completion_worker import CompletionWorker
 from manim_editor.editor.export_controller import ExportController
+from manim_editor.editor.export_dialog import ExportDialog
 from manim_editor.editor.file_watcher import FileWatcher
 from manim_editor.editor.icon import load_icon
 from manim_editor.editor.preview_controller import PreviewController
@@ -162,8 +163,13 @@ class MainWindow(QMainWindow):
             file_menu, "Save As…", self.save_buffer_as, QKeySequence.StandardKey.SaveAs
         )
         file_menu.addSeparator()
-        self._add_action(file_menu, "Export video…", self.export_video_dialog, "Ctrl+E")
-        self._add_action(file_menu, "Export still…", self.export_still_dialog, "Ctrl+Shift+E")
+        self._add_action(file_menu, "Export…", self.export_dialog, "Ctrl+E")
+        self._add_action(
+            file_menu,
+            "Export still…",
+            lambda: self.export_dialog(still=True),
+            "Ctrl+Shift+E",
+        )
         file_menu.addSeparator()
         self._add_action(file_menu, "Quit", self.close, QKeySequence.StandardKey.Quit)
 
@@ -655,13 +661,22 @@ class MainWindow(QMainWindow):
             self._path, self._scene_name(), scene_files.preview_video_path(self._path)
         )
 
-    def export_video_dialog(self) -> None:
+    def export_dialog(self, *, still: bool = False) -> None:
         if self._path is None:
+            self._set_status("open a scene first")
             return
-        default = str(self._path.with_suffix(".mp4"))
-        path, _ = QFileDialog.getSaveFileName(self, "Export video", default, "MP4 video (*.mp4)")
-        if path:
-            self.export_video_to(path)
+        scene_names = tuple(self._scene_combo.itemText(i) for i in range(self._scene_combo.count()))
+        dialog = ExportDialog(
+            self,
+            scene_path=self._path,
+            scene_names=scene_names,
+            current_scene=self._scene_name(),
+            block_count=self.timeline.log.num_blocks,
+            settings=self._settings,
+            initial_still=still,
+            controller=self.exports,
+        )
+        dialog.exec()
 
     def export_video_to(
         self, output: str | Path, *, quality: str = "high", fps: int | None = None
@@ -670,14 +685,6 @@ class MainWindow(QMainWindow):
             self._set_status("open a scene first")
             return
         self.exports.export_video(self._path, self._scene_name(), output, quality=quality, fps=fps)
-
-    def export_still_dialog(self) -> None:
-        if self._path is None:
-            return
-        default = str(self._path.with_suffix(".png"))
-        path, _ = QFileDialog.getSaveFileName(self, "Export still", default, "PNG image (*.png)")
-        if path:
-            self.exports.export_still(self._path, self._scene_name(), path)
 
     def _on_preview_video_ready(self, output: Path) -> None:
         self.transport.load(output)

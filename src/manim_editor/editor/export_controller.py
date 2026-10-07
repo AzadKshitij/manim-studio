@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, QProcess, Signal
 
 from manim_editor import ipc
-from manim_editor.export import build_export_plan
+from manim_editor.export import ExportPlan, build_export_plan
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -68,15 +68,25 @@ class ExportController(QObject):
         *,
         quality: str = "high",
         fps: int | None = None,
+        gif: bool = False,
+        resolution: tuple[int, int] | None = None,
+        animation_range: tuple[int, int] | None = None,
     ) -> bool:
         """Export a video file; False when an export is already running."""
         if self._is_running(self._export_process):
             self.statusChanged.emit("export already running")
             return False
-        plan = build_export_plan(scene_path, scene_name, output=output, quality=quality, fps=fps)
-        self._export_process = self._spawn(plan.argv, self.exportFinished.emit)
-        self.statusChanged.emit(f"exporting {plan.output_path}…")
-        return True
+        plan = build_export_plan(
+            scene_path,
+            scene_name,
+            output=output,
+            quality=quality,
+            fps=fps,
+            gif=gif,
+            resolution=resolution,
+            animation_range=animation_range,
+        )
+        return self.export_plan(plan)
 
     def export_still(self, scene_path: Path, scene_name: str | None, output: str | Path) -> bool:
         """Export a single frame; False when an export is already running."""
@@ -84,9 +94,26 @@ class ExportController(QObject):
             self.statusChanged.emit("export already running")
             return False
         plan = build_export_plan(scene_path, scene_name, output=output, still=True)
+        return self.export_plan(plan)
+
+    def export_plan(self, plan: ExportPlan) -> bool:
+        """Run a fully-built export plan; False when an export is already running.
+
+        The export dialog builds its own plan (format, resolution, range, …) and
+        hands it here so the controller stays the single owner of child processes.
+        """
+        if self._is_running(self._export_process):
+            self.statusChanged.emit("export already running")
+            return False
         self._export_process = self._spawn(plan.argv, self.exportFinished.emit)
-        self.statusChanged.emit(f"exporting still {plan.output_path.name}…")
+        self.statusChanged.emit(f"exporting {plan.output_path}…")
         return True
+
+    def cancel_export(self) -> None:
+        """Kill a running export (no-op when nothing is running)."""
+        process = self._export_process
+        if process is not None and process.state() != QProcess.ProcessState.NotRunning:
+            process.kill()
 
     def shutdown(self) -> None:
         """Kill any running render (called from the window's ``closeEvent``)."""
