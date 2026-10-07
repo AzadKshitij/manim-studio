@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in Manim Studio does not work as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a bug. Please search existing issues first.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Ubuntu / Linux
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Manim Studio version
+      description: Output of `manim-studio --version`.
+      placeholder: "1.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options:
+        - Portable zip
+        - Installer
+        - From source (uv)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open scene ...
+        2. Press ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: scene
+    attributes:
+      label: Scene file (if relevant)
+      description: The smallest scene that reproduces the problem.
+      render: python
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / traceback
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am on the latest release.
+          required: false
