@@ -13,7 +13,8 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 
 from manim_studio.editor.main_window import MainWindow
@@ -191,4 +192,79 @@ def test_speed_selector_makes_playback_faster(live: LiveEditor, qtbot) -> None: 
     fast = time.monotonic() - start
     assert live.stopped[-1]["time"] == pytest.approx(total, abs=0.5)  # reaches the end
     assert fast < normal * 0.85, (normal, fast)
+    assert not live.errors
+
+
+def _drag_right_edge(live: LiveEditor, qtbot, extra_seconds: float) -> tuple[int, float]:
+    """Drag a block's right edge to stretch it by ``extra_seconds``.
+
+    Returns ``(block_index, new_duration)``.  Snapping is disabled so the pointer
+    lands on the exact duration the test asked for.
+    """
+    timeline = live.window.timeline
+    timeline.fit()
+    timeline.set_snapping(False)
+    width = timeline.width()
+    mid_y = timeline.height() // 2
+    view = timeline.view()
+
+    for index in range(timeline.log.num_blocks):
+        block = timeline.log.block_by_index(index)
+        if block is None:  # pragma: no cover - defensive
+            continue
+        edge_x = view.time_to_x(block.end)
+        want = block.duration + extra_seconds
+        target_x = view.time_to_x(block.start + want)
+        if 10 < edge_x < width - 10 and target_x <= width - 2:
+            new_duration = want
+            break
+    else:  # pragma: no cover - the showcase always has a usable block
+        raise AssertionError("no block with room to stretch")
+
+    resized = QSignalSpy(timeline.blockResized)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(edge_x), mid_y))
+    assert timeline._mode == "resize"  # grabbing the edge, not scrubbing
+    qtbot.mouseMove(timeline, QPoint(int(target_x), mid_y))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(target_x), mid_y))
+    assert resized.count() == 1
+    assert resized.at(0)[0] == index
+    return index, new_duration
+
+
+def test_retime_drag_stretches_the_timeline(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    """Dragging a block's right edge retimes the section and shifts later ones."""
+    window = live.window
+    old_total = window.events.total_duration
+    index, new_duration = _drag_right_edge(live, qtbot, extra_seconds=1.0)
+
+    block = window.timeline.log.block_by_index(index)
+    assert block is not None
+    assert block.duration == pytest.approx(new_duration, abs=0.05)
+    # The override is applied in the editor immediately (optimistic), not only
+    # once the host echoes it back.
+    assert window.events.total_duration == pytest.approx(old_total + 1.0, abs=0.05)
+    assert not live.errors
+
+
+def test_retimed_section_plays_for_its_new_duration(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    """Playback must cover the retimed total, not the scene's original timing."""
+    window = live.window
+    old_total = window.events.total_duration
+    _drag_right_edge(live, qtbot, extra_seconds=1.0)
+    new_total = window.events.total_duration
+    assert new_total > old_total + 0.5
+
+    window.transport_bar.set_speed(2.0)  # keep the wall-clock bounded
+    _click(qtbot, window.transport_bar._play_button)
+    live.wait_status("playing")
+    live.wait_states(lambda: window.events.playing is False, timeout=60000)
+
+    ended = live.stopped[-1]
+    assert ended["user_stopped"] is False
+    # The host replayed the scene with the retimed run_times, so scene.time
+    # reaches past the original total and lands near the stretched one.  The
+    # tolerance matches the existing speed test: replayed wall-clock timing
+    # drifts slightly from the traced durations.
+    assert ended["time"] > old_total + 0.5
+    assert ended["time"] == pytest.approx(new_total, abs=0.6)
     assert not live.errors
