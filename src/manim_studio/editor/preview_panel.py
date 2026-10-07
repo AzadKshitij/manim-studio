@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from manim_studio.stats import TimingStats
 from manim_studio.timeline_model import format_duration
 
 __all__ = ["PreviewPanel"]
@@ -30,10 +31,16 @@ class PreviewPanel(QWidget):
     playRequested = Signal()
     stopRequested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        timings: TimingStats | None = None,
+    ) -> None:
         super().__init__(parent)
         self._image: QImage | None = None
         self._embedded = True
+        self.timings = timings if timings is not None else TimingStats()
 
         self._state_label = QLabel("idle")
         self._state_label.setObjectName("previewState")
@@ -154,11 +161,11 @@ class PreviewPanel(QWidget):
     def _rescale(self) -> None:
         if self._image is None:
             return
-        pixmap = QPixmap.fromImage(self._image)
-        self._viewport.setPixmap(
-            pixmap.scaled(
+        with self.timings.phase("scale"):
+            pixmap = QPixmap.fromImage(self._image)
+            scaled = pixmap.scaled(
                 self._viewport.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-        )
+        self._viewport.setPixmap(scaled)

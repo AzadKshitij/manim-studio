@@ -51,7 +51,7 @@ from manim_studio.scene_runner import (
     select_scene_class,
 )
 from manim_studio.scrub import FilmstripCrawler, ScrubEngine, ScrubError, read_upright_rgba
-from manim_studio.stats import process_rss_bytes
+from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.timeline_model import TimelineBlock
 from manim_studio.tracer import TraceEvent, TraceRecorder
 
@@ -107,12 +107,20 @@ class FramePump:
     Callers hand over already-encoded payloads (``offer_encoded``); ``offer`` is a
     convenience that encodes raw RGBA first.  Sending happens on the pump thread,
     so the GL thread never blocks on the socket.  When the transport cannot keep
-    up, frames are dropped instead of queued.
+    up, frames are dropped instead of queued.  With ``timings`` set, encoding and
+    sending are recorded as the ``encode``/``send`` phases.
     """
 
-    def __init__(self, sock: socket.socket, *, level: int = 1) -> None:
+    def __init__(
+        self,
+        sock: socket.socket,
+        *,
+        level: int = 1,
+        timings: TimingStats | None = None,
+    ) -> None:
         self._sock = sock
         self.level = level
+        self.timings = timings
         self.frames_sent = 0
         self.frames_dropped = 0
         self._cond = threading.Condition()
@@ -127,7 +135,12 @@ class FramePump:
 
     def offer(self, rgba: bytes, width: int, height: int) -> None:
         """Encode raw upright RGBA and queue it (latest wins)."""
-        self.offer_encoded(ipc.encode_frame(width, height, rgba, level=self.level))
+        if self.timings is None:
+            self.offer_encoded(ipc.encode_frame(width, height, rgba, level=self.level))
+            return
+        with self.timings.phase("encode"):
+            blob = ipc.encode_frame(width, height, rgba, level=self.level)
+        self.offer_encoded(blob)
 
     def offer_encoded(self, blob: bytes) -> None:
         """Queue a complete encoded frame payload (latest wins)."""
@@ -150,7 +163,11 @@ class FramePump:
                 self._slot = None
             assert blob is not None
             try:
-                self._sock.sendall(blob)
+                if self.timings is None:
+                    self._sock.sendall(blob)
+                else:
+                    with self.timings.phase("send"):
+                        self._sock.sendall(blob)
             except OSError:
                 with self._cond:
                     self._running = False
@@ -205,6 +222,7 @@ class SceneHost:
         self.control: JsonLineWriter | None = None
         self.frame_pump: FramePump | None = None
         self.tick = TickThrottler()
+        self.timings = TimingStats()
         self.shell: Any = None
         self._checkpoints: Any = None
         self._loaded_once = False
@@ -311,7 +329,7 @@ class SceneHost:
     def _start_frames(self) -> None:
         sock = self._connect(Channel.FRAMES)
         sock.sendall(encode_message(hello_message(Channel.FRAMES, role="host")))
-        self.frame_pump = FramePump(sock)
+        self.frame_pump = FramePump(sock, timings=self.timings)
         self.frame_pump.start()
 
     # ------------------------------------------------------------------
@@ -514,7 +532,8 @@ class SceneHost:
         def update_frame(dt: float = 0, force_draw: bool = False) -> Any:
             if self.stop_event.is_set():
                 raise EndScene()
-            result = original_update(dt, force_draw)
+            with self.timings.phase("render"):
+                result = original_update(dt, force_draw)
             drew["value"] = bool(force_draw) or not bool(getattr(scene, "skip_animations", False))
             return result
 
@@ -565,7 +584,11 @@ class SceneHost:
         engine = ScrubEngine(scene, self.blocks)
         self._crawler_engine = engine
         self._crawler = FilmstripCrawler(
-            engine, self._filmstrip, self._fps, on_progress=self._on_crawl_progress
+            engine,
+            self._filmstrip,
+            self._fps,
+            on_progress=self._on_crawl_progress,
+            timings=self.timings,
         )
         self.log.info("filmstrip: crawl started (%d blocks)", len(self.blocks))
 
@@ -605,6 +628,7 @@ class SceneHost:
             "host_rss": process_rss_bytes(),
             "sent": pump.frames_sent if pump is not None else 0,
             "dropped": pump.frames_dropped if pump is not None else 0,
+            "timings": self.timings.snapshot(),
         }
 
     def _stats_payload(self) -> dict[str, Any]:
@@ -626,6 +650,7 @@ class SceneHost:
             "total_duration": total,
             "size": list(self.config.size),
             "scene_name": self.scene_class.__name__ if self.scene_class is not None else None,
+            "timings": self.timings.snapshot(),
         }
 
     def _block_at(self, time_seconds: float) -> TimelineBlock | None:
@@ -682,7 +707,10 @@ class SceneHost:
 
         camera = target.camera
         width, height = (int(v) for v in camera.default_pixel_shape)
-        raw = camera.get_raw_fbo_data()
+        with self.timings.phase("readback"):
+            raw = camera.get_raw_fbo_data()
+            array = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 4)[::-1]
+            upright = array.tobytes()
         self.log.debug(
             "push %dx%d fbo=%s head=%s",
             width,
@@ -690,8 +718,7 @@ class SceneHost:
             getattr(camera.fbo, "glo", "?"),
             raw[:12].hex(),
         )
-        array = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 4)[::-1]
-        self.frame_pump.offer(array.tobytes(), width, height)
+        self.frame_pump.offer(upright, width, height)
 
     # ------------------------------------------------------------------
     # Commands
@@ -847,6 +874,7 @@ class SceneHost:
         except ScrubError as exc:
             self.emit_error(exc, context="scrub")
             return
+        self.timings.record("pose", engine.last_pose_seconds)
         scene = engine.scene
         scene.update_frame(dt=0, force_draw=True)
         blob = self._grab_frame_blob(scene.camera)
@@ -862,11 +890,12 @@ class SceneHost:
             cached=False,
         )
 
-    @staticmethod
-    def _grab_frame_blob(camera: Any) -> bytes:
+    def _grab_frame_blob(self, camera: Any) -> bytes:
         """Read one frame and return the complete encoded payload."""
-        rgba, width, height = read_upright_rgba(camera)
-        return ipc.encode_frame(width, height, rgba)
+        with self.timings.phase("readback"):
+            rgba, width, height = read_upright_rgba(camera)
+        with self.timings.phase("encode"):
+            return ipc.encode_frame(width, height, rgba)
 
     def _cmd_exec(self, message: dict[str, Any]) -> None:
         code = str(message.get("code", ""))

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from manim_studio.stats import cache_summary, format_bytes
+from manim_studio.stats import cache_summary, format_bytes, format_timings
 from manim_studio.timeline_model import format_duration
 
 __all__ = ["AppStatsDialog"]
@@ -53,6 +53,8 @@ class AppStatsDialog(QDialog):
         self._editor_rss_value = self._make_row()
         self._api_value = self._make_row()
         self._timeline_value = self._make_row()
+        self._host_perf_value = self._make_row()
+        self._editor_perf_value = self._make_row()
 
         layout = QVBoxLayout(self)
         layout.addWidget(
@@ -78,6 +80,15 @@ class AppStatsDialog(QDialog):
             )
         )
         layout.addWidget(self._make_group("Timeline", [("Blocks", self._timeline_value)]))
+        layout.addWidget(
+            self._make_group(
+                "Performance (avg / max per phase)",
+                [
+                    ("Preview host", self._host_perf_value),
+                    ("Editor", self._editor_perf_value),
+                ],
+            )
+        )
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -168,6 +179,7 @@ class AppStatsDialog(QDialog):
         )
         scene = host.get("scene_name") or "—"
         self._scene_value.setText(f"{scene} · {fps} fps · {size_text}")
+        self._host_perf_value.setText(self._render_timings(host.get("timings")))
 
     def _render_editor(self) -> None:
         try:
@@ -183,3 +195,10 @@ class AppStatsDialog(QDialog):
             self._timeline_value.setText(f"{blocks} blocks · {format_duration(duration)}")
         else:
             self._timeline_value.setText("—")
+        self._editor_perf_value.setText(self._render_timings(snapshot.get("timings")))
+
+    @staticmethod
+    def _render_timings(timings: Any) -> str:
+        if not isinstance(timings, dict) or not timings:
+            return "—"
+        return format_timings(timings)

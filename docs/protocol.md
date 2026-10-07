@@ -49,8 +49,8 @@ The frames channel is only opened in `--embedded` mode.
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |
 | `error` | `message`, `traceback`, `line?`, `scene_file?`, `context` | user-scene or command failure |
 | `exec_result` | `ok`, `stdout`, `stderr`, `result`, `error` | reply to `exec` |
-| `filmstrip` | `trace_id`, `frames`, `done`, `capped`, `fps`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped` | background frame-cache progress with RAM accounting (v2 fields additive; older editors ignore them) |
-| `stats` | `trace_id`, `frames`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `fps`, `blocks`, `total_duration`, `size`, `scene_name?` | on-demand snapshot for the App stats dialog (v2) |
+| `filmstrip` | `trace_id`, `frames`, `done`, `capped`, `fps`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `timings` | background frame-cache progress with RAM accounting (v2 fields additive; older editors ignore them) |
+| `stats` | `trace_id`, `frames`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `fps`, `blocks`, `total_duration`, `size`, `scene_name?`, `timings` | on-demand snapshot for the App stats dialog (v2) |
 | `pong` | `t` | reply to `ping` |
 
 `log.blocks` is the spec `log.json` shape:

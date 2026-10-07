@@ -46,7 +46,7 @@ from manim_studio.editor.timeline_controller import MediaTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.scene_runner import check_scene_file
-from manim_studio.stats import process_rss_bytes
+from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
 from manim_studio.timeline_model import TimelineLog
 
@@ -82,9 +82,10 @@ class MainWindow(QMainWindow):
         self._api_names = api_cache.load_api_names()
 
         self.editor = CodeEditor(self)
-        self.preview_panel = PreviewPanel(self)
+        self.timings = TimingStats()
+        self.preview_panel = PreviewPanel(self, timings=self.timings)
         self.timeline = TimelineWidget(self)
-        self.controller = PreviewController(self)
+        self.controller = PreviewController(self, timings=self.timings)
         self.exports = ExportController(self)
         self.stats = StatsController(
             self.controller, self._editor_stats_snapshot, dialog_parent=self, parent=self
@@ -675,6 +676,8 @@ class MainWindow(QMainWindow):
             "blocks": self.timeline.log.num_blocks,
             "total_duration": self.events.total_duration,
             "preview_size": self._preview_size,
+            "frames_received": self.controller.frames_received,
+            "timings": self.timings.snapshot(),
         }
 
     # ------------------------------------------------------------------

@@ -18,6 +18,7 @@ from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
 
 from manim_studio import ipc, spawn
 from manim_studio.ipc import Channel, Command, Event, FrameParser
+from manim_studio.stats import TimingStats
 
 __all__ = ["PreviewController"]
 
@@ -40,7 +41,12 @@ class PreviewController(QObject):
     hostLogReceived = Signal(str)
     stateChanged = Signal(str)  # starting | running | stopped | crashed
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        *,
+        timings: TimingStats | None = None,
+    ) -> None:
         super().__init__(parent)
         self._server = QTcpServer(self)
         self._server.newConnection.connect(self._on_new_connection)
@@ -55,6 +61,8 @@ class PreviewController(QObject):
         self._frame_parser = FrameParser()
         self._awaiting_hello: set[QTcpSocket] = set()
         self._expected_stop = False
+        self.timings = timings if timings is not None else TimingStats()
+        self.frames_received = 0
         self.scene_path: Path | None = None
         self.scene_name: str | None = None
 
@@ -269,6 +277,7 @@ class PreviewController(QObject):
             return
         image = self.decode_latest_frame(data)
         if image is not None:
+            self.frames_received += 1
             self.frameReceived.emit(image)
 
     def decode_latest_frame(self, data: bytes) -> QImage | None:
@@ -286,13 +295,15 @@ class PreviewController(QObject):
         if not frames:
             return None
         frame = frames[-1]
-        return QImage(
-            frame.rgba,
-            frame.width,
-            frame.height,
-            frame.width * 4,
-            QImage.Format.Format_RGBA8888,
-        ).copy()
+        with self.timings.phase("decode"):
+            image = QImage(
+                frame.rgba,
+                frame.width,
+                frame.height,
+                frame.width * 4,
+                QImage.Format.Format_RGBA8888,
+            ).copy()
+        return image
 
     def _dispatch(self, message: dict[str, Any]) -> None:
         event = message.get("event")

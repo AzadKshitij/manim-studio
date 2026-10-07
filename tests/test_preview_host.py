@@ -28,6 +28,7 @@ from manim_studio.ipc import (
     decode_message,
 )
 from manim_studio.preview_host import FramePump, TickThrottler, parse_size
+from manim_studio.stats import TimingStats
 from tests.helpers import FakeScene
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
@@ -112,6 +113,23 @@ class TestFramePump:
             pump.offer(b"\x00" * 16, 2, 2)
             assert pump.frames_sent == 0
         finally:
+            receiver.close()
+
+    def test_records_encode_and_send_timings(self) -> None:
+        sender, receiver = socket.socketpair()
+        timings = TimingStats()
+        try:
+            pump = FramePump(sender, timings=timings)
+            pump.start()
+            pump.offer(self._rgba(4, 4), 4, 4)
+            deadline = time.monotonic() + 5
+            while pump.frames_sent < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            snapshot = timings.snapshot()
+            assert snapshot["encode"]["count"] == 1
+            assert snapshot["send"]["count"] >= 1
+        finally:
+            pump.close()
             receiver.close()
 
 

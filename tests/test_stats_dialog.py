@@ -23,6 +23,7 @@ HOST_STATS: dict[str, Any] = {
     "total_duration": 9.5,
     "size": [1280, 720],
     "scene_name": "Demo",
+    "timings": {"encode": {"avg_ms": 1.5, "max_ms": 2.0, "count": 10}},
 }
 
 
@@ -36,7 +37,14 @@ class _StubController:
 
 
 def _snapshot() -> dict[str, Any]:
-    return {"editor_rss": 210 * 1024 * 1024, "api_names": 1234, "blocks": 14, "total_duration": 9.5}
+    return {
+        "editor_rss": 210 * 1024 * 1024,
+        "api_names": 1234,
+        "blocks": 14,
+        "total_duration": 9.5,
+        "frames_received": 42,
+        "timings": {"scale": {"avg_ms": 2.5, "max_ms": 4.0, "count": 7}},
+    }
 
 
 class TestAppStatsDialog:
@@ -49,6 +57,7 @@ class TestAppStatsDialog:
         assert "412.0 MiB" in dialog._host_rss_value.text()
         assert "1234 sent" in dialog._pump_value.text()
         assert "Demo" in dialog._scene_value.text()
+        assert "encode: 1.5 ms" in dialog._host_perf_value.text()
 
     def test_refresh_polls_and_paints_editor(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         controller = _StubController()
@@ -59,6 +68,7 @@ class TestAppStatsDialog:
         assert "210.0 MiB" in dialog._editor_rss_value.text()
         assert "1234" in dialog._api_value.text()
         assert "14 blocks" in dialog._timeline_value.text()
+        assert "scale: 2.5 ms" in dialog._editor_perf_value.text()
 
     def test_empty_host_keeps_placeholders(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         dialog = AppStatsDialog(_StubController(), _snapshot)

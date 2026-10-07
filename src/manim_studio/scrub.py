@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from manim_studio.filmstrip import Filmstrip
+    from manim_studio.stats import TimingStats
 
 __all__ = ["FilmstripCrawler", "ScrubEngine", "ScrubError", "read_upright_rgba"]
 
@@ -258,11 +259,13 @@ class FilmstripCrawler:
         *,
         on_progress: Callable[[int, bool, bool], None] | None = None,
         frame_budget: int = 6,
+        timings: TimingStats | None = None,
     ) -> None:
         self._engine = engine
         self._filmstrip = filmstrip
         self._fps = max(1, int(fps))
         self._on_progress = on_progress
+        self._timings = timings
         self.frame_budget = max(1, int(frame_budget))
         self._blocks = tuple(engine._blocks)
         self._block_index = 0
@@ -351,10 +354,21 @@ class FilmstripCrawler:
         from manim_studio.ipc import encode_frame
 
         scene = self._engine.scene
-        scene.camera.capture(*scene.render_groups)
-        rgba, width, height = read_upright_rgba(scene.camera)
+        timings = self._timings
+        if timings is None:
+            scene.camera.capture(*scene.render_groups)
+            rgba, width, height = read_upright_rgba(scene.camera)
+        else:
+            with timings.phase("crawl_capture"):
+                scene.camera.capture(*scene.render_groups)
+                rgba, width, height = read_upright_rgba(scene.camera)
         index = round(scene.time * self._fps)
-        if not self._filmstrip.put(index, encode_frame(width, height, rgba)):
+        if timings is None:
+            blob = encode_frame(width, height, rgba)
+        else:
+            with timings.phase("crawl_encode"):
+                blob = encode_frame(width, height, rgba)
+        if not self._filmstrip.put(index, blob):
             self._capped = True
             self._finish()
             return

@@ -8,7 +8,23 @@ locally and exchange the numbers over the existing control channel.
 
 from __future__ import annotations
 
-__all__ = ["cache_summary", "format_bytes", "process_rss_bytes", "usage_percent"]
+import contextlib
+import math
+import threading
+import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping
+
+__all__ = [
+    "TimingStats",
+    "cache_summary",
+    "format_bytes",
+    "format_timings",
+    "process_rss_bytes",
+    "usage_percent",
+]
 
 
 def format_bytes(value: int | float | None) -> str:
@@ -64,6 +80,73 @@ def cache_summary(
     if max_frames and max_frames > 0 and frames is not None and frames >= 0:
         summary += f" · cap {max_frames} frames"
     return summary
+
+
+class TimingStats:
+    """Thread-safe EWMA + max aggregator for named phase timings.
+
+    Phases are recorded as wall-clock seconds (``record``) or timed with the
+    :meth:`phase` context manager.  :meth:`snapshot` reports millisecond averages
+    so the editor can show where a frame's budget goes.  The preview host records
+    from its GL thread and its pump thread, so every mutation is lock-protected.
+    """
+
+    def __init__(self, *, alpha: float = 0.2) -> None:
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("alpha must be in (0, 1]")
+        self._alpha = float(alpha)
+        self._lock = threading.Lock()
+        self._entries: dict[str, list[float]] = {}
+
+    def record(self, name: str, seconds: float) -> None:
+        """Fold one duration into ``name``; non-finite/negative values are ignored."""
+        if not name or not math.isfinite(seconds) or seconds < 0:
+            return
+        millis = seconds * 1000.0
+        with self._lock:
+            entry = self._entries.get(name)
+            if entry is None:
+                self._entries[name] = [millis, millis, 1.0]
+                return
+            entry[0] += (millis - entry[0]) * self._alpha
+            entry[1] = max(entry[1], millis)
+            entry[2] += 1.0
+
+    @contextlib.contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        """Time the enclosed block and record it under ``name``."""
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.record(name, time.perf_counter() - started)
+
+    def snapshot(self) -> dict[str, dict[str, float]]:
+        """Millisecond avg/max/count per phase, ordered by name."""
+        with self._lock:
+            return {
+                name: {
+                    "avg_ms": round(entry[0], 3),
+                    "max_ms": round(entry[1], 3),
+                    "count": int(entry[2]),
+                }
+                for name, entry in sorted(self._entries.items())
+            }
+
+    def reset(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+def format_timings(snapshot: Mapping[str, Mapping[str, float]]) -> str:
+    """One line per phase, e.g. ``render: 3.1 ms (max 7.2, n=120)``."""
+    lines: list[str] = []
+    for name, entry in snapshot.items():
+        average = float(entry.get("avg_ms", 0.0))
+        peak = float(entry.get("max_ms", 0.0))
+        count = int(entry.get("count", 0))
+        lines.append(f"{name}: {average:.1f} ms (max {peak:.1f}, n={count})")
+    return "\n".join(lines)
 
 
 def process_rss_bytes() -> int | None:
