@@ -24,6 +24,7 @@ from pyside6_scintilla import Scintilla, ScintillaEdit
 
 from manim_editor.ipc import as_bytes as _as_bytes
 from manim_editor.python_highlight import (
+    Span,
     TokenKind,
     highlight_spans,
     kind_at,
@@ -122,6 +123,7 @@ class CodeEditor(ScintillaEdit):
         self._completions: tuple[str, ...] = ()
         self._error_line: int | None = None
         self._last_modified = False
+        self._code_words: tuple[str, ...] = ()
         # Pygments lexes the whole buffer, so coalesce edits into one restyle
         # per event-loop turn instead of re-lexing on every keystroke.
         self._restyle_timer = QTimer(self)
@@ -217,18 +219,21 @@ class CodeEditor(ScintillaEdit):
 
         Scintilla styling counts UTF-8 bytes (positions and lengths), while
         Pygments spans are character offsets, so the gap and run lengths are
-        encoded before being handed to ``setStyling``.
+        encoded before being handed to ``setStyling``.  The same spans refresh
+        the instant completion words, so no extra lexing happens per keystroke.
         """
         text = self._raw_text()
+        spans = highlight_spans(text)
         self.startStyling(0, _STYLE_MASK)
         last = 0
-        for start, end, kind in highlight_spans(text):
+        for start, end, kind in spans:
             if start > last:
                 self.setStyling(_byte_length(text, last, start), STYLE_DEFAULT)
             self.setStyling(_byte_length(text, start, end), _ROLE_STYLE[kind])
             last = end
         if last < len(text):
             self.setStyling(_byte_length(text, last, len(text)), STYLE_DEFAULT)
+        self._code_words = _code_identifiers(text, spans)
 
     @staticmethod
     def _monospace_family() -> str:
@@ -393,9 +398,8 @@ class CodeEditor(ScintillaEdit):
 
     def _instant_completions(self, *, member: bool) -> tuple[str, ...]:
         merged: dict[str, None] = {} if member else dict.fromkeys(self._completions)
-        for word in _IDENTIFIER_RE.findall(self.text()):
-            if len(word) >= 2:
-                merged.setdefault(word, None)
+        for word in self._code_words:
+            merged.setdefault(word, None)
             if len(merged) >= _MAX_INSTANT_COMPLETIONS:
                 break
         return tuple(merged)
@@ -541,6 +545,24 @@ class CodeEditor(ScintillaEdit):
 def _byte_length(text: str, start: int, end: int) -> int:
     """UTF-8 byte length of ``text[start:end]`` (Scintilla styling units)."""
     return len(text[start:end].encode("utf-8"))
+
+
+def _code_identifiers(text: str, spans: Sequence[Span]) -> tuple[str, ...]:
+    """Identifiers that occur in code, excluding ones inside strings/comments.
+
+    The instant completion list is built from these; skipping prose keeps words
+    like "the" or "mobject" (from comments and docstrings) out of the popup.
+    """
+    words: dict[str, None] = {}
+    for start, end, kind in spans:
+        if kind in (TokenKind.STRING, TokenKind.COMMENT):
+            continue
+        for word in _IDENTIFIER_RE.findall(text, start, end):
+            if len(word) >= 2:
+                words.setdefault(word, None)
+                if len(words) >= _MAX_INSTANT_COMPLETIONS:
+                    return tuple(words)
+    return tuple(words)
 
 
 def _dedent(lines: list[str]) -> list[str]:

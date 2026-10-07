@@ -308,6 +308,16 @@ class TestCompletion:
         assert "grid" in member_words
         assert "Circle" in all_words and "grid" in all_words
 
+    def test_instant_list_excludes_comment_and_string_words(self, editor: CodeEditor) -> None:
+        editor.set_text(
+            'grid = NumberPlane()  # the mobject moves\nlabel = "interpolate value"\ngrid.pl'
+        )
+        editor.set_completions([])
+        words = editor._instant_completions(member=True)
+        assert "grid" in words and "label" in words
+        assert "the" not in words and "mobject" not in words
+        assert "interpolate" not in words and "value" not in words
+
     def test_member_access_detection(self, editor: CodeEditor) -> None:
         editor.set_text("grid.pl")
         editor.gotoPos(editor.textLength())
