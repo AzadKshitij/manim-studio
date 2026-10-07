@@ -780,6 +780,18 @@ class TestTransport:
         finally:
             self._restore(window)
 
+    def test_unchecking_the_loop_stops_further_replays(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_transport_loop(True)
+            window._on_stopped_loop({"user_stopped": False})  # loops once
+            assert len(stub.plays) == 1
+            window._on_transport_loop(False)  # the user unchecks Loop
+            window._on_stopped_loop({"user_stopped": False})  # must not loop again
+            assert len(stub.plays) == 1
+        finally:
+            self._restore(window)
+
     def test_zoom_actions_drive_the_timeline(self, window: MainWindow) -> None:
         self._stub(window)
         try:

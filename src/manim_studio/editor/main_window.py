@@ -644,6 +644,9 @@ class MainWindow(QMainWindow):
         self._loop = bool(enabled)
         self.timeline.set_looping(self._loop)
         self.transport.set_looping(self._loop)
+        # Enabling the loop clears any earlier pause intent; disabling it is an
+        # explicit "stop repeating", so it cancels a pending replay too.
+        self._loop_paused = not self._loop
         self._set_status("loop on" if self._loop else "loop off")
 
     def _on_transport_speed(self, speed: float) -> None:
