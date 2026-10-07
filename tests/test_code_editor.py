@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 
 from manim_editor.editor.code_editor import (
     PY_BUILTIN,
@@ -53,6 +54,25 @@ class TestText:
     def test_crlf_normalized(self, editor: CodeEditor) -> None:
         editor.set_text("a = 1\r\nb = 2\r\n")
         assert editor.text() == "a = 1\nb = 2\n"
+
+    def test_typed_newline_is_lf(self, editor: CodeEditor) -> None:
+        editor.set_text("a = 1\n")
+        editor.gotoPos(editor.textLength())
+        QTest.keyClick(editor, Qt.Key.Key_Return)
+        # Windows Scintilla would otherwise insert CRLF, desyncing the buffer
+        # from ``text()`` and the Jedi caret offset.
+        assert "\r" not in editor._raw_text()
+        assert editor.text() == "a = 1\n\n"
+
+    def test_caret_offset_maps_through_crlf(self, editor: CodeEditor) -> None:
+        # A CRLF can still arrive via paste (bypassing set_text's normalisation);
+        # the character offset must ignore the '\r' so it indexes ``text()``.
+        editor.setText("x = 1\r\ny = gri")
+        editor.gotoPos(editor.textLength())
+        assert "\r" in editor._raw_text()
+        text = editor.text()
+        assert editor._char_position() == len(text)
+        assert text[: editor._char_position()].endswith("y = gri")
 
     def test_modification_lifecycle(self, editor: CodeEditor) -> None:
         editor.set_text("x = 1\n")
@@ -306,3 +326,19 @@ class TestCompletion:
         editor.completionsRequested.connect(lambda _source, offset: offsets.append(offset))
         editor._request_completions()
         assert offsets == [len(text)]
+
+    def test_offset_after_typed_enter_targets_caret(self, editor: CodeEditor) -> None:
+        # Regression: typing Enter must not shift the Jedi offset past the caret
+        # (the bug made ``self.a`` complete at the next line and return globals).
+        editor.set_text("def f():\n    return 1\n")
+        editor.go_to_line(2)
+        editor.lineEnd()
+        QTest.keyClick(editor, Qt.Key.Key_Return)
+        QTest.keyClicks(editor, "    value")
+        offsets: list[int] = []
+        editor.completionsRequested.connect(lambda _source, offset: offsets.append(offset))
+        editor._request_completions()
+        text = editor.text()
+        assert text == "def f():\n    return 1\n    value\n"
+        assert offsets == [len(text) - 1]  # caret before the trailing newline
+        assert text[: offsets[-1]].endswith("    value")

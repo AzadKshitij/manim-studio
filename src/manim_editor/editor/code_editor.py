@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 # the container-styling API (SCI_STARTSTYLING/SCI_SETSTYLING) from Pygments.
 SC_MARGIN_SYMBOL = 0
 SC_MARGIN_NUMBER = 1
+SC_EOL_LF = 2
 STYLE_DEFAULT = 32
 STYLE_LINENUMBER = 33
 _STYLE_MASK = 0x1F  # SC_STYLE_MASK: all five style bits
@@ -147,6 +148,11 @@ class CodeEditor(ScintillaEdit):
         self.setUseTabs(False)
         self.setTabIndents(True)
         self.setBackSpaceUnIndents(True)
+        # Keep typed newlines as LF.  On Windows Scintilla defaults to CRLF, so
+        # an Enter would insert "\r\n" while ``text()`` normalises to "\n"; the
+        # caret byte offset would then drift past the caret for Jedi (see
+        # ``_byte_to_char``).  Loaded files are already normalised to LF.
+        self.setEOLMode(SC_EOL_LF)
         self.setIndentationGuides(True)
         self.setScrollWidthTracking(True)
         self.setCaretLineVisible(True)
@@ -441,7 +447,12 @@ class CodeEditor(ScintillaEdit):
         if byte_position <= 0:
             return 0
         prefix = self._raw_text().encode("utf-8")[:byte_position]
-        return len(prefix.decode("utf-8", "replace"))
+        # ``text()`` normalises CRLF/CR to LF, so an offset into it must count
+        # the normalised characters, not the raw ones.  Without this a pasted
+        # CRLF (or Scintilla's Windows EOL mode) would push the Jedi offset past
+        # the caret and complete the wrong token.
+        raw = prefix.decode("utf-8", "replace")
+        return len(raw.replace("\r\n", "\n").replace("\r", "\n"))
 
     def _in_member_access(self, position: int) -> bool:
         """True when the word at ``position`` follows a dot (``obj.``)."""
