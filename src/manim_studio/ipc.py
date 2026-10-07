@@ -3,13 +3,15 @@
 Two channels are used, both plain loopback TCP:
 
 * **control** — newline-delimited JSON objects, both directions.
-* **frames** — one-directional host → editor stream of length-prefixed, zlib-compressed
-  RGBA frames (:func:`encode_frame` / :class:`FrameParser`).
+* **frames** — one-directional host → editor stream of length-prefixed frames whose
+  RGBA payload is compressed by :mod:`manim_studio.frame_codec` (zstd by default,
+  with zlib and raw fallbacks).
 
 Every message on a freshly accepted connection starts with a ``hello`` event that
 declares the channel, so a single listening socket can accept both connections.
 
-This module is pure stdlib and fully unit-tested.
+This module has no third-party imports at load time; ``frame_codec`` imports
+``zstandard`` lazily.
 """
 
 from __future__ import annotations
@@ -17,10 +19,11 @@ from __future__ import annotations
 import json
 import struct
 import threading
-import zlib
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
+
+from manim_studio import frame_codec
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -44,13 +47,13 @@ __all__ = [
     "hello_message",
 ]
 
-PROTOCOL_VERSION: Final = 2
+PROTOCOL_VERSION: Final = 3
 
 #: Refuse absurd frames (defensive upper bound: 4096x4096 RGBA).
 MAX_FRAME_PAYLOAD: Final = 4096 * 4096 * 4
 
 FRAME_MAGIC: Final = b"MFRM"
-_FRAME_HEADER: Final = struct.Struct("<4sIIQ")
+_FRAME_HEADER: Final = struct.Struct("<4sBIIQ")
 
 
 class ProtocolError(Exception):
@@ -226,7 +229,7 @@ class Frame:
 
 
 def encode_frame(width: int, height: int, rgba: bytes, *, level: int = 1) -> bytes:
-    """Length-prefix and zlib-compress one RGBA frame."""
+    """Length-prefix and compress one RGBA frame (see :mod:`frame_codec`)."""
     if width <= 0 or height <= 0:
         raise ProtocolError(f"invalid frame size {width}x{height}")
     expected = width * height * 4
@@ -234,8 +237,8 @@ def encode_frame(width: int, height: int, rgba: bytes, *, level: int = 1) -> byt
         raise ProtocolError(f"frame payload is {len(rgba)} bytes, expected {expected}")
     if expected > MAX_FRAME_PAYLOAD:
         raise ProtocolError(f"frame too large: {width}x{height}")
-    payload = zlib.compress(rgba, level)
-    return _FRAME_HEADER.pack(FRAME_MAGIC, width, height, len(payload)) + payload
+    scheme, payload = frame_codec.compress(rgba, level=level)
+    return _FRAME_HEADER.pack(FRAME_MAGIC, scheme, width, height, len(payload)) + payload
 
 
 class FrameParser:
@@ -263,7 +266,7 @@ class FrameParser:
         while True:
             if len(self._buffer) < _FRAME_HEADER.size:
                 break
-            magic, width, height, payload_len = _FRAME_HEADER.unpack_from(self._buffer)
+            magic, scheme, width, height, payload_len = _FRAME_HEADER.unpack_from(self._buffer)
             if magic != FRAME_MAGIC:
                 raise ProtocolError(f"bad frame magic {magic!r}")
             if width <= 0 or height <= 0 or width * height * 4 > MAX_FRAME_PAYLOAD:
@@ -276,8 +279,8 @@ class FrameParser:
             payload = bytes(self._buffer[_FRAME_HEADER.size : end])
             del self._buffer[:end]
             try:
-                rgba = zlib.decompress(payload)
-            except zlib.error as exc:
+                rgba = frame_codec.decompress(scheme, payload)
+            except frame_codec.CodecError as exc:
                 raise ProtocolError(f"corrupt frame payload: {exc}") from exc
             if len(rgba) != width * height * 4:
                 raise ProtocolError(

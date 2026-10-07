@@ -1,4 +1,4 @@
-# Preview protocol (v2)
+# Preview protocol (v3)
 
 The editor (Qt) and the preview host (`manim_studio.preview_host`) communicate over
 loopback TCP. The editor listens; the host connects back to the port passed on argv.
@@ -12,7 +12,7 @@ The editor accepts two connections per host process. Every connection starts wit
 `hello` message that declares its channel:
 
 ```json
-{"event": "hello", "channel": "control", "protocol": 2, "role": "host",
+{"event": "hello", "channel": "control", "protocol": 3, "role": "host",
  "pid": 1234, "scene": "C:/path/scene.py", "scene_name": "Demo",
  "embedded": true, "size": [1280, 720], "fps": 30}
 ```
@@ -20,7 +20,7 @@ The editor accepts two connections per host process. Every connection starts wit
 | Channel | Direction | Transport |
 | --- | --- | --- |
 | `control` | both | newline-delimited JSON (`JsonLineWriter`/`JsonLineReader`) |
-| `frames` | host → editor | length-prefixed zlib RGBA (`encode_frame`/`FrameParser`) |
+| `frames` | host → editor | length-prefixed zstd/zlib/raw RGBA (`encode_frame`/`FrameParser`) |
 
 The frames channel is only opened in `--embedded` mode.
 
@@ -58,12 +58,18 @@ The frames channel is only opened in `--embedded` mode.
 
 ## Frame encoding
 
+Each frame is a fixed header followed by one compressed payload. The scheme byte
+selects the codec for that payload (``0`` zlib, ``1`` zstd, ``2`` raw); the host
+picks the smallest of zstd/zlib and falls back to raw when compression would not
+shrink the frame. This is v3: the scheme byte did not exist in v2.
+
 ```
 offset 0   magic   "MFRM" (4 bytes)
-offset 4   width   uint32 LE
-offset 8   height  uint32 LE
-offset 12  length  uint64 LE (compressed payload bytes)
-offset 20  payload zlib-compressed, upright RGBA8888
+offset 4   scheme  uint8 (0 zlib, 1 zstd, 2 raw)
+offset 5   width   uint32 LE
+offset 9   height  uint32 LE
+offset 13  length  uint64 LE (payload bytes)
+offset 21  payload upright RGBA8888, coded per scheme
 ```
 
 Backpressure rule: the host keeps at most one frame in flight per channel. If the

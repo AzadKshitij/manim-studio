@@ -35,7 +35,8 @@ explaining why not.
 | `manim_studio/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls | stdlib, `timeline_model` |
 | `manim_studio/python_highlight.py` | Pygments-powered Python token spans for the code editor | stdlib, `pygments` |
 | `manim_studio/python_completion.py` | Jedi-backed completion candidates and call signatures | stdlib, `jedi` |
-| `manim_studio/ipc.py` | JSON-line protocol + binary frame codec | stdlib only |
+| `manim_studio/ipc.py` | JSON-line protocol + binary frame framing | stdlib, `frame_codec` |
+| `manim_studio/frame_codec.py` | Frame payload codec (zstd default, zlib/raw fallback) | stdlib (+ `zstandard` imported lazily) |
 | `manim_studio/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
 | `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib only |

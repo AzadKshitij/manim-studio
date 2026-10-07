@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import io
+import random
 import socket
 import threading
 
 import pytest
 
+from manim_studio import frame_codec
 from manim_studio.ipc import (
     PROTOCOL_VERSION,
     Channel,
@@ -178,12 +180,29 @@ class TestFrameCodec:
     def test_parser_rejects_absurd_dimensions(self) -> None:
         import struct
 
-        header = struct.pack("<4sIIQ", b"MFRM", 99999, 99999, 0)
+        header = struct.pack("<4sBIIQ", b"MFRM", frame_codec.SCHEME_ZLIB, 99999, 99999, 0)
         with pytest.raises(ProtocolError, match="dimensions"):
             FrameParser().feed(header)
 
     def test_parser_rejects_corrupt_payload(self) -> None:
-        blob = bytearray(encode_frame(2, 2, self._rgba(2, 2)))
+        rgba = bytes(4096)  # compressible, so a real codec (not raw) is chosen
+        blob = bytearray(encode_frame(32, 32, rgba))
         blob[-1] ^= 0xFF
         with pytest.raises(ProtocolError, match="corrupt"):
             FrameParser().feed(bytes(blob))
+
+    def test_compressed_payload_reports_compressing_scheme(self) -> None:
+        scheme, payload = frame_codec.compress(bytes(8192))
+        assert scheme in (frame_codec.SCHEME_ZSTD, frame_codec.SCHEME_ZLIB)
+        assert len(payload) < 8192
+
+    def test_incompressible_payload_is_sent_raw(self) -> None:
+        data = random.Random(0).randbytes(4096)
+        scheme, payload = frame_codec.compress(data)
+        assert scheme == frame_codec.SCHEME_RAW
+        assert payload is data
+
+    def test_tiny_frame_round_trips(self) -> None:
+        # 2x2 RGBA is 16 bytes; compression cannot help, so this exercises raw.
+        rgba = self._rgba(2, 2)
+        assert FrameParser().feed(encode_frame(2, 2, rgba)) == [Frame(width=2, height=2, rgba=rgba)]

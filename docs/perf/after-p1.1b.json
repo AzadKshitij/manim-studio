@@ -1,0 +1,98 @@
+{
+  "end_to_end": {
+    "crawl_fps": 39.32,
+    "crawl_frames": 107,
+    "crawl_seconds": 2.721,
+    "host_timings": {
+      "crawl_capture": {
+        "avg_ms": 8.146,
+        "count": 107,
+        "max_ms": 25.003
+      },
+      "crawl_encode": {
+        "avg_ms": 1.339,
+        "count": 107,
+        "max_ms": 2.251
+      },
+      "encode": {
+        "avg_ms": 2.434,
+        "count": 93,
+        "max_ms": 126.616
+      },
+      "handoff": {
+        "avg_ms": 0.038,
+        "count": 94,
+        "max_ms": 0.058
+      },
+      "readback": {
+        "avg_ms": 4.988,
+        "count": 94,
+        "max_ms": 13.333
+      },
+      "render": {
+        "avg_ms": 23.165,
+        "count": 94,
+        "max_ms": 34.015
+      },
+      "send": {
+        "avg_ms": 0.786,
+        "count": 93,
+        "max_ms": 14.869
+      }
+    },
+    "play_frames": 91,
+    "play_realtime_ratio": 1.121,
+    "play_seconds": 3.306,
+    "playback_fps": 27.53,
+    "stopped": true,
+    "total_duration": 2.95,
+    "trace_seconds": 4.749
+  },
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-07T19:37:35",
+  "machine": {
+    "cpu_count": 8,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD",
+    "python": "3.13.12"
+  },
+  "micro": {
+    "zlib-1": {
+      "decode_ms": 10.677,
+      "encode_ms": 37.026,
+      "payload_bytes": 410051,
+      "ratio": 8.99
+    },
+    "zlib-6": {
+      "decode_ms": 7.993,
+      "encode_ms": 70.026,
+      "payload_bytes": 125297,
+      "ratio": 29.42
+    },
+    "zstd-1": {
+      "decode_ms": 5.995,
+      "encode_ms": 6.255,
+      "payload_bytes": 138363,
+      "ratio": 26.64
+    },
+    "zstd-3": {
+      "decode_ms": 6.015,
+      "encode_ms": 10.914,
+      "payload_bytes": 140203,
+      "ratio": 26.29
+    }
+  },
+  "parser": {
+    "payload_bytes": 138384,
+    "round_trip_ms": 7.797
+  },
+  "pump": {
+    "caller_speedup": 2233.9,
+    "encode_ref_ms": 6.255,
+    "handoff_ms": 0.0028
+  }
+}

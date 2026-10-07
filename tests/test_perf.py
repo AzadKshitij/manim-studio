@@ -80,13 +80,14 @@ class TestMicroBenchmark:
     def test_frame_codecs_and_parser(self) -> None:
         rgba = _render_like_frame(WIDTH, HEIGHT)
         micro = benchmark.bench_codecs(rgba, repeats=15)
+        pipeline_codec = "zstd-1" if "zstd-1" in micro else "zlib-1"
         report = {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "machine": benchmark.machine_info(),
             "frame": {"width": WIDTH, "height": HEIGHT, "bytes": len(rgba)},
             "micro": micro,
             "parser": benchmark.bench_parser(WIDTH, HEIGHT, rgba, repeats=15),
-            "pump": _pump_handoff(rgba, encode_ref_ms=micro["zlib-1"]["encode_ms"]),
+            "pump": _pump_handoff(rgba, encode_ref_ms=micro[pipeline_codec]["encode_ms"]),
         }
         _record(report)
         assert report["micro"]["zlib-1"]["encode_ms"] >= 0.0

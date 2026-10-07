@@ -97,3 +97,21 @@ them, so the GL thread only pays a lock + buffer swap. Recorded in
 The handoff number is deterministic and is the real proof: the GL thread no
 longer blocks on compression. The end-to-end numbers carry several-percent
 run-to-run noise (this box is shared), so treat them as directional.
+
+### P1.1b — zstd wire codec (2026-10-07)
+
+`ipc` frames now carry a scheme byte and go through `frame_codec` (zstd-1,
+zlib/raw fallback); `PROTOCOL_VERSION` is 3. Recorded in `after-p1.1b.json`:
+
+| metric | baseline | P1.1 | P1.1b |
+| --- | --- | --- | --- |
+| crawl | 22.96 fps | 26.96 fps | **39.32 fps** |
+| host `crawl_encode` | 12.5 ms | 13.0 ms | **1.34 ms** |
+| host `encode` (playback) | 18.3 ms | 14.7 ms | **2.43 ms** |
+| parser round trip | 10.8 ms | 11.4 ms | 7.8 ms |
+| playback | 25.0 fps / 1.233 | 27.7 fps / 1.115 | 27.5 fps / 1.121 |
+
+Crawl throughput is up 71% on the baseline and frame encoding is an order of
+magnitude cheaper. Note: zstd compression contexts are not thread-safe and the
+host encodes on both the pump and the idle/crawl thread, so `frame_codec`
+caches one compressor **per thread**.

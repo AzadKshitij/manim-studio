@@ -33,6 +33,10 @@ dependencies = [
     # Jedi powers the editor's static completion and calltips off the GUI
     # thread (see manim_studio.python_completion).
     "jedi>=0.19",
+    # Frame codec for the preview stream: zstd encodes ~6x faster than zlib at a
+    # ~3x better ratio (docs/perf). manim_studio.frame_codec imports it lazily
+    # and falls back to zlib when it is unavailable.
+    "zstandard>=0.23",
     # manimgl 1.7.2 imports pkg_resources at import time. setuptools>=81 no
     # longer ships it, so keep the runtime dependency bounded.
     "setuptools>=69,<81",
