@@ -267,3 +267,42 @@ class TestCompletion:
         assert editor.callTipActive() is True
         editor.callTipCancel()
         assert editor.callTipActive() is False
+
+    def test_instant_list_includes_buffer_words(self, editor: CodeEditor) -> None:
+        editor.set_text("grid = NumberPlane()\nvalue = 1\nx = gri")
+        editor.gotoPos(editor.textLength())
+        editor.set_completions(["Circle", "Square"])
+        words = editor._instant_completions(member=False)
+        assert "grid" in words and "Circle" in words
+        assert editor._show_static_completions() is True
+        assert editor.autoCActive() is True
+        editor.autoCCancel()
+
+    def test_member_context_omits_global_api_names(self, editor: CodeEditor) -> None:
+        editor.set_text("grid = NumberPlane()\ngrid.pl")
+        editor.gotoPos(editor.textLength())
+        editor.set_completions(["Circle", "Square"])
+        member_words = editor._instant_completions(member=True)
+        all_words = editor._instant_completions(member=False)
+        assert "Circle" not in member_words
+        assert "grid" in member_words
+        assert "Circle" in all_words and "grid" in all_words
+
+    def test_member_access_detection(self, editor: CodeEditor) -> None:
+        editor.set_text("grid.pl")
+        editor.gotoPos(editor.textLength())
+        assert editor._in_member_access(editor.current_position()) is True
+        editor.set_text("grid")
+        editor.gotoPos(editor.textLength())
+        assert editor._in_member_access(editor.current_position()) is False
+
+    def test_completion_offset_is_character_based(self, editor: CodeEditor) -> None:
+        text = "π = gri"
+        editor.set_text(text)
+        editor.gotoPos(editor.textLength())
+        assert editor.current_position() == len(text.encode("utf-8"))
+        assert editor._char_position() == len(text)
+        offsets: list[int] = []
+        editor.completionsRequested.connect(lambda _source, offset: offsets.append(offset))
+        editor._request_completions()
+        assert offsets == [len(text)]

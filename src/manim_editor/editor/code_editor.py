@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,12 @@ MARKER_ERROR = 0
 INDIC_ERROR = 8
 
 _MONOSPACE_CANDIDATES = ("Consolas", "Cascadia Mono", "Menlo", "DejaVu Sans Mono", "Courier New")
+
+# Buffer identifiers are offered as instant (worker-free) completions.  One
+# identifier-shaped word token; the cap keeps the popup list bounded on huge
+# generated files.
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_MAX_INSTANT_COMPLETIONS = 4000
 
 
 def _colorref(rgb: int) -> int:
@@ -359,41 +366,62 @@ class CodeEditor(ScintillaEdit):
         self._completions = tuple(names)
 
     def trigger_completion(self) -> bool:
-        """Show the instant static list and ask Jedi for a richer one."""
+        """Show the instant word list and ask Jedi for a richer one."""
         shown = self._show_static_completions()
         self._request_completions()
         return shown
 
     def _show_static_completions(self) -> bool:
-        if not self._completions:
-            return False
+        """Offer instant completions: API names plus in-buffer identifiers.
+
+        In a member-access context (``self.``, ``grid.``) the global API list
+        would be wrong, so only identifiers already seen in the buffer are
+        offered until Jedi answers with the real member list.
+        """
         position = self.current_position()
-        self.autoCShow(position - self._word_start(position), " ".join(self._completions))
+        words = self._instant_completions(member=self._in_member_access(position))
+        if not words:
+            return False
+        self.autoCShow(position - self._word_start(position), " ".join(words))
         return True
 
+    def _instant_completions(self, *, member: bool) -> tuple[str, ...]:
+        merged: dict[str, None] = {} if member else dict.fromkeys(self._completions)
+        for word in _IDENTIFIER_RE.findall(self.text()):
+            if len(word) >= 2:
+                merged.setdefault(word, None)
+            if len(merged) >= _MAX_INSTANT_COMPLETIONS:
+                break
+        return tuple(merged)
+
     def show_completions(self, offset: int, items: Sequence[str]) -> None:
-        """Display a Jedi completion list for ``offset`` (ignored if stale)."""
-        if offset != self.current_position() or not items:
+        """Display a Jedi completion list for ``offset`` (ignored if stale).
+
+        ``offset`` is a character offset (Jedi's unit); Scintilla positions are
+        UTF-8 byte offsets, so the popup anchor is converted below.
+        """
+        if offset != self._char_position() or not items:
             return
+        position = self.current_position()
         self.autoCCancel()
-        self.autoCShow(offset - self._word_start(offset), " ".join(items))
+        self.autoCShow(position - self._word_start(position), " ".join(items))
 
     def show_calltip(self, offset: int, text: str) -> None:
         """Display a signature calltip for ``offset`` (ignored if stale)."""
-        if offset != self.current_position() or not text:
+        if offset != self._char_position() or not text:
             return
-        self.callTipShow(offset, text)
+        self.callTipShow(self.current_position(), text)
 
     def _request_completions(self) -> None:
         source = self.text()
-        offset = self.current_position()
+        offset = self._char_position()
         if self._caret_in_ignored_token(source, offset):
             return
         self.completionsRequested.emit(source, offset)
 
     def _request_signatures(self) -> None:
         source = self.text()
-        offset = self.current_position()
+        offset = self._char_position()
         if self._caret_in_ignored_token(source, offset):
             return
         self.signaturesRequested.emit(source, offset)
@@ -404,6 +432,21 @@ class CodeEditor(ScintillaEdit):
         if offset <= 0:
             return False
         return kind_at(source, offset - 1) in (TokenKind.STRING, TokenKind.COMMENT)
+
+    def _char_position(self) -> int:
+        """Caret position in characters (Jedi's unit; Scintilla counts bytes)."""
+        return self._byte_to_char(self.current_position())
+
+    def _byte_to_char(self, byte_position: int) -> int:
+        if byte_position <= 0:
+            return 0
+        prefix = self._raw_text().encode("utf-8")[:byte_position]
+        return len(prefix.decode("utf-8", "replace"))
+
+    def _in_member_access(self, position: int) -> bool:
+        """True when the word at ``position`` follows a dot (``obj.``)."""
+        start = self._word_start(position)
+        return start > 0 and chr(self.charAt(start - 1)) == "."
 
     def _word_start(self, position: int) -> int:
         start = position
