@@ -318,6 +318,21 @@ class CodeEditor(ScintillaEdit):
         self.setVisiblePolicy(1, 1)
         self.scrollCaret()
 
+    def insert_line_at(self, line: int, text: str) -> None:
+        """Insert a new line of ``text`` at 1-based ``line``, preserving undo.
+
+        Used for generated edits such as inserting ``self.wait(...)`` at a block
+        boundary; Scintilla's ``insertText`` keeps the operation on the undo stack.
+        """
+        count = self.lineCount()
+        index = max(0, min(line - 1, count))
+        position = self.textLength() if index >= count else self.positionFromLine(index)
+        content = text + "\n"
+        if position == self.textLength() and position > 0 and not self._raw_text().endswith("\n"):
+            content = "\n" + content
+        self.insertText(position, content)
+        self.go_to_line(index + 1)
+
     def set_error_marker(self, line: int, message: str = "") -> None:
         """Mark one line as erroneous (temporary marker + squiggle indicator)."""
         self.clear_error_marker()

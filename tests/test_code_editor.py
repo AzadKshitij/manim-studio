@@ -352,3 +352,29 @@ class TestCompletion:
         assert text == "def f():\n    return 1\n    value\n"
         assert offsets == [len(text) - 1]  # caret before the trailing newline
         assert text[: offsets[-1]].endswith("    value")
+
+
+class TestInsertLineAt:
+    def test_inserts_before_a_line_with_undo(self, editor: CodeEditor) -> None:
+        editor.set_text("a = 1\nb = 2\nc = 3\n")
+        editor.emptyUndoBuffer()
+        editor.insert_line_at(2, "inserted = True")
+        assert editor.text() == "a = 1\ninserted = True\nb = 2\nc = 3\n"
+        assert editor.current_line() == 2
+        editor.undo()
+        assert editor.text() == "a = 1\nb = 2\nc = 3\n"
+
+    def test_inserts_at_the_end(self, editor: CodeEditor) -> None:
+        editor.set_text("a = 1\n")
+        editor.insert_line_at(2, "b = 2")
+        assert editor.text() == "a = 1\nb = 2\n"
+
+    def test_inserts_into_an_empty_buffer(self, editor: CodeEditor) -> None:
+        editor.set_text("")
+        editor.insert_line_at(1, "a = 1")
+        assert editor.text() == "a = 1\n"
+
+    def test_appends_a_newline_when_the_file_lacks_one(self, editor: CodeEditor) -> None:
+        editor.setText("a = 1")  # no trailing newline
+        editor.insert_line_at(2, "b = 2")
+        assert editor.text() == "a = 1\nb = 2\n"

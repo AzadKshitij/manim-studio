@@ -10,6 +10,7 @@ from PySide6.QtGui import QImage
 from manim_studio.editor import main_window as main_window_module
 from manim_studio.editor.code_editor import PY_KEYWORD
 from manim_studio.editor.main_window import MainWindow
+from manim_studio.timeline_model import TimelineLog
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 
@@ -79,6 +80,28 @@ SAMPLE_LOG_EVENT = {
 
 #: Same trace with per-block call-site lines, for caret-highlight tests.
 CARET_LOG = {**SAMPLE_LOG_EVENT, "call_sites": [10, 12, 14]}
+
+#: A small scene whose play/wait call sites are lines 7 and 8, with a matching
+#: trace, for insert-hold tests.
+HOLD_SCENE = (
+    "from manimlib import Scene\n"
+    "\n"
+    "\n"
+    "class Demo(Scene):\n"
+    "    def construct(self):\n"
+    "        circle = Circle()\n"
+    "        self.play(ShowCreation(circle))\n"
+    "        self.wait(1.0)\n"
+)
+HOLD_LOG = {
+    "event": "log",
+    "blocks": [
+        {"name": "ShowCreation", "start": 0.0, "duration": 1.0, "index": 0},
+        {"name": "Wait", "start": 1.0, "duration": 1.0, "index": 1},
+    ],
+    "total_duration": 2.0,
+    "call_sites": [7, 8],
+}
 
 
 @pytest.fixture
@@ -843,6 +866,92 @@ class TestBlockContextMenu:
             assert window.timeline.range() == pytest.approx((1.0, 1.5))
             assert captured["initial_range"] == (1, 1)
         finally:
+            self._restore(window)
+
+
+class TestInsertHold:
+    """Insert a self.wait() at the playhead without hand-editing the scene."""
+
+    def _open(self, window: MainWindow, tmp_path: Path) -> Path:
+        target = tmp_path / "demo.py"
+        target.write_text(HOLD_SCENE, encoding="utf-8")
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window._original_controller = original  # type: ignore[attr-defined]
+        assert window.open_path(target) is True
+        window.events.on_log(HOLD_LOG)
+        window._on_trace_log(HOLD_LOG)
+        window.watcher.stop()
+        return target
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_inserts_before_the_next_block(self, window: MainWindow, tmp_path: Path) -> None:
+        target = self._open(window, tmp_path)
+        try:
+            window.timeline.set_playhead(0.0)
+            window.insert_hold_at_playhead(0.5)
+            text = target.read_text(encoding="utf-8")
+            assert "        self.wait(0.5)\n" in text
+            assert text.index("self.wait(0.5)") < text.index("self.play(ShowCreation")
+        finally:
+            self._restore(window)
+
+    def test_at_the_end_appends_after_the_last_block(
+        self, window: MainWindow, tmp_path: Path
+    ) -> None:
+        target = self._open(window, tmp_path)
+        try:
+            window.timeline.set_playhead(2.0)
+            window.insert_hold_at_playhead(0.25)
+            text = target.read_text(encoding="utf-8")
+            assert text.rstrip().endswith("self.wait(0.25)")
+        finally:
+            self._restore(window)
+
+    def test_prompt_is_used_when_no_duration_given(
+        self, window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = self._open(window, tmp_path)
+        monkeypatch.setattr(
+            main_window_module,
+            "QInputDialog",
+            type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (0.75, True))}),
+        )
+        try:
+            window.timeline.set_playhead(0.0)
+            window.insert_hold_at_playhead()
+            assert "self.wait(0.75)" in target.read_text(encoding="utf-8")
+        finally:
+            self._restore(window)
+
+    def test_cancelling_changes_nothing(
+        self, window: MainWindow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = self._open(window, tmp_path)
+        before = target.read_text(encoding="utf-8")
+        monkeypatch.setattr(
+            main_window_module,
+            "QInputDialog",
+            type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (0.75, False))}),
+        )
+        try:
+            window.insert_hold_at_playhead()
+            assert target.read_text(encoding="utf-8") == before
+        finally:
+            self._restore(window)
+
+    def test_empty_trace_is_reported(self, window: MainWindow, tmp_path: Path) -> None:
+        target = self._open(window, tmp_path)
+        original = window.timeline.log
+        try:
+            window.timeline.set_log(TimelineLog(()))
+            window.insert_hold_at_playhead(0.5)
+            assert target.read_text(encoding="utf-8") == HOLD_SCENE
+        finally:
+            window.timeline.set_log(original)
             self._restore(window)
 
 

@@ -17,12 +17,14 @@ from manim_studio.templates import render_scene_template
 __all__ = [
     "buffer_matches_disk",
     "create_scene_file",
+    "format_seconds",
     "is_valid_scene_name",
     "normalize_newlines",
     "preview_video_path",
     "read_disk_text",
     "scene_name_from_path",
     "snake_case",
+    "wait_insertion",
 ]
 
 
@@ -73,3 +75,30 @@ def create_scene_file(path: str | Path, template_key: str, scene_name: str | Non
     name = scene_name or scene_name_from_path(target)
     target.write_text(render_scene_template(template_key, name), encoding="utf-8")
     return target
+
+
+def format_seconds(seconds: float) -> str:
+    """Format a duration as a Python literal (``0.5``, ``1.0``, ``0.25``)."""
+    text = f"{max(0.0, float(seconds)):.3f}".rstrip("0")
+    if text.endswith("."):
+        text += "0"
+    return text
+
+
+def wait_insertion(
+    source: str, line: int, duration: float, *, before: bool = True
+) -> tuple[int, str]:
+    """Plan a ``self.wait(duration)`` insertion adjacent to 1-based ``line``.
+
+    Returns ``(insert_line, text)``: the 1-based line the new statement should
+    occupy and that line's text, indented to match the reference line.  ``before``
+    places the wait ahead of ``line`` (a hold at that boundary); otherwise it goes
+    on the following line.
+    """
+    lines = source.split("\n")
+    if not 1 <= line <= len(lines):
+        raise ValueError(f"line {line} is outside the file")
+    reference = lines[line - 1]
+    indent = reference[: len(reference) - len(reference.lstrip())]
+    text = f"{indent}self.wait({format_seconds(duration)})"
+    return (line if before else line + 1), text

@@ -231,6 +231,9 @@ class MainWindow(QMainWindow):
         self._add_action(run_menu, "Stop playback", self.request_stop, "F7")
         run_menu.addSeparator()
         self._add_action(run_menu, "Render preview video", self.render_preview_video, "Ctrl+R")
+        self._add_action(
+            run_menu, "Insert hold at playhead", self.insert_hold_at_playhead, "Ctrl+Shift+H"
+        )
         self._add_action(run_menu, "Focus live shell", self.focus_shell, "Ctrl+`")
 
         view_menu = menu_bar.addMenu("&View")
@@ -663,6 +666,53 @@ class MainWindow(QMainWindow):
             self.timeline.zoom_by(1.25)
         elif action == "out":
             self.timeline.zoom_by(0.8)
+
+    def insert_hold_at_playhead(self, duration: float | None = None) -> None:
+        """Insert a ``self.wait(...)`` at the playhead's block boundary.
+
+        manimgl can only pause between whole ``play()``/``wait()`` calls, so the
+        hold is placed at the first block boundary at or after the playhead (or
+        after the last block when the playhead is at the end).  The wait becomes
+        real source code, so the trace, preview and export all agree.
+        """
+        if self._path is None or not self.controller.is_running:
+            self._set_status("open and preview a scene first")
+            return
+        log = self.timeline.log
+        if log.is_empty:
+            self._set_status("nothing to hold: the trace is empty")
+            return
+        if duration is None:
+            duration, accepted = QInputDialog.getDouble(
+                self,
+                "Insert hold",
+                "Hold duration in seconds:",
+                0.5,
+                1.0 / 30.0,
+                3600.0,
+                3,
+            )
+            if not accepted:
+                return
+        boundary = next(
+            (block for block in log.blocks if block.start >= self.timeline.playhead_time - 1e-6),
+            None,
+        )
+        if boundary is not None:
+            source_line, before = self.events.call_line(boundary.index), True
+        else:
+            source_line, before = self.events.call_line(log.blocks[-1].index), False
+        if source_line is None:
+            self._set_status("cannot place the hold: no known source line")
+            return
+        line, text = scene_files.wait_insertion(
+            self.editor.text(), source_line, duration, before=before
+        )
+        self.editor.insert_line_at(line, text)
+        self.save_buffer()
+        self._set_status(
+            f"inserted self.wait({scene_files.format_seconds(duration)}) at the playhead"
+        )
 
     def _play_block(self, index: int) -> None:
         """Context menu: replay from this block."""

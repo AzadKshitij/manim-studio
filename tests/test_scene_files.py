@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from manim_studio.editor import scene_files
 
 
@@ -69,3 +71,37 @@ class TestCreateSceneFile:
             tmp_path / "whatever.py", "circle_to_square", "CustomName"
         )
         assert "class CustomName(Scene):" in target.read_text(encoding="utf-8")
+
+
+class TestFormatSeconds:
+    def test_common_values(self) -> None:
+        assert scene_files.format_seconds(0.5) == "0.5"
+        assert scene_files.format_seconds(1.0) == "1.0"
+        assert scene_files.format_seconds(0.25) == "0.25"
+        assert scene_files.format_seconds(2) == "2.0"
+
+    def test_negative_is_clamped(self) -> None:
+        assert scene_files.format_seconds(-1.0) == "0.0"
+
+
+class TestWaitInsertion:
+    SOURCE = (
+        "class Demo(Scene):\n"
+        "    def construct(self):\n"
+        "        circle = Circle()\n"
+        "        self.play(ShowCreation(circle))\n"
+    )
+
+    def test_before_matches_indentation(self) -> None:
+        line, text = scene_files.wait_insertion(self.SOURCE, 4, 0.5, before=True)
+        assert line == 4
+        assert text == "        self.wait(0.5)"
+
+    def test_after_goes_on_the_next_line(self) -> None:
+        line, text = scene_files.wait_insertion(self.SOURCE, 4, 1.0, before=False)
+        assert line == 5
+        assert text == "        self.wait(1.0)"
+
+    def test_out_of_range_line_raises(self) -> None:
+        with pytest.raises(ValueError):
+            scene_files.wait_insertion(self.SOURCE, 99, 0.5)
