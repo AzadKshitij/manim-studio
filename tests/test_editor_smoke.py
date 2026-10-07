@@ -70,6 +70,9 @@ SAMPLE_LOG_EVENT = {
     "total_duration": 3.5,
 }
 
+#: Same trace with per-block call-site lines, for caret-highlight tests.
+CARET_LOG = {**SAMPLE_LOG_EVENT, "call_sites": [10, 12, 14]}
+
 
 @pytest.fixture
 def window(qtbot) -> MainWindow:
@@ -513,6 +516,30 @@ class TestTraceAndTimeline:
         window.events.on_error({"message": "ValueError: boom", "line": 2, "traceback": "trace"})
         assert window.editor.error_line == 2
         assert "boom" in window.shell.output.toPlainText()
+
+
+class TestCaretBlockHighlight:
+    """The editor caret highlights its block on the timeline (both directions)."""
+
+    def test_caret_highlights_its_block(self, window: MainWindow) -> None:
+        window.events.on_log(CARET_LOG)
+        window.editor.cursorMoved.emit(13, 1)
+        assert window.timeline.active_block == 1
+        assert window._cursor_label.text() == "Ln 13, Col 1"
+
+    def test_caret_before_the_first_play_clears_the_highlight(self, window: MainWindow) -> None:
+        window.events.on_log(CARET_LOG)
+        window.editor.cursorMoved.emit(13, 1)
+        assert window.timeline.active_block == 1
+        window.editor.cursorMoved.emit(5, 1)
+        assert window.timeline.active_block is None
+
+    def test_jump_to_code_also_highlights(self, window: MainWindow) -> None:
+        window.editor.set_text("\n".join(f"line {i}" for i in range(1, 21)))
+        window.events.on_log(CARET_LOG)
+        window._on_block_activated(2)  # Ctrl+double-click equivalent
+        assert window.timeline.active_block == 2
+        assert window.editor.current_line() == 14
 
 
 class TestFramesAndPreview:

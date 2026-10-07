@@ -65,7 +65,6 @@ class TestPainting:
 
 class TestScrubbing:
     def test_click_positions_playhead_exactly(self, timeline: TimelineWidget, qtbot) -> None:
-        # total = 4s over 600px; x=225 -> t=1.5 (middle of the Wait block)
         spy = QSignalSpy(timeline.scrubRequested)
         qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(225, 60))
         assert spy.count() >= 1
@@ -94,6 +93,20 @@ class TestScrubbing:
         assert timeline._hover_index == 0
         qtbot.mouseMove(timeline, QPoint(510, 60))  # inside block 2
         assert timeline._hover_index == 2
+
+
+class TestActiveBlock:
+    def test_set_active_block(self, timeline: TimelineWidget) -> None:
+        timeline.set_active_block(2)
+        assert timeline.active_block == 2
+        timeline.render(QPixmap(timeline.size()))
+        timeline.set_active_block(None)
+        assert timeline.active_block is None
+
+    def test_set_log_clears_active(self, timeline: TimelineWidget) -> None:
+        timeline.set_active_block(1)
+        timeline.set_log(make_log())
+        assert timeline.active_block is None
 
 
 class TestResizing:

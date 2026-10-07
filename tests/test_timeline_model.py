@@ -11,9 +11,11 @@ from manim_studio.timeline_model import (
     TimelineError,
     TimelineLog,
     TimelineView,
+    block_for_line,
     dump_log,
     format_duration,
     load_log,
+    parse_call_lines,
     parse_log,
     save_log,
     snap_index,
@@ -253,3 +255,38 @@ class TestTimelineView:
         view = TimelineView(total=0.0, width=100.0)
         assert view.span is not None and view.span > 0
         assert 0.0 <= view.x_to_time(50.0) <= 1e-6
+
+
+class TestParseCallLines:
+    def test_integers_survive_and_blanks_become_none(self) -> None:
+        assert parse_call_lines([12, None, 7]) == (12, None, 7)
+
+    def test_non_list_is_empty(self) -> None:
+        assert parse_call_lines("nope") == ()
+        assert parse_call_lines(None) == ()
+
+    def test_bools_and_floats_are_rejected(self) -> None:
+        assert parse_call_lines([True, 3.5, "4"]) == (None, None, None)
+
+
+class TestBlockForLine:
+    LINES = (4, None, 9, 15)
+
+    def test_caret_on_a_call_site(self) -> None:
+        assert block_for_line(self.LINES, 4) == 0
+        assert block_for_line(self.LINES, 9) == 2
+        assert block_for_line(self.LINES, 15) == 3
+
+    def test_caret_between_calls_belongs_to_the_earlier_block(self) -> None:
+        assert block_for_line(self.LINES, 8) == 0
+        assert block_for_line(self.LINES, 100) == 3
+
+    def test_caret_before_the_first_call_has_no_block(self) -> None:
+        assert block_for_line(self.LINES, 3) is None
+
+    def test_blocks_without_call_sites_are_skipped(self) -> None:
+        assert block_for_line((None, None), 5) is None
+        assert block_for_line((None, 6, None), 6) == 1
+
+    def test_empty(self) -> None:
+        assert block_for_line((), 1) is None

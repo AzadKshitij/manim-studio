@@ -202,6 +202,16 @@ class TestCallLines:
         h.events.on_log({**SAMPLE_LOG, "call_sites": "nope"})
         assert h.events.call_line(0) is None
 
+    def test_call_lines_property_and_block_lookup(self) -> None:
+        h = _Harness()
+        h.events.on_log({**SAMPLE_LOG, "call_sites": [12, 20]})
+        assert h.events.call_lines == (12, 20)
+        assert h.events.block_at_line(11) is None  # before the first play()
+        assert h.events.block_at_line(12) == 0
+        assert h.events.block_at_line(19) == 0  # still inside block 0's call
+        assert h.events.block_at_line(20) == 1
+        assert h.events.block_at_line(99) == 1
+
 
 class TestStatusAndTicks:
     def test_on_status_sets_playing(self) -> None:

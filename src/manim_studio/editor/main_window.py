@@ -306,9 +306,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.editor.saveRequested.connect(self.save_buffer)
         self.editor.fileDropped.connect(self.open_path)
-        self.editor.cursorMoved.connect(
-            lambda line, column: self._cursor_label.setText(f"Ln {line}, Col {column}")
-        )
+        self.editor.cursorMoved.connect(self._on_cursor_moved)
         self.editor.modificationChanged.connect(self._update_title)
         self.preview_panel.reloadRequested.connect(self.reload_preview)
         self.preview_panel.playRequested.connect(self.request_play)
@@ -342,6 +340,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Completion (Jedi worker)
     # ------------------------------------------------------------------
+
+    def _on_cursor_moved(self, line: int, column: int) -> None:
+        """Mirror the caret in the status bar and highlight its timeline block."""
+        self._cursor_label.setText(f"Ln {line}, Col {column}")
+        self.timeline.set_active_block(self.events.block_at_line(line))
 
     def _completion_path(self) -> str | None:
         return str(self._path) if self._path is not None else None
@@ -630,6 +633,8 @@ class MainWindow(QMainWindow):
         log; any previous overrides refer to a timeline that no longer exists.
         """
         self._timing = TimingOverrides(self.timeline.log)
+        # A fresh trace means new call sites: re-highlight the caret's block.
+        self._on_cursor_moved(self.editor.current_line(), self.editor.current_column())
 
     def _on_block_resized(self, index: int, duration: float) -> None:
         if self._path is None or not self.controller.is_running:
@@ -642,6 +647,7 @@ class MainWindow(QMainWindow):
         """Ctrl+double-click on a block: jump the editor to its call site."""
         line = self.events.call_line(index)
         if line is not None:
+            self.timeline.set_active_block(index)
             self.editor.go_to_line(line)
             self._set_status(f"block {index} → line {line}")
         else:

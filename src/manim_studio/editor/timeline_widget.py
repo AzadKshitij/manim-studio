@@ -72,6 +72,7 @@ class TimelineWidget(QWidget):
         self._playhead = 0.0
         self._playing = False
         self._hover_index: int | None = None
+        self._active_index: int | None = None  # block under the editor caret
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
         self._press_pos: QPoint | None = None
         self._last_mouse_x = 0.0
@@ -105,6 +106,17 @@ class TimelineWidget(QWidget):
     def playing(self) -> bool:
         return self._playing
 
+    @property
+    def active_block(self) -> int | None:
+        """Block highlighted for the editor caret, or ``None``."""
+        return self._active_index
+
+    def set_active_block(self, index: int | None) -> None:
+        """Highlight the block the editor caret currently sits in (or clear it)."""
+        if index != self._active_index:
+            self._active_index = index
+            self.update()
+
     def set_log(self, log: TimelineLog, *, keep_view: bool = False) -> None:
         self._log = log
         if not keep_view or self._view.total <= 0:
@@ -113,6 +125,7 @@ class TimelineWidget(QWidget):
             )
         self._playhead = min(self._playhead, log.total_duration)
         self._hover_index = None
+        self._active_index = None
         if self._mode == "resize":
             self._mode = None
         self._resize_index = None
@@ -361,6 +374,7 @@ class TimelineWidget(QWidget):
                     metrics,
                     hovered=block.index == self._hover_index,
                     current=block.index == current,
+                    active=block.index == self._active_index,
                 )
         self._draw_playhead(painter, height)
         painter.end()
@@ -388,6 +402,7 @@ class TimelineWidget(QWidget):
         *,
         hovered: bool,
         current: bool,
+        active: bool = False,
     ) -> None:
         left = self._view.time_to_x(block.start)
         right = self._view.time_to_x(block.end)
@@ -406,6 +421,17 @@ class TimelineWidget(QWidget):
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect, 4, 4)
+        if active:
+            # The block the editor caret sits in: a bright aquamarine outline plus
+            # a top notch so it reads differently from hover/current/playing.
+            pen = QPen(QColor(0x5F, 0xE3, 0xC8))
+            pen.setWidthF(2.0)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 5, 5)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0x5F, 0xE3, 0xC8))
+            painter.drawRect(QRectF(left + 1, track_top + 2, max(2.0, min(width - 2, 10.0)), 3))
         if width >= MIN_BLOCK_LABEL_WIDTH:
             painter.setPen(QColor(0x10, 0x10, 0x10))
             text = metrics.elidedText(block.name, Qt.TextElideMode.ElideRight, int(width - 8))

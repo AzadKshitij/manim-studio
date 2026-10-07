@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QLabel
 
-from manim_studio.timeline_model import format_duration, parse_log
+from manim_studio.timeline_model import block_for_line, format_duration, parse_call_lines, parse_log
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -26,19 +26,6 @@ if TYPE_CHECKING:
     from manim_studio.editor.timeline_widget import TimelineWidget
 
 __all__ = ["PreviewEvents"]
-
-
-def _parse_call_lines(raw: object) -> tuple[int | None, ...]:
-    """Coerce the host's ``call_sites`` payload into aligned line numbers."""
-    if not isinstance(raw, list):
-        return ()
-    lines: list[int | None] = []
-    for item in raw:
-        if isinstance(item, int) and not isinstance(item, bool):
-            lines.append(item)
-        else:
-            lines.append(None)
-    return tuple(lines)
 
 
 class PreviewEvents(QObject):
@@ -113,6 +100,15 @@ class PreviewEvents(QObject):
             return self._call_lines[index]
         return None
 
+    @property
+    def call_lines(self) -> tuple[int | None, ...]:
+        """Per-block call-site lines (parallel to the timeline blocks)."""
+        return self._call_lines
+
+    def block_at_line(self, line: int) -> int | None:
+        """The block whose ``play()``/``wait()`` call site contains ``line``."""
+        return block_for_line(self._call_lines, line)
+
     # -- host events -------------------------------------------------------
 
     def on_log(self, message: dict[str, Any]) -> None:
@@ -123,7 +119,7 @@ class PreviewEvents(QObject):
             return
         self._timeline.set_log(timeline_log)
         self._total_duration = timeline_log.total_duration
-        self._call_lines = _parse_call_lines(message.get("call_sites"))
+        self._call_lines = parse_call_lines(message.get("call_sites"))
         # A successful trace means the scene now compiles/runs: clear any marker
         # left by the previous failure.
         self._editor.clear_error_marker()

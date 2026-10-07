@@ -24,9 +24,11 @@ __all__ = [
     "TimelineError",
     "TimelineLog",
     "TimelineView",
+    "block_for_line",
     "dump_log",
     "format_duration",
     "load_log",
+    "parse_call_lines",
     "parse_log",
     "save_log",
     "snap_index",
@@ -233,6 +235,44 @@ def save_log(path: str | Path, log: TimelineLog | Sequence[TimelineBlock]) -> No
 def snap_index(log: TimelineLog, time: float) -> int | None:
     """Block index containing ``time``; ``None`` when the log is empty."""
     return log.index_at(time)
+
+
+def parse_call_lines(raw: object) -> tuple[int | None, ...]:
+    """Coerce a host ``call_sites`` payload into aligned per-block line numbers.
+
+    ``call_sites`` is a parallel array of source line numbers (or ``null``) in the
+    scene file.  Anything that is not a plain integer becomes ``None`` so a
+    malformed payload can never put a bad line into the editor.
+    """
+    if not isinstance(raw, list):
+        return ()
+    lines: list[int | None] = []
+    for item in raw:
+        if isinstance(item, int) and not isinstance(item, bool):
+            lines.append(item)
+        else:
+            lines.append(None)
+    return tuple(lines)
+
+
+def block_for_line(call_lines: Sequence[int | None], line: int) -> int | None:
+    """The block whose call site is the last one at or before ``line``.
+
+    A block's call site is the line that invoked ``play()``/``wait()``.  The caret
+    counts as "inside" that call from its line up to the next block's call site,
+    which keeps multi-line calls highlighted and does not light up code that runs
+    before the first ``play()``.  Returns ``None`` when no block starts at or
+    before ``line`` (or when nothing has a known call site).
+    """
+    best: int | None = None
+    best_line = 0
+    for index, call_line in enumerate(call_lines):
+        if call_line is None or call_line > line:
+            continue
+        if best is None or call_line > best_line:
+            best = index
+            best_line = call_line
+    return best
 
 
 def format_duration(seconds: float) -> str:
