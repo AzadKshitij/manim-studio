@@ -4,18 +4,44 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from pathlib import Path
 
 from manim_editor.editor import app as app_module
-from manim_editor.editor.icon import ICON_FILENAME, icon_path, load_icon
+from manim_editor.editor.icon import ICON_FILENAME, _pick_icon, icon_path, load_icon
 
 
 def test_icon_asset_is_packaged() -> None:
     path = icon_path()
     assert path is not None
-    assert path.name == ICON_FILENAME
+    assert path.suffix == ".ico"
+    assert path.parent.name == "assets"
     assert path.is_file()
     # ICO files start with the 00 00 01 00 reserved+type header.
     assert path.read_bytes()[:4] == b"\x00\x00\x01\x00"
+
+
+def test_single_icon_is_used(tmp_path: Path) -> None:
+    icon = tmp_path / ICON_FILENAME
+    icon.write_bytes(b"x")
+    assert _pick_icon(tmp_path) == icon
+
+
+def test_dropped_icon_overrides_the_default(tmp_path: Path) -> None:
+    (tmp_path / ICON_FILENAME).write_bytes(b"default")
+    brand = tmp_path / "brand.ico"
+    brand.write_bytes(b"custom")
+    assert _pick_icon(tmp_path) == brand
+
+
+def test_multiple_custom_icons_resolve_alphabetically(tmp_path: Path) -> None:
+    (tmp_path / "zeta.ico").write_bytes(b"z")
+    alpha = tmp_path / "Alpha.ico"
+    alpha.write_bytes(b"a")
+    assert _pick_icon(tmp_path) == alpha
+
+
+def test_no_icons_returns_none(tmp_path: Path) -> None:
+    assert _pick_icon(tmp_path) is None
 
 
 def test_load_icon_returns_real_icon(qapp) -> None:
