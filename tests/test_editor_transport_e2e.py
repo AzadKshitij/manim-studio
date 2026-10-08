@@ -268,3 +268,61 @@ def test_retimed_section_plays_for_its_new_duration(live: LiveEditor, qtbot) -> 
     assert ended["time"] > old_total + 0.5
     assert ended["time"] == pytest.approx(new_total, abs=0.6)
     assert not live.errors
+
+
+def test_timeline_scrollbar_follows_zoom(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    """The real window's zoom buttons drive the timeline scrollbar."""
+    window = live.window
+    timeline = window.timeline
+    timeline.fit()
+    bar = timeline.scrollbar
+    assert bar.maximum() == 0  # whole timeline visible -> nothing to scroll
+
+    _click(qtbot, window.transport_bar._zoom_in_button)
+    assert timeline.view().span < timeline.log.total_duration
+    assert bar.maximum() > 0
+    assert bar.isEnabled() is True
+
+    # Dragging the handle pans the zoomed view.
+    bar.setValue(bar.maximum())
+    assert timeline.view().start == pytest.approx(bar.maximum() / 1000.0, abs=1e-3)
+
+    _click(qtbot, window.transport_bar._fit_button)
+    assert bar.maximum() == 0
+
+
+class _RecordingExports:
+    """Stands in for the ExportController and records the export kwargs."""
+
+    def __init__(self) -> None:
+        self.videos: list[dict] = []
+
+    def export_video(self, path, scene_name, output, **kwargs) -> bool:  # type: ignore[no-untyped-def]
+        self.videos.append(
+            {
+                "path": str(path),
+                "scene_name": scene_name,
+                "output": str(output),
+                **kwargs,
+            }
+        )
+        return True
+
+    def shutdown(self) -> None:
+        pass
+
+
+def test_export_video_forwards_the_retiming(live: LiveEditor, qtbot, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Exporting after a retime hands the per-block factors to the controller."""
+    window = live.window
+    index, new_duration = _drag_right_edge(live, qtbot, extra_seconds=0.5)
+
+    recorder = _RecordingExports()
+    window.exports = recorder  # type: ignore[assignment]
+    window.export_video_to(tmp_path / "out.mp4")
+
+    assert recorder.videos, "export_video_to never reached the controller"
+    factors = recorder.videos[-1]["timing_factors"]
+    assert index in factors
+    assert factors[index] > 1.0  # the section was stretched, so it renders longer
+    assert new_duration > 0
