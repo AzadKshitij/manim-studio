@@ -39,7 +39,7 @@ dependencies = [
     "zstandard>=0.23",
     # manimgl 1.7.2 imports pkg_resources at import time. setuptools>=81 no
     # longer ships it, so keep the runtime dependency bounded.
-    "setuptools>=69,<81",
+    "setuptools>=84.0.0,<85",
     # pydub (manimgl dependency) needs audioop, removed from stdlib in 3.13.
     "audioop-lts>=0.2.2; python_version >= '3.13'",
 ]
