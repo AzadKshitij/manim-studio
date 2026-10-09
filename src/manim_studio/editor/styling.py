@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMenu
 
 from manim_studio.theme import Theme, derive, set_current_theme
 
@@ -56,6 +57,7 @@ def build_stylesheet(theme: Theme) -> str:
     m = theme.metrics
     radius = m.radius
     small = round(radius * 0.66)
+    large = round(radius * 1.6)
     pad = round(12 * m.density)
     gap = round(8 * m.density)
     control = m.control_height - 2  # QSS min-height excludes the 1px border
@@ -69,7 +71,7 @@ QMenuBar::item {{ background: transparent; padding: 4px {gap}px; border-radius: 
 QMenuBar::item:selected {{ background: {c.raised}; color: {c.text}; }}
 QMenu {{
     background: {c.surface}; color: {c.text}; border: 1px solid {c.border_strong};
-    padding: 4px;
+    border-radius: {large}px; padding: 4px;
 }}
 QMenu::item {{ padding: 5px {pad * 2}px 5px {pad}px; border-radius: {small}px; }}
 QMenu::item:selected {{ background: {d.accent_soft}; color: {c.text}; }}
@@ -89,6 +91,27 @@ QToolButton:hover {{ background: {c.raised}; }}
 QToolButton:pressed {{ background: {d.pressed}; }}
 QToolButton:checked {{ background: {d.accent_soft}; border-color: {d.ring}; }}
 QToolButton:disabled {{ color: {c.faint}; }}
+QToolButton[labeled="true"] {{
+    background: {c.raised}; border: 1px solid {c.border_strong}; border-radius: {radius}px;
+    padding: 0 {pad}px; min-height: {control}px; font-weight: 500;
+}}
+QToolButton[labeled="true"]:hover {{ background: {d.hover}; }}
+QToolButton[labeled="true"]:pressed {{ background: {d.pressed}; }}
+QToolButton[labeled="true"]:disabled {{
+    background: transparent; border-color: transparent; color: {c.faint};
+}}
+QToolButton[primary="true"] {{
+    background: {c.accent}; color: {c.on_accent}; border-color: transparent; font-weight: 600;
+}}
+QToolButton[primary="true"]:hover {{ background: {d.accent_hover}; }}
+QToolButton[primary="true"]:pressed {{ background: {d.accent_hover}; }}
+#panelHeader {{ background: {c.surface}; border-bottom: 1px solid {c.border}; }}
+#panelHeader QLabel {{ color: {c.muted}; }}
+#fileTab {{ color: {c.text}; font-weight: 500; }}
+#modifiedDot {{ color: {c.warn}; }}
+#panelMeta {{ color: {c.faint}; }}
+#dockBar {{ background: {c.surface}; border-top: 1px solid {c.border}; }}
+#dockBar QLabel {{ color: {c.muted}; }}
 QPushButton {{
     background: {c.raised}; color: {c.text}; border: 1px solid {c.border_strong};
     border-radius: {radius}px; padding: 0 {pad}px; min-height: {control}px; min-width: 56px;
@@ -136,12 +159,40 @@ QProgressBar::chunk {{ background: {c.accent}; border-radius: {small}px; }}
 """
 
 
+class _MenuRounder(QObject):
+    """Give every popup menu a transparent window so its rounded frame has no square
+    window (or square OS drop shadow) behind the corners."""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.Polish
+            and isinstance(watched, QMenu)
+            and not watched.property("roundedFrame")
+        ):
+            watched.setProperty("roundedFrame", True)
+            watched.setWindowFlags(
+                watched.windowFlags()
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.NoDropShadowWindowHint
+            )
+            watched.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        return False
+
+
+_menu_rounder: _MenuRounder | None = None
+
+
 def apply_theme(app: QApplication, theme: Theme) -> None:
     """Make ``theme`` the active theme for the whole application."""
     set_current_theme(theme)
     app.setStyle("Fusion")
     app.setPalette(build_palette(theme))
     font = app.font()
+    font.setFamilies(["IBM Plex Sans", "Segoe UI", "SF Pro Text", font.family()])
     font.setPixelSize(theme.metrics.font_size)
     app.setFont(font)
     app.setStyleSheet(build_stylesheet(theme))
+    global _menu_rounder
+    if _menu_rounder is None:
+        _menu_rounder = _MenuRounder(app)
+        app.installEventFilter(_menu_rounder)

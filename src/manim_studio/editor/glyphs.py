@@ -61,6 +61,7 @@ _GLYPHS: dict[str, str] = {
     "render": f'<rect x="2" y="5" width="20" height="14" rx="2" {_STROKE}/>'
     f'<path d="M7 5v14M17 5v14M2 12h20" {_STROKE}/>',
     "reload": f'<path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" {_STROKE}/>',
+    "export": f'<path d="M12 3v12M7 10l5 5 5-5M4 20h16" {_STROKE}/>',
     "stop": f'<rect x="6" y="6" width="12" height="12" rx="1.5" {_FILL}/>',
 }
 
@@ -84,14 +85,17 @@ def _render(name: str, color: QColor, size: int) -> QPixmap:
     return pixmap
 
 
-def glyph(name: str, color: QColor | None = None) -> QIcon:
+def glyph(name: str, color: QColor | None = None, *, on_accent: bool = False) -> QIcon:
     """A themed icon for ``name`` (normal, hover and disabled pixmaps, 1x and 2x).
 
     Colours come from the current theme's ``icon``, ``icon_active`` and
     ``icon_disabled``; an explicit ``color`` overrides them (disabled is dimmed).
+    ``on_accent`` draws for a button filled with the accent colour.
     """
     if name not in _GLYPHS:
         raise KeyError(f"unknown glyph {name!r}; available: {GLYPH_NAMES}")
+    if color is None and on_accent:
+        color = QColor(current_theme().colors.on_accent)
     if color is None:
         colors = current_theme().colors
         normal, active, disabled = (
@@ -121,7 +125,7 @@ def refresh_glyphs(root: QObject) -> None:
     for target in targets:
         name = target.property("glyph")
         if isinstance(name, str) and name in _GLYPHS:
-            target.setIcon(glyph(name))
+            target.setIcon(glyph(name, on_accent=bool(target.property("glyphOnAccent"))))
 
 
 def icon_button(

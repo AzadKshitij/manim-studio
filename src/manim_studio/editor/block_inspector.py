@@ -13,12 +13,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QWidget,
 )
 
@@ -79,6 +80,10 @@ class BlockInspector(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._info: BlockInfo | None = None
+        self.setObjectName("dockBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(40)
         self.title = ElidedLabel("", self)
         self.title.setMinimumWidth(120)
 

@@ -78,7 +78,14 @@ _ROLE_STYLE: dict[TokenKind, int] = {
 }
 
 MARKER_ERROR = 0
+#: Whole-line tint and left-edge bar of the highlighted block (jump to code).
+MARKER_BLOCK = 1
+MARKER_BLOCK_EDGE = 2
 INDIC_ERROR = 8
+#: How long a jump-to-code highlight stays before it fades out.
+BLOCK_HIGHLIGHT_MS = 3000
+BLOCK_TINT_ALPHA = 70
+SC_MOD_TEXT_CHANGED = 0x3  # SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT
 
 _MONOSPACE_CANDIDATES = (
     "JetBrains Mono",
@@ -119,6 +126,11 @@ class CodeEditor(ScintillaEdit):
         super().__init__(parent)
         self._completions: tuple[str, ...] = ()
         self._error_line: int | None = None
+        self._block_highlight: tuple[int, int] | None = None
+        self._block_timer = QTimer(self)
+        self._block_timer.setSingleShot(True)
+        self._block_timer.setInterval(BLOCK_HIGHLIGHT_MS)
+        self._block_timer.timeout.connect(self.clear_block_highlight)
         self._last_modified = False
         self._code_words: tuple[str, ...] = ()
         # Pygments lexes the whole buffer, so coalesce edits into one restyle
@@ -162,6 +174,8 @@ class CodeEditor(ScintillaEdit):
         self.setMarginWidthN(1, 16)
         self.setMarginSensitiveN(1, True)
         self.markerDefine(MARKER_ERROR, Scintilla.MarkerSymbol.Bookmark)
+        self.markerDefine(MARKER_BLOCK, Scintilla.MarkerSymbol.Background)
+        self.markerDefine(MARKER_BLOCK_EDGE, Scintilla.MarkerSymbol.LeftRect)
         self.indicSetStyle(INDIC_ERROR, 1)  # INDIC_SQUIGGLE
         self.setZoom(0)
 
@@ -192,6 +206,9 @@ class CodeEditor(ScintillaEdit):
         self.setCaretFore(_colorref(palette["default_fg"]))
         self.markerSetFore(MARKER_ERROR, _colorref(palette["error_fg"]))
         self.markerSetBack(MARKER_ERROR, _colorref(palette["error"]))
+        self.markerSetBack(MARKER_BLOCK, _colorref(palette["block"]))
+        self.markerSetAlpha(MARKER_BLOCK, BLOCK_TINT_ALPHA)
+        self.markerSetBack(MARKER_BLOCK_EDGE, _colorref(palette["block"]))
         self.indicSetFore(INDIC_ERROR, _colorref(palette["error"]))
         # Line-number margin.
         self.styleSetFore(STYLE_LINENUMBER, _colorref(palette["line_number_fg"]))
@@ -377,6 +394,35 @@ class CodeEditor(ScintillaEdit):
             except Exception:  # pragma: no cover - annotations are optional
                 log.debug("annotations unavailable in this Scintilla build")
 
+    def highlight_lines(self, first: int, last: int | None = None) -> None:
+        """Tint lines ``first``..``last`` (1-based, inclusive) as the jumped-to block.
+
+        The tint covers whole lines and a bar marks the left edge.  It fades after
+        :data:`BLOCK_HIGHLIGHT_MS`, and is dropped when the text is edited or another
+        block is highlighted, so it never describes code that has moved.
+        """
+        self.clear_block_highlight()
+        count = self.lineCount()
+        start = max(1, min(first, count))
+        end = max(start, min(last if last is not None else start, count))
+        for line in range(start, end + 1):
+            self.markerAdd(line - 1, MARKER_BLOCK)
+            self.markerAdd(line - 1, MARKER_BLOCK_EDGE)
+        self._block_highlight = (start, end)
+        self._block_timer.start()
+
+    def clear_block_highlight(self) -> None:
+        self._block_timer.stop()
+        if self._block_highlight is not None:
+            self.markerDeleteAll(MARKER_BLOCK)
+            self.markerDeleteAll(MARKER_BLOCK_EDGE)
+        self._block_highlight = None
+
+    @property
+    def block_highlight(self) -> tuple[int, int] | None:
+        """The highlighted ``(first, last)`` lines, or ``None``."""
+        return self._block_highlight
+
     def clear_error_marker(self) -> None:
         self.markerDeleteAll(MARKER_ERROR)
         self.setIndicatorCurrent(INDIC_ERROR)
@@ -550,6 +596,8 @@ class CodeEditor(ScintillaEdit):
     # ------------------------------------------------------------------
 
     def _on_modified(self, *_args: Any) -> None:
+        if self._block_highlight is not None and _args and int(_args[0]) & SC_MOD_TEXT_CHANGED:
+            self.clear_block_highlight()
         # Scintilla assigns style 0 to inserted text and does not emit
         # styleNeeded for every edit (e.g. while the completion popup is open),
         # so restyle ourselves after the edit settles.
@@ -633,6 +681,7 @@ def _editor_palette(theme: Theme) -> dict[str, Any]:
         "caret_line_bg": _hex_int(d.caret_line),
         "caret_line_alpha": 256,
         "error": _hex_int(c.err),
+        "block": _hex_int(c.accent),
         "error_fg": _hex_int(c.editor),
     }
 

@@ -52,7 +52,7 @@ class Welcome(InteractiveScene):
         # --- 1. Title ---------------------------------------------------------
         title = Text("Welcome to Manim Studio", font_size=64)
         title.set_color_by_gradient(BLUE, TEAL, GREEN)
-        self.play(Write(title), run_time=2)
+        self.play(Write(title), run_time=2.4)
         self.wait(0.5)
 
         # --- 2. A ring of dots spins up around the title ---------------------
@@ -69,9 +69,9 @@ class Welcome(InteractiveScene):
         self.play(
             title.animate.scale(0.6).to_edge(UP),
             LaggedStart(*(FadeIn(d, scale=0.1) for d in ring), lag_ratio=0.05),
-            run_time=2,
+            run_time=2.0,
         )
-        self.play(Rotate(ring, TAU / 2, run_time=2))
+        self.play(Rotate(ring, TAU / 2, run_time=2), run_time=0.766)
 
         # --- 3. Circle -> square morph, ring collapses into the circle -------
         circle = Circle(radius=2, stroke_color=BLUE, stroke_width=6)
@@ -95,7 +95,7 @@ class Welcome(InteractiveScene):
         wave = always_redraw(make_wave)
         self.play(ShowCreation(wave), run_time=1.5)
         self.play(phase.animate.set_value(TAU), run_time=3, rate_func=linear)
-        self.play(FadeOut(wave))
+        self.play(FadeOut(wave), run_time=1.833)
 
         # --- 5. Lissajous curve drawn by a moving dot ------------------------
         pen = ValueTracker(0)
@@ -114,9 +114,9 @@ class Welcome(InteractiveScene):
             )
         )
         self.add(trail, tracer)
-        self.play(pen.animate.set_value(TAU), run_time=4, rate_func=linear)
-        self.play(FadeOut(tracer), run_time=0.4)
-        self.play(FadeOut(trail))
+        self.play(pen.animate.set_value(TAU), run_time=1.734, rate_func=linear)
+        self.play(FadeOut(tracer), run_time=0.267)
+        self.play(FadeOut(trail), run_time=0.5)
 
         # --- 6. A grid of squares with a colour wave -------------------------
         grid = VGroup(*(Square(side_length=0.55) for _ in range(12 * 6)))
@@ -136,7 +136,7 @@ class Welcome(InteractiveScene):
                 ),
                 run_time=1,
             )
-        self.play(FadeOut(grid))
+        self.play(FadeOut(grid), run_time=1.0)
 
         # --- 7. Sign-off -------------------------------------------------------
         hint = Text("Edit this file, save, and the preview reloads.", font_size=36)
@@ -145,4 +145,4 @@ class Welcome(InteractiveScene):
         hint2.next_to(hint, DOWN, buff=0.4)
         self.play(Write(hint), run_time=1.5)
         self.play(FadeIn(hint2, shift=UP * 0.3))
-        self.wait(2)
+        self.wait(0.956)

@@ -27,6 +27,7 @@ __all__ = [
     "DurationArg",
     "SiteIndex",
     "Span",
+    "block_line_range",
     "index_source",
 ]
 
@@ -347,3 +348,19 @@ def index_source(source: str) -> SiteIndex:
     collector.visit(tree)
     collector.sites.sort(key=lambda site: site.call.start)
     return SiteIndex(tuple(collector.sites))
+
+
+def block_line_range(source: str, line: int) -> tuple[int, int]:
+    """Lines ``(first, last)`` of the ``play()``/``wait()`` call that starts at ``line``.
+
+    A call may span several lines; a line with no known call (or source that does not
+    parse) is just ``(line, line)``.
+    """
+    try:
+        site = index_source(source).at_line(line)
+    except SyntaxError:
+        return line, line
+    if site is None:
+        return line, line
+    span = site.statement or site.call
+    return span.line, max(span.line, span.end_line)

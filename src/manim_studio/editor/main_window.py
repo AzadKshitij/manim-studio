@@ -21,9 +21,11 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -33,6 +35,7 @@ from manim_studio.editor import api_cache, scene_files
 from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
 from manim_studio.editor.code_editor import CodeEditor
 from manim_studio.editor.completion_controller import CompletionController
+from manim_studio.editor.editor_pane import EditorPane
 from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
@@ -51,6 +54,7 @@ from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.scene_runner import check_scene_file
+from manim_studio.site_index import block_line_range
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
 from manim_studio.theme import (
@@ -163,7 +167,8 @@ class MainWindow(QMainWindow):
 
     def _build_layout(self) -> None:
         horizontal = QSplitter(Qt.Orientation.Horizontal, self)
-        horizontal.addWidget(self.editor)
+        self.editor_pane = EditorPane(self.editor, self)
+        horizontal.addWidget(self.editor_pane)
         horizontal.addWidget(self.preview_panel)
         horizontal.setStretchFactor(0, 3)
         horizontal.setStretchFactor(1, 2)
@@ -173,8 +178,9 @@ class MainWindow(QMainWindow):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         self.transport_bar = TimelineTransport(self)
         self._edits_label = self.transport_bar.edits_label
+        bottom_layout.setSpacing(0)
         bottom_layout.addWidget(self.transport_bar)
-        bottom_layout.addWidget(self.timeline)
+        bottom_layout.addWidget(self.timeline, 1)  # the timeline takes the extra height
         self.inspector = BlockInspector(self)
         bottom_layout.addWidget(self.inspector)
 
@@ -288,18 +294,29 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main", self)
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(18, 18))
+        toolbar.setFloatable(False)
+        # A fixed-height bar: growing the window must never stretch it.
+        toolbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.addToolBar(toolbar)
-        toolbar.addWidget(QLabel(" Scene: "))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        play = self._add_toolbar_action(toolbar, "Play", self.request_play, "play")
+        reload_ = self._add_toolbar_action(toolbar, "Reload", self.reload_preview, "reload")
+        stop = self._add_toolbar_action(toolbar, "Stop", self.request_stop, "stop")
+        self._label_toolbar_button(toolbar, play, primary=True)
+        self._label_toolbar_button(toolbar, reload_)
+        self._label_toolbar_button(toolbar, stop)
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("Scene"))
         self._scene_combo = QComboBox(self)
-        self._scene_combo.setMinimumWidth(140)
+        self._scene_combo.setMinimumWidth(160)
         toolbar.addWidget(self._scene_combo)
         toolbar.addSeparator()
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self._add_toolbar_action(toolbar, "Reload", self.reload_preview, "reload")
-        self._add_toolbar_action(toolbar, "Play", self.request_play, "play")
-        self._add_toolbar_action(toolbar, "Stop", self.request_stop, "stop")
-        toolbar.addSeparator()
         self._add_toolbar_action(toolbar, "Render preview", self.render_preview_video, "render")
+        spacer = QWidget(self)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        export = self._add_toolbar_action(toolbar, "Export…", self.export_dialog, "export")
+        self._label_toolbar_button(toolbar, export)
 
     def _build_shell_dock(self) -> None:
         self.shell = ShellPanel(self)
@@ -436,6 +453,19 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut) if isinstance(shortcut, str) else shortcut)
         menu.addAction(action)
         return action
+
+    @staticmethod
+    def _label_toolbar_button(toolbar: QToolBar, action: QAction, *, primary: bool = False) -> None:
+        """Show ``action`` as a bordered button with its text beside the icon."""
+        button = toolbar.widgetForAction(action)
+        if not isinstance(button, QToolButton):
+            return
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setProperty("labeled", True)
+        if primary:
+            button.setProperty("primary", True)
+            action.setProperty("glyphOnAccent", True)
+            action.setIcon(glyph(str(action.property("glyph")), on_accent=True))
 
     def _add_toolbar_action(
         self, toolbar: QToolBar, text: str, slot: Any, glyph_name: str | None = None
@@ -1034,6 +1064,8 @@ class MainWindow(QMainWindow):
         if line is not None:
             self.timeline.set_active_block(index)
             self.editor.go_to_line(line)
+            first, last = block_line_range(self.editor.text(), line)
+            self.editor.highlight_lines(first, last)
             self._set_status(f"block {index} → line {line}")
         else:
             self._set_status(f"block {index} has no known source line")
@@ -1484,7 +1516,9 @@ class MainWindow(QMainWindow):
     def _update_title(self) -> None:
         if self._path is None:
             self.setWindowTitle(APP_NAME)
+            self.editor_pane.set_file(None)
             return
+        self.editor_pane.set_file(self._path.name, modified=self.editor.is_modified())
         marker = " •" if self.editor.is_modified() else ""
         self.setWindowTitle(f"{self._path.name}{marker} — {APP_NAME}")
 

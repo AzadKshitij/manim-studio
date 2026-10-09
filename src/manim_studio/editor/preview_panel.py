@@ -61,7 +61,12 @@ class PreviewPanel(QWidget):
         self._time_label = QLabel("0.0s")
         self._time_label.setObjectName("previewTime")
 
-        header = QHBoxLayout()
+        header_bar = QWidget(self)
+        header_bar.setObjectName("panelHeader")
+        header_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        header_bar.setFixedHeight(32)
+        header = QHBoxLayout(header_bar)
+        header.setContentsMargins(12, 0, 12, 0)
         header.addWidget(self._mode_label)
         header.addWidget(self._cache_label)
         header.addStretch(1)
@@ -86,8 +91,9 @@ class PreviewPanel(QWidget):
         self._stack.addWidget(self._viewport)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.addLayout(header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(header_bar)
         layout.addLayout(self._stack, 1)
 
         self._state = "idle"
