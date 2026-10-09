@@ -216,6 +216,11 @@ class TraceSnapshot:
     block_sites: tuple[BlockSite | None, ...] = ()
     #: The animations of each block (empty for ``wait()``), parallel to ``blocks``.
     block_clips: tuple[tuple[ClipTrace, ...], ...] = ()
+    #: Whether a time-based updater (one that takes ``dt``) was alive at the start or the
+    #: end of each block, parallel to ``blocks``.  Such updaters make the scene state
+    #: depend on how long a block lasted, which decides whether frames can be reused
+    #: after a retime (see ``manim_studio.reuse``).
+    block_dynamic: tuple[bool, ...] = ()
 
     @property
     def num_plays(self) -> int:
@@ -263,6 +268,7 @@ class TraceRecorder:
         self._call_sites: list[tuple[str, int] | None] = []
         self._block_sites: list[BlockSite | None] = []
         self._block_clips: list[tuple[ClipTrace, ...]] = []
+        self._block_dynamic: list[bool] = []
         self._pending_clips: tuple[ClipTrace, ...] = ()
         self._lanes: dict[int, int] = {}
         self._lane_targets: list[Any] = []  # keeps traced mobjects alive: ids stay unique
@@ -334,6 +340,7 @@ class TraceRecorder:
             call_site = _caller_site()
             site = self._resolve_site()
             self._stats.bump("play")
+            dynamic = self._time_updaters_active()
             self._play_depth += 1
             try:
                 return original(*args, **kwargs)
@@ -342,7 +349,7 @@ class TraceRecorder:
                 # manimgl warns and returns for play() without animations; do not
                 # clutter the timeline with a zero-duration ghost block.
                 if args:
-                    self._record_block(index, label, start, call_site, site)
+                    self._record_block(index, label, start, call_site, site, dynamic)
 
         return wrapper
 
@@ -381,10 +388,11 @@ class TraceRecorder:
             call_site = _caller_site()
             site = self._resolve_site()
             self._stats.bump("wait")
+            dynamic = self._time_updaters_active()
             try:
                 return original(*args, **kwargs)
             finally:
-                self._record_block(index, "Wait", start, call_site, site)
+                self._record_block(index, "Wait", start, call_site, site, dynamic)
 
         return wrapper
 
@@ -411,7 +419,9 @@ class TraceRecorder:
         start: float,
         call_site: tuple[str, int] | None = None,
         site: BlockSite | None = None,
+        dynamic_before: bool = False,
     ) -> None:
+        dynamic = dynamic_before or self._time_updaters_active()
         duration = max(0.0, self._time() - start)
         # Guard against scenes that never advance their clock (custom runners).
         if not math.isfinite(duration):
@@ -427,12 +437,36 @@ class TraceRecorder:
             )
             if self._call_sites:
                 self._call_sites[-1] = self._call_sites[-1] or call_site
+            if self._block_dynamic:
+                self._block_dynamic[-1] = self._block_dynamic[-1] or dynamic
             return
         self._blocks.append(TimelineBlock(index=index, name=label, start=start, duration=duration))
         self._call_sites.append(call_site)
         self._block_sites.append(site)
         self._block_clips.append(self._pending_clips)
+        self._block_dynamic.append(dynamic)
         self._pending_clips = ()
+
+    def _time_updaters_active(self) -> bool:
+        """True when any mobject in the scene has an updater that takes ``dt``.
+
+        Mirrors manimgl's own rule (``"dt" in updater.__code__.co_varnames``).  Anything
+        that cannot be inspected counts as time-based, so callers stay conservative.
+        """
+        scene = self._scene
+        if scene is None:
+            return True
+        try:
+            members_of = getattr(scene, "get_mobject_family_members", None)
+            members = members_of() if members_of is not None else scene.mobjects
+            for mobject in members:
+                for updater in getattr(mobject, "updaters", ()):
+                    code = getattr(updater, "__code__", None)
+                    if code is None or "dt" in code.co_varnames:
+                        return True
+        except Exception:  # an exotic scene must never break tracing
+            return True
+        return False
 
     def _resolve_site(self) -> BlockSite | None:
         """Fingerprint + occurrence for the user call two frames above the wrapper."""
@@ -460,6 +494,7 @@ class TraceRecorder:
             call_sites=tuple(self._call_sites),
             block_sites=tuple(self._block_sites),
             block_clips=tuple(self._block_clips),
+            block_dynamic=tuple(self._block_dynamic),
         )
 
     def reset(self) -> None:
@@ -468,6 +503,7 @@ class TraceRecorder:
         self._call_sites.clear()
         self._block_sites.clear()
         self._block_clips.clear()
+        self._block_dynamic.clear()
         self._pending_clips = ()
         self._lanes.clear()
         self._lane_targets.clear()

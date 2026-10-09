@@ -294,3 +294,97 @@ class TestTimeDependence:
 
     def test_words_that_merely_contain_the_tokens_do_not_count(self) -> None:
         assert source_is_time_dependent("self.runtime = 1\nhandle = 2\n") is False
+
+
+class TestRuntimeEvidenceAndSourceEdits:
+    """Typing a duration into the file, in scenes that use updaters (judged at runtime)."""
+
+    OLD = (1.0, 0.5, 0.5, 0.5, 1.0, 1.0)
+    NEW = (1.0, 1.0, 0.5, 0.5, 1.0, 1.0)  # the first wait: 0.5 s -> 1.0 s
+    RETIMED = SCENE.replace("self.wait(0.5)", "self.wait(1.0)")
+
+    @staticmethod
+    def _run(
+        text: str,
+        durations: tuple[float, ...],
+        *,
+        dynamic: tuple[bool, ...] | None = (False,) * 6,
+        no_user_modules: bool = True,
+    ) -> RunSnapshot:
+        import dataclasses
+
+        return dataclasses.replace(
+            _snapshot(text, durations=durations), dynamic=dynamic, no_user_modules=no_user_modules
+        )
+
+    def test_a_retime_typed_into_the_source_is_detected_from_the_text(self) -> None:
+        plan = plan_reuse(self._run(SCENE, self.OLD), self._run(self.RETIMED, self.NEW), ALL)
+        assert plan.blocks == {0, 2, 3, 4, 5}  # only the edited wait is re-rendered
+        assert plan.reason == "timing-only edit"
+        assert [plan.shift_of(i) for i in (0, 2, 3, 4, 5)] == [0, 15, 15, 15, 15]
+
+    def test_a_play_run_time_edit_is_a_timing_edit_too(self) -> None:
+        new_text = SCENE.replace(
+            "ShowCreation(circle), run_time=1.0", "ShowCreation(circle), run_time=1.5"
+        )
+        new = self._run(new_text, (1.5, 0.5, 0.5, 0.5, 1.0, 1.0))
+        plan = plan_reuse(self._run(SCENE, self.OLD), new, ALL)
+        assert plan.blocks == {1, 2, 3, 4, 5}
+        assert plan.shift_of(1) == 15
+
+    def test_a_retimed_block_with_a_dt_updater_keeps_only_the_blocks_before_it(self) -> None:
+        dynamic = (False, True, True, True, True, True)  # a dt updater alive from block 1 on
+        plan = plan_reuse(
+            self._run(SCENE, self.OLD, dynamic=dynamic),
+            self._run(self.RETIMED, self.NEW, dynamic=dynamic),
+            ALL,
+        )
+        assert plan.blocks == {0}
+        assert "time-based updater" in plan.reason
+
+    def test_an_updater_that_starts_after_the_retimed_block_does_not_matter(self) -> None:
+        dynamic = (False, False, True, True, True, True)  # block 1 (retimed) ran without one
+        plan = plan_reuse(
+            self._run(SCENE, self.OLD, dynamic=dynamic),
+            self._run(self.RETIMED, self.NEW, dynamic=dynamic),
+            ALL,
+        )
+        assert plan.blocks == {0, 2, 3, 4, 5}
+
+    def test_unknown_runtime_evidence_falls_back_to_the_prefix_rule(self) -> None:
+        plan = plan_reuse(
+            self._run(SCENE, self.OLD, dynamic=None),
+            self._run(self.RETIMED, self.NEW, dynamic=None),
+            ALL,
+        )
+        assert plan.blocks == {0} and plan.shifts == ()
+
+    def test_scenes_with_user_modules_fall_back_to_the_prefix_rule(self) -> None:
+        plan = plan_reuse(
+            self._run(SCENE, self.OLD, no_user_modules=False),
+            self._run(self.RETIMED, self.NEW, no_user_modules=False),
+            ALL,
+        )
+        assert plan.blocks == {0}
+
+    def test_a_scene_that_reads_the_clock_falls_back_to_the_prefix_rule(self) -> None:
+        clock = "        now = self.time\n"
+        old = self._run(SCENE + clock, self.OLD)
+        new = self._run(self.RETIMED + clock, self.NEW)
+        assert plan_reuse(old, new, ALL).blocks == {0}
+
+    def test_a_code_edit_mixed_with_a_timing_edit_is_not_timing_only(self) -> None:
+        mixed = self.RETIMED.replace("Circle()", "Circle(radius=2)")
+        plan = plan_reuse(self._run(SCENE, self.OLD), self._run(mixed, self.NEW), ALL)
+        assert plan.shifts == () and plan.reason != "timing-only edit"
+
+    def test_a_run_time_argument_outside_play_is_not_a_duration(self) -> None:
+        old_text = SCENE + "        helper(run_time=3)\n"
+        new_text = SCENE + "        helper(run_time=4)\n"
+        plan = plan_reuse(self._run(old_text, self.OLD), self._run(new_text, self.OLD), ALL)
+        assert plan.reason != "timing-only edit"
+
+    def test_a_comment_only_edit_reuses_every_block(self) -> None:
+        commented = SCENE.replace("circle = Circle()", "circle = Circle()  # round")
+        plan = plan_reuse(self._run(SCENE, self.OLD), self._run(commented, self.OLD), ALL)
+        assert plan.blocks == ALL and plan.shifts == ()

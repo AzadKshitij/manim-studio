@@ -669,7 +669,9 @@ class TestHostIntegration:
             assert reuse["reason"] == "timing-only edit"
             assert reuse["blocks"] == 3  # everything except the retimed block
             assert reuse["shifted"] == 2
-            assert reuse["frames"] == 3 * 15
+            # Three 15-frame blocks, plus the last block's end frame (no later block renders
+            # it as its own first frame, so it must be kept or a scrub to the end lands early).
+            assert reuse["frames"] == 3 * 15 + 1
             crawl_done()
 
             # t=1.75 is inside block 2, which now starts at 1.5 s (it used to start at 1.0 s).
@@ -898,6 +900,83 @@ class TestFilmstripCrawlerInProcess:
             for index in range(7200)
             if (blob := strip.get(index)) is not None
         }
+
+    def test_retiming_the_first_wait_of_welcome_keeps_the_later_blocks(
+        self, tmp_path: Path
+    ) -> None:
+        """``scenes/Welcome.py`` (always_redraw, trackers, grids) after a source retime."""
+        import re
+
+        import numpy as np
+
+        welcome = Path(__file__).parent.parent / "scenes" / "Welcome.py"
+        text = welcome.read_text(encoding="utf-8")
+        match = re.search(r"self\.wait\((\d+(?:\.\d+)?)\)", text)
+        assert match is not None, "scenes/Welcome.py no longer has a literal self.wait(...)"
+        longer = f"self.wait({float(match.group(1)) + 0.3})"
+        edited = text[: match.start()] + longer + text[match.end() :]
+
+        scene = tmp_path / "Welcome.py"
+        scene.write_text(text, encoding="utf-8")
+        host = self._host(scene)
+        try:
+            host.load()
+            self._crawl(host)
+            scene.write_text(edited, encoding="utf-8")
+            host.load()
+
+            playing = [b for b in host.blocks if b.duration > 0]
+            retimed = next(b for b in host.blocks if b.name == "Wait")
+            reused = host._reused_blocks
+            assert retimed.index not in reused
+            # Everything else is carried over (a block can only be lost to frame rounding).
+            assert len(reused) >= len(playing) - 3, (len(reused), len(playing))
+            self._crawl(host)
+            incremental = self._snapshot(host)
+
+            host._fresh_next = True
+            host.load()
+            assert not host._reused_blocks
+            self._crawl(host)
+            fresh = self._snapshot(host)
+
+            assert incremental.keys() == fresh.keys()
+            worst = max(
+                float(np.abs(incremental[i].astype(int) - fresh[i].astype(int)).mean())
+                for i in fresh
+            )
+            assert worst < 1.0, f"shifted frames drift from a fresh crawl (mean abs diff {worst})"
+        finally:
+            host._shutdown()
+
+    def test_retiming_a_block_with_a_dt_updater_reuses_nothing_after_it(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``dt`` updater makes later state depend on how long the wait lasted."""
+        text = (
+            "from manimlib import *\n\n\n"
+            "class Spin(Scene):\n"
+            "    def construct(self):\n"
+            "        dot = Dot()\n"
+            "        dot.add_updater(lambda m, dt: m.shift(RIGHT * dt))\n"
+            "        self.add(dot)\n"
+            "        self.wait(0.5)\n"
+            "        self.play(FadeIn(Circle()), run_time=0.4)\n"
+            "        self.wait(0.3)\n"
+        )
+        scene = tmp_path / "spin.py"
+        scene.write_text(text, encoding="utf-8")
+        host = self._host(scene)
+        try:
+            host.load()
+            self._crawl(host)
+            assert host._run is not None and host._run.dynamic == (True, True, True)
+            scene.write_text(text.replace("self.wait(0.5)", "self.wait(0.8)"), encoding="utf-8")
+            host.load()
+            assert host._reused_blocks == frozenset()
+            assert host._filmstrip.is_empty
+        finally:
+            host._shutdown()
 
     def test_editing_the_last_block_reuses_everything_before_it(self, tmp_path: Path) -> None:
         import numpy as np

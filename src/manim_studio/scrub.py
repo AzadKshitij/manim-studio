@@ -33,7 +33,14 @@ if TYPE_CHECKING:
     from manim_studio.filmstrip import Filmstrip
     from manim_studio.stats import TimingStats
 
-__all__ = ["FilmstripCrawler", "ScrubEngine", "ScrubError", "TimingScaler", "read_upright_rgba"]
+__all__ = [
+    "FilmstripCrawler",
+    "ScrubEngine",
+    "ScrubError",
+    "TimingScaler",
+    "block_frame_count",
+    "read_upright_rgba",
+]
 
 
 class ScrubError(RuntimeError):

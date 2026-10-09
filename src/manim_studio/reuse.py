@@ -59,6 +59,11 @@ class RunSnapshot:
     #: Nothing in the run can make a later frame depend on how long earlier blocks took
     #: (no updaters, no ``scene.time``, no user modules).  Defaults to the safe answer.
     time_independent: bool = False
+    #: Finer, runtime evidence for scenes that *do* use updaters: per block, whether a
+    #: time-based (``dt``) updater was alive at its start or end.  ``None`` = unknown.
+    dynamic: tuple[bool, ...] | None = None
+    #: The scene imports no user modules of its own (needed for the finer rule above).
+    no_user_modules: bool = False
 
 
 @dataclass(frozen=True)
@@ -185,6 +190,76 @@ def source_is_time_dependent(text: str) -> bool:
     return _TIME_DEPENDENT.search(text) is not None
 
 
+def _is_self_call(node: ast.Call, method: str) -> bool:
+    func = node.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == method
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "self"
+    )
+
+
+def _is_number(node: ast.expr) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub | ast.UAdd):
+        node = node.operand
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int | float)
+        and not isinstance(node.value, bool)
+    )
+
+
+class _DurationStripper(ast.NodeTransformer):
+    """Removes literal play/wait durations so two sources can be compared modulo timing."""
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        if _is_self_call(node, "play"):
+            # ``run_time=`` on the play call and on the animations built inside it.
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call):
+                    inner.keywords = [k for k in inner.keywords if k.arg != "run_time"]
+        elif _is_self_call(node, "wait"):
+            node.keywords = [k for k in node.keywords if k.arg != "duration"]
+            if node.args and _is_number(node.args[0]):
+                node.args = node.args[1:]
+        self.generic_visit(node)
+        return node
+
+
+def _reads_clock(tree: ast.AST) -> bool:
+    """Does the scene look at absolute time (``self.time``, ``get_time``, ``import time``)?"""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in ("time", "get_time"):
+            return True
+        if isinstance(node, ast.Import) and any(a.name.split(".")[0] == "time" for a in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "time":
+            return True
+    return False
+
+
+def _timing_signature(text: str) -> tuple[str, bool] | None:
+    """``(ast dump without literal durations, reads_clock)``; ``None`` if it won't parse."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    return ast.dump(_DurationStripper().visit(tree)), _reads_clock(tree)
+
+
+def _differs_only_in_timing(old_text: str, new_text: str) -> bool:
+    """True when the two sources are identical once literal durations are removed."""
+    old_sig, new_sig = _timing_signature(old_text), _timing_signature(new_text)
+    return old_sig is not None and new_sig is not None and old_sig[0] == new_sig[0]
+
+
+def _clock_free(old: RunSnapshot, new: RunSnapshot) -> bool:
+    """Neither source reads the clock (checked on the AST, so comments do not count)."""
+    signatures = (_timing_signature(old.text), _timing_signature(new.text))
+    return all(sig is not None and not sig[1] for sig in signatures)
+
+
 def _plan_timing_reuse(
     old: RunSnapshot, new: RunSnapshot, cached: Collection[int], fps: int
 ) -> ReusePlan | None:
@@ -195,7 +270,16 @@ def _plan_timing_reuse(
     every other cached block keeps its frames, moved by however far it was pushed.
     ``None`` means the runs differ in more than timing.
     """
-    if not (old.time_independent and new.time_independent):
+    strict = old.time_independent and new.time_independent
+    if not strict and not (
+        # Scenes with updaters: judged on what actually ran.  Only ``dt`` updaters make
+        # state depend on a block's duration, so ``always_redraw`` scenes still qualify.
+        old.dynamic is not None
+        and new.dynamic is not None
+        and old.no_user_modules
+        and new.no_user_modules
+        and _clock_free(old, new)
+    ):
         return None
     if len(old.blocks) != len(new.blocks):
         return None
@@ -206,10 +290,23 @@ def _plan_timing_reuse(
             new.call_lines[index],
         ):
             return None
+    changed = [
+        index
+        for index, (a, b) in enumerate(zip(old.blocks, new.blocks, strict=True))
+        if abs(a.duration - b.duration) > 1e-9
+    ]
+    first = changed[0] if changed else len(old.blocks)
+    # A retimed block with a ``dt`` updater alive leaves a different state behind it, so
+    # blocks after it cannot be reused (blocks before it are untouched either way).
+    shifts_state = not strict and any(
+        (old.dynamic or ())[index] or (new.dynamic or ())[index] for index in changed
+    )
     reusable: set[int] = set()
     shifts: list[tuple[int, int]] = []
     for index in cached:
         if index >= len(old.blocks):
+            continue
+        if shifts_state and index > first:
             continue
         a, b = old.blocks[index], new.blocks[index]
         if a.duration <= 0 or abs(a.duration - b.duration) > 1e-9:
@@ -223,7 +320,12 @@ def _plan_timing_reuse(
         reusable.add(index)
         if new_start != old_start:
             shifts.append((index, new_start - old_start))
-    return ReusePlan(frozenset(reusable), "timing-only edit", tuple(sorted(shifts)))
+    reason = (
+        "timing-only edit"
+        if not shifts_state
+        else "timing-only edit before a time-based updater: later blocks re-rendered"
+    )
+    return ReusePlan(frozenset(reusable), reason, tuple(sorted(shifts)))
 
 
 def plan_reuse(
@@ -244,6 +346,10 @@ def plan_reuse(
         return NO_REUSE
     if old.signature != new.signature or old.scene_name != new.scene_name:
         return ReusePlan(frozenset(), "render settings or imported modules changed")
+    # Typing a new duration into the source is the same kind of edit as a timeline retime.
+    timing_only = timing_only or (
+        old.text != new.text and _differs_only_in_timing(old.text, new.text)
+    )
     if timing_only:
         plan = _plan_timing_reuse(old, new, cached, fps)
         if plan is not None:

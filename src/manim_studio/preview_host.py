@@ -72,6 +72,7 @@ from manim_studio.scrub import (
     ScrubEngine,
     ScrubError,
     TimingScaler,
+    block_frame_count,
     read_upright_rgba,
 )
 from manim_studio.stats import TimingStats, process_rss_bytes
@@ -589,6 +590,8 @@ class SceneHost:
             blocks=snapshot.blocks,
             call_lines=self.call_lines,
             sites=snapshot.block_sites,
+            dynamic=snapshot.block_dynamic,
+            no_user_modules=not user_modules,
             signature=(tuple(self.config.size), self.config.fps, user_modules),
             time_independent=not user_modules and not source_is_time_dependent(patch_result.text),
         )
@@ -662,11 +665,15 @@ class SceneHost:
             return Filmstrip(), frozenset()
         fps = self._fps
         moves: dict[int, tuple[int, int, int]] = {}
+        last_playing = max((b.index for b in run.blocks if b.duration > 0), default=-1)
         for index in plan.blocks:
             block = run.blocks[index]
             shift = plan.shift_of(index)
             start = round(block.start * fps)
             stop = max(round(block.end * fps), start + 1)
+            if index == last_playing:
+                # No later block re-renders its end frame as its own first frame.
+                stop = max(stop, start + block_frame_count(block, fps) + 1)
             # The block spans the same number of frames before and after the shift.
             if old.has_range(start - shift, stop - shift):
                 moves[index] = (start - shift, stop - shift, shift)

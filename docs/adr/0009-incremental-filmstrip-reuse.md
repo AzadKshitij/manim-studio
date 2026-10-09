@@ -47,6 +47,23 @@
   24-block scene a retime keeps 23 blocks and completes the cache in ~0.3 s versus ~0.95 s
   for a rebuild; `test_a_timing_only_edit_keeps_later_blocks_cached_and_pixel_identical`
   compares a shifted frame with one from a from-scratch cache.
+- **Source edits and scenes with updaters also qualify** (extends the rule above). Typing a
+  new duration into the file is the same kind of edit as a timeline retime: when the old and
+  new source are identical once literal `run_time=` / `wait()` durations are removed
+  (`reuse._differs_only_in_timing`, an AST comparison that also ignores comments and
+  formatting), the timing rule applies even though the file changed. And the text check
+  above is only the *strict* path: a scene that uses updaters is judged on what actually ran.
+  The tracer records per block whether a time-based updater (one taking `dt`, manimgl's own
+  rule) was alive (`TraceSnapshot.block_dynamic`); `always_redraw`, value trackers and
+  other non-`dt` updaters do not make a frame depend on elapsed time. Later blocks are
+  reused unless a *retimed* block had a `dt` updater alive, in which case only the blocks
+  before it are reused. Still excluded: scenes reading the clock (`self.time`, `get_time`,
+  `import time`, found on the AST) and scenes importing user modules. Measured on
+  `scenes/Welcome.py` (22 blocks, 32 s): retiming the first `wait` keeps 21/22 blocks
+  (957 frames) and the cache completes in 0.35-0.37 s instead of 6.1-6.3 s.
+- A reused block owns its frames up to, not including, the next block's first frame; the
+  *last* playing block has no follower, so it also keeps its end frame (otherwise a scrub
+  to the very end would land one frame early).
 - Streamed blocks are stepped frame by frame like real playback, while uncached-prefix
   replays use skip mode, so updater-driven mobjects can differ by sub-pixel amounts
   depending on what was cached; `test_editing_the_last_block_reuses_everything_before_it`

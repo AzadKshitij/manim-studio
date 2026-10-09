@@ -292,3 +292,25 @@ machine; medians. Raw reports: `before-rendering-branch.json`, `after-rendering-
 
 Real-time playback is ~95% of the 30 fps target with no unexplained stalls; the remaining
 ~7% is per-block overhead and was not changed by this work.
+
+### R5 — retimes keep later blocks in scenes with updaters, and for edits typed in the source (2026-10-09)
+
+A timeline retime already kept later blocks (`557c0cf`), but only for `SetDuration` patches
+and only when the source had no updater at all (a text search for `always_redraw`, `dt`,
+`.time`, ...). `scenes/Welcome.py` uses `always_redraw`, and editing a `wait()` typed
+directly into the file was not recognised as a timing edit, so both re-rendered every block.
+Now the decision uses what actually ran (the tracer flags blocks that had a `dt` updater
+alive) and an AST comparison that ignores literal durations (ADR 0009). `Welcome.py`
+(22 blocks, 32.4 s, 972 frames at 320x180), their commit and this change alternated back to
+back, two rounds, reload -> filmstrip complete:
+
+| edit | blocks reused: before -> after | crawl before | crawl after |
+| --- | --- | --- | --- |
+| first `wait` 0.5 -> 0.8 | 1 -> **21** of 22 | 6.14-6.28 s | **0.35-0.37 s** (-94%) |
+| first play `run_time` 2.767 -> 3.0 | 0 -> **21** of 22 | 6.44-6.70 s | **0.50 s** (-92%) |
+| last `wait` 2 -> 2.5 (no change expected) | 21 -> 21 | 0.59-0.60 s | 0.47 s |
+
+Frames moved this way are compared with a from-scratch crawl in
+`test_retiming_the_first_wait_of_welcome_keeps_the_later_blocks` (mean abs diff < 1/255).
+A retimed block with a `dt` updater alive still invalidates everything after it
+(`test_retiming_a_block_with_a_dt_updater_reuses_nothing_after_it`).
