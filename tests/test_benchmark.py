@@ -165,3 +165,25 @@ class TestEffectiveFps:
         )
         assert stats["effective_fps"] == 24.0
         assert stats["sustains_realtime"] is False
+
+
+class TestSkippedFrames:
+    def _stream_with_static_wait(self) -> list[float]:
+        times = [i / 30 for i in range(10)]  # 10 frames at 30 fps
+        times += [times[-1] + 0.2 + i / 30 for i in range(10)]  # a 0.2 s static wait, then more
+        return times
+
+    def test_gaps_explained_by_skipped_frames_are_not_stalls(self) -> None:
+        stats = benchmark.realtime_fps_stats(
+            self._stream_with_static_wait(), scene_seconds=0.9, wall_seconds=0.9, skipped_frames=5
+        )
+        assert stats["missing_frames"] == 5
+        assert stats["unexplained_missing"] == 0
+        assert stats["sustains_realtime"] is True
+
+    def test_gaps_beyond_the_skipped_frames_are_real_stalls(self) -> None:
+        stats = benchmark.realtime_fps_stats(
+            self._stream_with_static_wait(), scene_seconds=0.9, wall_seconds=0.9, skipped_frames=0
+        )
+        assert stats["unexplained_missing"] == 5
+        assert stats["sustains_realtime"] is False

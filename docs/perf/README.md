@@ -221,11 +221,17 @@ for real-time playback of the showcase at 720p, judged against 30 fps:
 - `start_latency_ms` (PLAY → first frame), `p5_fps`, frame-interval p50/p95/max.
 - `sustains_realtime`: effective fps ≥ 95% of target **and** no frame gap ≥ 2 frame times.
 
-Baseline on `feature_showcase` (two runs): **27.5–27.7 effective fps** (play ratio
-1.08–1.09, i.e. ~8% slower than real time), start latency ~72–75 ms, steady interval
-p50 ≈ 33.5 ms, and one **~245 ms hitch** every run, so `sustains_realtime` is false.
-The hitch is the target for later work (suspect: construct-time mobject/LaTeX
-creation inside a play block).
+Baseline on `feature_showcase` (three runs, host at 720p): **28.6 effective fps** (95% of
+30; play ratio 1.07, i.e. ~7% slower than scripted), start latency ~68 ms, steady interval
+p50 ≈ 33.7 ms, 0 unexplained missing frames -> `sustains_realtime` true.
+
+Correction: an earlier revision of this metric reported 27.6 fps and a "~245 ms hitch".
+The two gaps (~240 ms and ~170 ms) are the scene's static `wait` blocks, where the host
+deliberately sends no frame because nothing changed (`frames_deduped`). The metric now
+counts a gap as a stall only for frames beyond the host's own deduped count
+(`unexplained_missing`), and measures wall time from the first frame (start latency is
+reported separately). The remaining ~7% is per-block overhead (pre_play/begin_animations
+plus the construct code between blocks), not a stall.
 
 ### R2 — reuse unchanged blocks across reloads (2026-10-09, branch `rendering`)
 

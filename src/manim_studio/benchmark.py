@@ -198,6 +198,7 @@ def realtime_fps_stats(
     target_fps: int = REALTIME_FPS,
     scene_seconds: float | None = None,
     wall_seconds: float | None = None,
+    skipped_frames: int | None = None,
 ) -> dict[str, Any]:
     """Delivered-frame rate and smoothness from per-frame arrival timestamps (seconds).
 
@@ -212,6 +213,12 @@ def realtime_fps_stats(
     (scripted duration) and ``wall_seconds`` (time the playback took) are given,
     ``effective_fps`` = ``target_fps`` x scene/wall is the real-time rate of the
     scene itself and is what ``sustains_realtime`` is judged on.
+
+    A gap between two arrivals longer than a frame interval means frames were not
+    delivered.  Those are *expected* when the host skipped identical frames
+    (``skipped_frames``, e.g. a static ``wait``); only ``unexplained_missing`` frames
+    beyond that count as real stalls, and a stream sustains real time when they stay
+    under 3% of the frames played.
     """
     times = sorted(float(t) for t in arrival_times)
     if len(times) < 2:
@@ -224,6 +231,8 @@ def realtime_fps_stats(
             "interval_p50_ms": 0.0,
             "interval_p95_ms": 0.0,
             "interval_max_ms": 0.0,
+            "missing_frames": 0,
+            "unexplained_missing": 0,
             "sustains_realtime": False,
         }
     intervals = sorted(b - a for a, b in itertools.pairwise(times))
@@ -232,6 +241,8 @@ def realtime_fps_stats(
     p50 = intervals[len(intervals) // 2]
     fps = (len(times) - 1) / span if span > 0 else 0.0
     budget = 1.0 / target_fps
+    missing = sum(max(0, round(gap / budget) - 1) for gap in intervals)
+    unexplained = max(0, missing - (skipped_frames or 0))
     effective = target_fps * scene_seconds / wall_seconds if scene_seconds and wall_seconds else fps
     return {
         "target_fps": target_fps,
@@ -242,7 +253,11 @@ def realtime_fps_stats(
         "interval_p50_ms": round(p50 * 1000.0, 2),
         "interval_p95_ms": round(p95 * 1000.0, 2),
         "interval_max_ms": round(intervals[-1] * 1000.0, 2),
-        "sustains_realtime": effective >= 0.95 * target_fps and intervals[-1] < 2.0 * budget,
+        "missing_frames": missing,
+        "unexplained_missing": unexplained,
+        "sustains_realtime": (
+            effective >= 0.95 * target_fps and unexplained <= 0.03 * (len(times) + missing)
+        ),
     }
 
 
@@ -313,7 +328,8 @@ def format_report(report: dict[str, Any]) -> str:
             f"start latency {realtime.get('start_latency_ms')} ms, "
             f"worst-5% {realtime.get('p5_fps')} fps, interval p50 "
             f"{realtime.get('interval_p50_ms')} ms / p95 {realtime.get('interval_p95_ms')} ms / "
-            f"max {realtime.get('interval_max_ms')} ms) -> "
+            f"max {realtime.get('interval_max_ms')} ms, "
+            f"{realtime.get('unexplained_missing')} unexplained missing frames) -> "
             f"{'SUSTAINED' if realtime.get('sustains_realtime') else 'BELOW REALTIME'}"
         )
     reload_report = report.get("reload")

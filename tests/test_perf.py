@@ -154,6 +154,10 @@ class TestEndToEndBenchmark:
             # Playback cadence: wall time to run the whole scene versus its scripted
             # duration.  A blocking encode on the GL thread pushes this above 1.0.
             _drain_frames(peer)
+            peer.send(Command.STATS)
+            stats_before = peer.wait_event(
+                lambda event: event.get("event") == Event.STATS, timeout=60
+            )
             play_started = time.monotonic()
             frames_before_play = len(peer.frame_times)
             peer.send(Command.PLAY, **{"from": 0})
@@ -174,21 +178,24 @@ class TestEndToEndBenchmark:
             play_seconds = time.monotonic() - play_started
 
             play_times = peer.frame_times[frames_before_play:]
-            # The first frame marks play-start latency (scene rebuild up to the start
-            # block); steady-state fps and hitches are judged on the frames after it.
-            realtime = benchmark.realtime_fps_stats(
-                play_times[1:],
-                target_fps=benchmark.REALTIME_FPS,
-                scene_seconds=total_duration,
-                wall_seconds=play_seconds,
-            )
-            realtime["start_latency_ms"] = (
-                round((play_times[0] - play_started) * 1000.0, 1) if play_times else None
-            )
             peer.send(Command.STATS)
             stats_event = peer.wait_event(
                 lambda event: event.get("event") == Event.STATS, timeout=60
             )
+            # The first frame marks play-start latency (scene rebuild up to the start
+            # block); the real-time rate is judged from there to the end of playback.
+            # The host skips frames identical to the previous one (static waits), so gaps
+            # in delivery are only stalls beyond the frames it reports as deduped.
+            start_latency = (play_times[0] - play_started) if play_times else 0.0
+            realtime = benchmark.realtime_fps_stats(
+                play_times[1:],
+                target_fps=benchmark.REALTIME_FPS,
+                scene_seconds=total_duration,
+                wall_seconds=max(play_seconds - start_latency, 1e-6),
+                skipped_frames=int(stats_event.get("deduped") or 0)
+                - int(stats_before.get("deduped") or 0),
+            )
+            realtime["start_latency_ms"] = round(start_latency * 1000.0, 1) if play_times else None
 
             report = {
                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
