@@ -12,8 +12,10 @@ change so caches keyed on "what the scene currently looks like" can invalidate.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,8 +31,10 @@ __all__ = [
     "PatchStack",
     "SidecarError",
     "load_sidecar",
+    "read_patch_file",
     "save_sidecar",
     "sidecar_path",
+    "write_patch_file",
 ]
 
 SIDECAR_VERSION = 1
@@ -50,10 +54,16 @@ def sidecar_path(scene_path: str | Path) -> Path:
 def load_sidecar(scene_path: str | Path) -> tuple[Patch, ...]:
     """Read the patches stored for ``scene_path``; an absent file means no patches."""
     path = sidecar_path(scene_path)
+    if not path.exists():
+        return ()
+    return read_patch_file(path)
+
+
+def read_patch_file(path: str | Path) -> tuple[Patch, ...]:
+    """Parse a sidecar-format JSON file; raises :class:`SidecarError` on any problem."""
+    path = Path(path)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return ()
     except (OSError, json.JSONDecodeError) as exc:
         raise SidecarError(f"cannot read {path.name}: {exc}") from exc
     if not isinstance(raw, dict):
@@ -85,6 +95,24 @@ def save_sidecar(scene_path: str | Path, patches: Iterable[Patch]) -> Path | Non
     temp = path.with_name(path.name + ".tmp")
     temp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.replace(temp, path)
+    return path
+
+
+def write_patch_file(patches: Iterable[Patch]) -> Path:
+    """Write ``patches`` to a content-addressed temp file and return its path.
+
+    Handed to processes (the preview host, the export launcher) that must run
+    exactly the edits the editor is showing, independent of what is on disk.
+    """
+    content = json.dumps(
+        {"version": SIDECAR_VERSION, "patches": [patch.to_dict() for patch in patches]}
+    )
+    digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:16]
+    config_dir = Path(tempfile.gettempdir()) / "manim-studio"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / f"patches_{digest}.json"
+    if not path.exists() or path.read_text(encoding="utf-8") != content:
+        path.write_text(content, encoding="utf-8")
     return path
 
 

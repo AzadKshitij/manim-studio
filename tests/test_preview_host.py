@@ -913,3 +913,21 @@ class TestHostStatsPayloads:
         assert payload["sent"] == 7
         assert payload["dropped"] == 2
         assert payload["fps"] == 30
+
+
+class TestPatchFileArgument:
+    def test_patch_file_is_parsed_into_the_config_patches(self, tmp_path: Path) -> None:
+        from manim_studio.patches import Anchor, SetDuration
+        from manim_studio.preview_host import _read_patches, build_parser
+        from manim_studio.sidecar import write_patch_file
+
+        patch = SetDuration(Anchor("S.construct:wait:abc:0"), 2.0)
+        path = write_patch_file([patch])
+        args = build_parser().parse_args([str(tmp_path / "scene.py"), "--patch-file", str(path)])
+        assert _read_patches(args.patch_file) == (patch,)
+        assert _read_patches(None) == ()
+
+    def test_unreadable_patch_file_is_ignored(self, tmp_path: Path) -> None:
+        from manim_studio.preview_host import _read_patches
+
+        assert _read_patches(tmp_path / "missing.json") == ()

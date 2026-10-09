@@ -18,6 +18,8 @@ from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
 
 from manim_studio import ipc, spawn
 from manim_studio.ipc import Channel, Command, Event, FrameParser
+from manim_studio.patches import parse_patch
+from manim_studio.sidecar import write_patch_file
 from manim_studio.stats import TimingStats
 
 __all__ = ["PreviewController"]
@@ -117,6 +119,9 @@ class PreviewController(QObject):
             args.append("--embedded")
         if scene_name:
             args += ["--scene-name", scene_name]
+        if self.patches:
+            # The host loads its first scene from argv, so hand it the current edits now.
+            args += ["--patch-file", str(write_patch_file(parse_patch(p) for p in self.patches))]
         if fps is not None:
             args += ["--fps", str(fps)]
         # Frozen builds re-invoke our own exe instead of `python -m` (ADR 0005).

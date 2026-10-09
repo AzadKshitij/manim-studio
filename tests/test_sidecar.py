@@ -116,3 +116,24 @@ class TestPatchStack:
     def test_undo_on_empty_history_is_false(self) -> None:
         stack = PatchStack()
         assert stack.undo() is False and stack.redo() is False
+
+
+class TestPatchFile:
+    def test_write_then_read_round_trips(self) -> None:
+        from manim_studio.sidecar import read_patch_file, write_patch_file
+
+        patches = (A, B, Delete(Anchor("s:play:cc:0")))
+        path = write_patch_file(patches)
+        assert read_patch_file(path) == patches
+
+    def test_write_is_content_addressed(self) -> None:
+        from manim_studio.sidecar import write_patch_file
+
+        assert write_patch_file([A]) == write_patch_file([A])
+        assert write_patch_file([A]) != write_patch_file([B])
+
+    def test_read_reports_a_missing_file(self, tmp_path: Path) -> None:
+        from manim_studio.sidecar import read_patch_file
+
+        with pytest.raises(SidecarError):
+            read_patch_file(tmp_path / "nope.json")

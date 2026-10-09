@@ -127,3 +127,27 @@ class TestPreviewControllerIntegration:
         assert image.width() == 2 and image.height() == 2
         # A partial burst produces no image and keeps parser state.
         assert controller.decode_latest_frame(b"") is None
+
+
+@pytest.mark.gl
+def test_patches_set_before_start_apply_to_the_first_load(qtbot) -> None:
+    """The host loads its first scene from argv, so start() must hand it the edits."""
+    probe = PreviewController()
+    try:
+        probe.start(SCENE_FILE, embedded=True, size=(320, 180))
+        with qtbot.waitSignal(probe.logReceived, timeout=90000) as first:
+            pass
+    finally:
+        probe.shutdown()
+    site = first.args[0]["sites"][0]["id"]
+    controller = PreviewController()
+    controller.patches = [{"op": "set_duration", "site": site, "seconds": 5.0}]
+    try:
+        controller.start(SCENE_FILE, embedded=True, size=(320, 180))
+        with qtbot.waitSignal(controller.logReceived, timeout=90000) as blocker:
+            pass
+        message = blocker.args[0]
+        assert message["patches"]["applied"] == 1
+        assert message["blocks"][0]["duration"] == pytest.approx(5.0)
+    finally:
+        controller.shutdown()

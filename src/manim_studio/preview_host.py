@@ -244,6 +244,8 @@ class HostConfig:
     initial_frame: str = "end"
     fps: int | None = None
     fail_fast: bool = False
+    #: Timeline edits the very first load runs with (the editor re-sends later ones).
+    patches: tuple[Patch, ...] = ()
 
 
 class SceneHost:
@@ -270,7 +272,7 @@ class SceneHost:
         self._timing_factors: dict[int, float] = {}
         self.call_lines: tuple[int | None, ...] = ()
         #: Timeline edits (sidecar patches) the loaded scene runs with.
-        self._patches: tuple[Patch, ...] = ()
+        self._patches: tuple[Patch, ...] = config.patches
         self._studio_runtime = StudioRuntime()
         self._patch_report: dict[str, Any] = {"applied": 0, "orphaned": []}
         self.block_sites: tuple[BlockSite | None, ...] = ()
@@ -1370,8 +1372,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit when startup fails instead of waiting for a reload",
     )
+    parser.add_argument(
+        "--patch-file",
+        type=Path,
+        default=None,
+        help="sidecar-format JSON of timeline edits to run the scene with",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
+
+
+def _read_patches(path: Path | None) -> tuple[Patch, ...]:
+    """Patches from ``--patch-file``; an unreadable file is logged and ignored."""
+    if path is None:
+        return ()
+    from manim_studio.sidecar import SidecarError, read_patch_file
+
+    try:
+        return read_patch_file(path)
+    except SidecarError as exc:
+        log.error("ignoring --patch-file: %s", exc)
+        return ()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1391,6 +1412,7 @@ def main(argv: list[str] | None = None) -> int:
         initial_frame=args.initial_frame,
         fps=args.fps,
         fail_fast=args.fail_fast,
+        patches=_read_patches(args.patch_file),
     )
     # manimgl parses sys.argv at import time; hide our arguments from it.
     from manim_studio.scene_runner import manimlib_argv_guard

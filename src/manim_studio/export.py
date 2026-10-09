@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from manim_studio import spawn
-from manim_studio.sidecar import SIDECAR_VERSION, SidecarError, load_sidecar
+from manim_studio.sidecar import SidecarError, load_sidecar, write_patch_file
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -201,7 +201,7 @@ def build_export_plan(
     if normalised_timings:
         module_args.extend(["--timing-file", str(_timing_config_path(normalised_timings))])
     if chosen_patches:
-        module_args.extend(["--patch-file", str(_patch_config_path(chosen_patches))])
+        module_args.extend(["--patch-file", str(write_patch_file(chosen_patches))])
     module_args.extend(["--video_dir", str(output_dir), "--file_name", file_name])
     if fps is not None:
         module_args.extend(["--config_file", str(_fps_config_path(int(fps)))])
@@ -233,18 +233,6 @@ def _resolve_patches(
         return load_sidecar(scene_file)
     except SidecarError as exc:
         raise ExportError(str(exc)) from exc
-
-
-def _patch_config_path(patches: tuple[Patch, ...]) -> Path:
-    """Write (once) the sidecar-format JSON the launcher applies to the scene."""
-    content = json.dumps({"version": SIDECAR_VERSION, "patches": [p.to_dict() for p in patches]})
-    digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:16]
-    config_dir = Path(tempfile.gettempdir()) / "manim-studio"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    path = config_dir / f"patches_{digest}.json"
-    if not path.exists() or path.read_text(encoding="utf-8") != content:
-        path.write_text(content, encoding="utf-8")
-    return path
 
 
 def _timing_config_path(factors: tuple[tuple[int, float], ...]) -> Path:
