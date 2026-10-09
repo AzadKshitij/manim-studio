@@ -39,7 +39,7 @@ class _StubController:
         self.stops = 0
         self.is_running = True
 
-    def load(self, path, scene_name: str | None = None) -> bool:
+    def load(self, path, scene_name: str | None = None, *, fresh: bool = False) -> bool:
         self.loads.append((str(path), scene_name))
         return True
 

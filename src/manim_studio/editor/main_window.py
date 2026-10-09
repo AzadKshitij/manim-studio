@@ -255,6 +255,9 @@ class MainWindow(QMainWindow):
 
         run_menu = menu_bar.addMenu("&Run")
         self._add_action(run_menu, "Reload preview", self.reload_preview, "F5")
+        self._add_action(
+            run_menu, "Reload preview (discard cache)", self.reload_preview_fresh, "Ctrl+F5"
+        )
         self._add_action(run_menu, "Play from playhead", self.request_play, "F6")
         self._add_action(run_menu, "Stop playback", self.request_stop, "F7")
         run_menu.addSeparator()
@@ -658,7 +661,11 @@ class MainWindow(QMainWindow):
             initial_frame=self._initial_frame,
         )
 
-    def reload_preview(self) -> None:
+    def reload_preview_fresh(self) -> None:
+        """Reload and throw away every cached frame (e.g. after editing an image asset)."""
+        self.reload_preview(fresh=True)
+
+    def reload_preview(self, *, fresh: bool = False) -> None:
         if self._path is None:
             return
         # A reload is an explicit "try again": drop the previous error marker in
@@ -670,7 +677,10 @@ class MainWindow(QMainWindow):
             return
         # Use `load` with an explicit path and scene name (not `reload`) so renaming
         # the scene class or switching scenes in the combo always takes effect.
-        self.controller.load(self._path, self._scene_name())
+        if fresh:
+            self.controller.load(self._path, self._scene_name(), fresh=True)
+        else:
+            self.controller.load(self._path, self._scene_name())
 
     def request_play(self) -> None:
         if not self.controller.is_running:

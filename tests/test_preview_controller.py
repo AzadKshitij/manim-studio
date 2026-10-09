@@ -135,3 +135,17 @@ def test_patches_set_before_start_apply_to_the_first_load(qtbot) -> None:
         assert message["blocks"][0]["duration"] == pytest.approx(5.0)
     finally:
         controller.shutdown()
+
+
+class TestFreshFlag:
+    def test_fresh_is_sent_only_when_asked_for(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        controller = PreviewController()
+        sent: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            controller, "send", lambda command, **payload: sent.append((command, payload)) or True
+        )
+        controller.reload(fresh=True)
+        controller.load("scene.py", "Demo", fresh=True)
+        controller.reload()
+        controller.load("scene.py", "Demo")
+        assert [payload.get("fresh") for _, payload in sent] == [True, True, None, None]

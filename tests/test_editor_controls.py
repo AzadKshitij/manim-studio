@@ -60,7 +60,9 @@ class RecordingController:
         self.commands.append((name, payload))
         return True
 
-    def load(self, path, scene_name=None) -> bool:
+    def load(self, path, scene_name=None, *, fresh: bool = False) -> bool:
+        if fresh:
+            return self._record("load_fresh", str(path), scene_name)
         return self._record("load", str(path), scene_name)
 
     def reload(self, path=None) -> bool:
@@ -217,6 +219,14 @@ class TestToolbarAndMenu:
         assert recorder.count("play") == 1  # type: ignore[union-attr]
         window._toolbar_actions["Stop"].trigger()
         assert recorder.count("stop") == 1  # type: ignore[union-attr]
+
+    def test_menu_reload_fresh_asks_the_host_to_discard_its_cache(self, window: MainWindow) -> None:
+        recorder = window.controller
+        window.reload_preview_fresh()
+        assert recorder.count("load_fresh") == 1  # type: ignore[union-attr]
+        assert recorder.count("load") == 0  # type: ignore[union-attr]
+        window.reload_preview()
+        assert recorder.count("load") == 1  # type: ignore[union-attr]
 
     def test_menu_reload_play_stop(self, window: MainWindow) -> None:
         recorder = window.controller
