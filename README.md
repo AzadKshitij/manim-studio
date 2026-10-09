@@ -32,10 +32,13 @@ trace and export scenes with the CLI.
 
 ## Quick start
 
+`scenes/Welcome.py` is the starter scene: a short, LaTeX-free tour (title, orbiting
+dots, morphs, a travelling sine wave, a Lissajous curve and a colour-wave grid) to
+edit, save and scrub.
+
 ```powershell
 uv sync --all-groups
-uv run manim-studio new scenes/intro.py --template circle_to_square
-uv run manim-studio gui scenes/intro.py
+uv run manim-studio gui scenes/Welcome.py
 ```
 
 In the editor: edit + save to auto-reload the preview (F5 forces a reload), F6

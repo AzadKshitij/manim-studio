@@ -24,8 +24,9 @@ videos/
 # Benchmark runs (baselines/comparisons under docs/perf are tracked)
 docs/perf/latest.json
 
-# Local scratch scenes (generated; tests/scenes is tracked)
-/scenes/
+# Local scratch scenes (generated); the shipped starter scene is tracked
+/scenes/*
+!/scenes/Welcome.py
 
 # Renders / exports
 *.mp4
