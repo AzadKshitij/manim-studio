@@ -33,10 +33,12 @@ from manim_studio import APP_NAME
 from manim_studio.editor import api_cache, scene_files
 from manim_studio.editor.code_editor import CodeEditor
 from manim_studio.editor.completion_controller import CompletionController
+from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
 from manim_studio.editor.file_watcher import FileWatcher
 from manim_studio.editor.icon import load_icon
+from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
 from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.editor.preview_panel import PreviewPanel
@@ -50,7 +52,6 @@ from manim_studio.scene_runner import check_scene_file
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
 from manim_studio.timeline_model import TimelineLog, format_duration
-from manim_studio.timing import TimingOverrides
 
 __all__ = ["MainWindow"]
 
@@ -84,9 +85,9 @@ class MainWindow(QMainWindow):
         self._api_names = api_cache.load_api_names()
         # Toolbar actions by label (used by the control-surface tests).
         self._toolbar_actions: dict[str, QAction] = {}
-        # Timing edits (timeline right-edge drag) are kept separately from the
-        # code editor's undo stack; the keyboard handler is focus-scoped.
-        self._timing = TimingOverrides(TimelineLog(()))
+        # Timeline edits (retimes, deletes) are anchored patches stored in a sidecar
+        # next to the scene; they have their own undo stack (the timeline's Ctrl+Z).
+        self.patches = PatchController(self)
         self._loop = False
         self._loop_paused = False
         self._was_playing = False
@@ -241,6 +242,17 @@ class MainWindow(QMainWindow):
         )
         self._add_action(run_menu, "Focus live shell", self.focus_shell, "Ctrl+`")
 
+        timeline_menu = menu_bar.addMenu("&Timeline")
+        self._add_action(timeline_menu, "Undo timeline edit", self._undo_timing)
+        self._add_action(timeline_menu, "Redo timeline edit", self._redo_timing)
+        timeline_menu.addSeparator()
+        self._add_action(
+            timeline_menu, "Apply timeline edits to source", self.apply_edits_to_source
+        )
+        self._add_action(timeline_menu, "Show timeline edits as diff…", self.show_edits_diff)
+        timeline_menu.addSeparator()
+        self._add_action(timeline_menu, "Discard orphaned edits", self.discard_orphaned_edits)
+        self._add_action(timeline_menu, "Discard all timeline edits", self.discard_all_edits)
         view_menu = menu_bar.addMenu("&View")
         self._embedded_action = QAction("Embedded preview", self, checkable=True)
         self._embedded_action.setChecked(self._embedded)
@@ -288,7 +300,14 @@ class MainWindow(QMainWindow):
         self._mem_label = QLabel("cache: —")
         self._mem_label.setToolTip("Filmstrip cache RAM and process memory (Help > App stats…)")
         self._latex_label = QLabel("")
+        self._edits_label = QLabel("")
+        self._edits_label.setToolTip(
+            "Timeline edits live in a sidecar file next to the scene, not in the source.\n"
+            "Timeline > Apply timeline edits to source writes them into the code."
+        )
+        self._edits_label.setVisible(False)
         self._cursor_label = QLabel("Ln 1, Col 1")
+        bar.addPermanentWidget(self._edits_label)
         bar.addPermanentWidget(self._cursor_label)
         bar.addPermanentWidget(self._latex_label)
         bar.addPermanentWidget(self._mem_label)
@@ -339,6 +358,8 @@ class MainWindow(QMainWindow):
         self.timeline.blockExportRangeRequested.connect(self._export_block_range)
         self.timeline.blockResetTimingRequested.connect(self._reset_block_timing)
         self.timeline.blockStillRequested.connect(self._render_block_still)
+        self.timeline.blockDeleteRequested.connect(self._delete_block)
+        self.timeline.blockIterationEditRequested.connect(self._edit_block_iteration)
         self.timeline.undoRequested.connect(self._undo_timing)
         self.timeline.redoRequested.connect(self._redo_timing)
         self.transport_bar.playPauseRequested.connect(self._toggle_play)
@@ -351,6 +372,9 @@ class MainWindow(QMainWindow):
         self.controller.stateChanged.connect(self._on_host_state_changed)
         self.controller.stoppedReceived.connect(self._on_stopped_loop)
         self.controller.logReceived.connect(self._on_trace_log)
+        self.patches.patchesChanged.connect(self._on_patches_changed)
+        self.patches.stateChanged.connect(self._refresh_edits_ui)
+        self.patches.message.connect(self._set_status)
         self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
         self.controller.execResultReceived.connect(self.shell.append_exec_result)
         self.controller.filmstripReceived.connect(self.stats.on_filmstrip)
@@ -456,6 +480,9 @@ class MainWindow(QMainWindow):
             return False
         self.editor.load_file(target)
         self._path = target.resolve()
+        # Edits made on the timeline travel with the scene: the host loads its first
+        # trace from argv, so the controller must know them before it starts.
+        self.controller.patches = self.patches.open_scene(self._path)
         self.watcher.watch(self._path)
         self._refresh_scene_list(self._path)
         self._update_title()
@@ -779,12 +806,11 @@ class MainWindow(QMainWindow):
         self.export_dialog(initial_range=(index, index))
 
     def _reset_block_timing(self, index: int) -> None:
-        """Context menu: drop this block's retime override."""
-        if self._timing.reset_block(index):
-            self._push_timing()
-            self._set_status(f"block {index} timing reset")
+        """Context menu: drop every timeline edit of this block's call."""
+        if self.patches.reset_block(index):
+            self._set_status(f"block {index}: timeline edits reset")
         else:
-            self._set_status(f"block {index} was not retimed")
+            self._set_status(f"block {index} has no timeline edits")
 
     def _render_block_still(self, index: int) -> None:
         """Context menu: render the frame at the end of this block."""
@@ -797,7 +823,6 @@ class MainWindow(QMainWindow):
             self._scene_name(),
             output,
             animation_range=(0, index + 1),
-            timing_factors=self._timing_factors(),
         )
 
     def _on_stopped_loop(self, message: dict[str, Any]) -> None:
@@ -903,42 +928,82 @@ class MainWindow(QMainWindow):
     # Timeline retiming
     # ------------------------------------------------------------------
 
-    def _on_trace_log(self, _message: dict[str, Any]) -> None:
-        """A fresh trace becomes the base for the timing-override stack.
-
-        Connected after :class:`PreviewEvents` so the widget already holds the new
-        log; any previous overrides refer to a timeline that no longer exists.
-        """
-        self._timing = TimingOverrides(self.timeline.log)
+    def _on_trace_log(self, message: dict[str, Any]) -> None:
+        """A fresh trace tells us which call each block came from and which edits failed."""
+        self.patches.on_log(message)
         # A fresh trace means new call sites: re-highlight the caret's block.
         self._on_cursor_moved(self.editor.current_line(), self.editor.current_column())
 
-    def _on_block_resized(self, index: int, duration: float) -> None:
+    def _on_block_resized(
+        self, index: int, duration: float, *, iteration_only: bool = False
+    ) -> None:
         if self._path is None or not self.controller.is_running:
             return
-        if not self._timing.set_duration(index, duration):
+        targets = self.patches.affected_blocks(index, iteration_only=iteration_only)
+        sibling = self.patches.sibling_duration_source(index)
+        sibling_block = None if sibling is None else self.timeline.log.block_by_index(sibling)
+        if not self.patches.set_block_duration(
+            index,
+            duration,
+            iteration_only=iteration_only,
+            sibling_duration=None if sibling_block is None else sibling_block.duration,
+        ):
             return
-        self._push_timing()
+        # Show the stretch at once; the host's reload (cause "patches") then confirms it.
+        log = self.timeline.log
+        for target in targets:
+            log = log.scaled_block_duration(target, duration)
+        self._show_projected_log(log)
+        count = len(targets)
+        suffix = f" (all {count} iterations)" if count > 1 else ""
+        self._set_status(f"block {index} → {format_duration(duration)}{suffix}")
+
+    def _show_projected_log(self, log: TimelineLog) -> None:
+        """Adopt a locally computed timeline until the host's trace replaces it."""
+        self.timeline.set_log(log, keep_view=True)
+        self.events.total_duration = log.total_duration
+        position = min(self.timeline.playhead_time, log.total_duration)
+        self.timeline.set_playhead(position)
+        self.preview_panel.set_time(position, log.total_duration)
+        self._refresh_edits_ui()
+
+    def _prompt_duration(self, index: int, title: str) -> float | None:
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return None
+        duration, accepted = QInputDialog.getDouble(
+            self,
+            title,
+            f"Block {index} · {block.name}\nduration in seconds:",
+            block.duration,
+            MIN_DURATION,
+            3600.0,
+            3,
+        )
+        return duration if accepted else None
 
     def _edit_block_duration(self, index: int) -> None:
         """Double-click a block: prompt for an exact duration and retime it."""
         if self._path is None or not self.controller.is_running:
             return
-        block = self.timeline.log.block_by_index(index)
-        if block is None:
-            return
-        minimum = 1.0 / 30.0
-        duration, accepted = QInputDialog.getDouble(
-            self,
-            "Block duration",
-            f"Block {index} · {block.name}\nduration in seconds:",
-            block.duration,
-            minimum,
-            3600.0,
-            3,
-        )
-        if accepted:
+        duration = self._prompt_duration(index, "Block duration")
+        if duration is not None:
             self._on_block_resized(index, duration)
+
+    def _edit_block_iteration(self, index: int) -> None:
+        """Context menu: retime just this iteration of a loop body."""
+        if self._path is None or not self.controller.is_running:
+            return
+        duration = self._prompt_duration(index, "Duration of this iteration")
+        if duration is not None:
+            self._on_block_resized(index, duration, iteration_only=True)
+
+    def _delete_block(self, index: int) -> None:
+        """Context menu: remove this block's call from the scene (a timeline edit)."""
+        if self._path is None or not self.controller.is_running:
+            return
+        if self.patches.delete_block(index):
+            self._set_status(f"block {index}: call deleted (timeline edit, not yet in the source)")
 
     def _on_block_activated(self, index: int) -> None:
         """Ctrl+double-click on a block: jump the editor to its call site."""
@@ -951,35 +1016,88 @@ class MainWindow(QMainWindow):
             self._set_status(f"block {index} has no known source line")
 
     def _undo_timing(self) -> None:
-        if self._timing.undo():
-            self._push_timing()
+        if self.patches.undo():
+            self._set_status("timeline edit undone")
 
     def _redo_timing(self) -> None:
-        if self._timing.redo():
-            self._push_timing()
+        if self.patches.redo():
+            self._set_status("timeline edit redone")
 
-    def _push_timing(self) -> None:
-        """Show the edited timeline at once and ask the host to retime + re-pose."""
-        log = self._timing.log()
-        self.timeline.set_log(log, keep_view=True)
-        self.events.total_duration = log.total_duration
-        position = min(self.timeline.playhead_time, log.total_duration)
-        self.timeline.set_playhead(position)
-        self.preview_panel.set_time(position, log.total_duration)
-        self.controller.set_timing(self._timing.to_payload(), position)
+    # ------------------------------------------------------------------
+    # Timeline edits: persistence, host sync and writing them into the source
+    # ------------------------------------------------------------------
 
-    def _timing_factors(self) -> dict[int, float]:
-        """Per-block retiming factors (``block index -> duration / base duration``).
+    def _on_patches_changed(self, payload: Any) -> None:
+        """The edit set changed: run the scene with it (the controller also remembers it)."""
+        self.controller.set_patches(list(payload), self.timeline.playhead_time)
 
-        Used to bake the editor's retiming into exports: the launcher scales each
-        block's ``run_time`` by this factor so the render matches the timeline.
-        """
-        factors: dict[int, float] = {}
-        for index, duration in self._timing.durations.items():
-            block = self._timing.base.block_by_index(index)
-            if block is not None and block.duration > 0:
-                factors[index] = duration / block.duration
-        return factors
+    def _refresh_edits_ui(self) -> None:
+        """Status chip, menu states and the per-block markers follow the edit state."""
+        summary = self.patches.summary()
+        self._edits_label.setText(summary)
+        self._edits_label.setVisible(bool(summary))
+        count = self.timeline.log.num_blocks
+        self.timeline.set_block_markers(
+            {i: self.patches.iteration_count(i) for i in range(count)},
+            [i for i in range(count) if self.patches.block_is_edited(i)],
+        )
+        enabled = {
+            "Undo timeline edit": self.patches.can_undo,
+            "Redo timeline edit": self.patches.can_redo,
+            "Apply timeline edits to source": self.patches.edit_count > 0,
+            "Show timeline edits as diff…": self.patches.edit_count > 0,
+            "Discard orphaned edits": self.patches.orphan_count > 0,
+            "Discard all timeline edits": self.patches.edit_count > 0,
+        }
+        for text, state in enabled.items():
+            action = self._toolbar_actions.get(text)
+            if action is not None:
+                action.setEnabled(state)
+
+    def apply_edits_to_source(self) -> None:
+        """Write the timeline edits into the scene file (one undoable editor edit)."""
+        if self._path is None:
+            return
+        if self.editor.is_modified():
+            self._set_status("save the file first (Ctrl+S): edits are applied to the saved code")
+            return
+        plan = self.patches.plan_apply(self.editor.text())
+        if plan is None or not plan.changed:
+            self._set_status("no timeline edit can be written to the source")
+            return
+        left_over = self.patches.edit_count - len(plan.applied)
+        self.editor.replace_text(plan.text)
+        self.editor.save_file(self._path)
+        self.watcher.note_save()
+        self._update_title()
+        # The edits are now code: drop them from the sidecar; the host reloads once
+        # (through patchesChanged) with the new source and whatever could not be baked.
+        self.patches.finish_apply(plan)
+        note = f"applied {len(plan.applied)} timeline edit(s) to {self._path.name}"
+        if left_over:
+            note += f"; {left_over} could not be written and stay as timeline edits"
+        self._set_status(note)
+
+    def show_edits_diff(self) -> None:
+        """Preview what 'Apply timeline edits to source' would change."""
+        if self._path is None:
+            return
+        source = self.editor.text()
+        plan = self.patches.plan_apply(source)
+        if plan is None:
+            self._set_status("no timeline edits to show")
+            return
+        notes = [orphan.reason for orphan in plan.orphaned]
+        dialog = EditsDiffDialog(unified_diff(source, plan.text, self._path.name), notes, self)
+        dialog.exec()
+
+    def discard_orphaned_edits(self) -> None:
+        if self.patches.discard_orphans():
+            self._set_status("orphaned timeline edits discarded")
+
+    def discard_all_edits(self) -> None:
+        if self.patches.clear():
+            self._set_status("all timeline edits discarded (Timeline > Undo brings them back)")
 
     # ------------------------------------------------------------------
     # Export / preview video
@@ -998,7 +1116,6 @@ class MainWindow(QMainWindow):
             self._path,
             self._scene_name(),
             scene_files.preview_video_path(self._path),
-            timing_factors=self._timing_factors(),
         )
 
     def export_dialog(
@@ -1021,7 +1138,6 @@ class MainWindow(QMainWindow):
             initial_still=still,
             initial_range=initial_range,
             controller=self.exports,
-            timing_factors=self._timing_factors(),
         )
         dialog.exec()
 
@@ -1037,7 +1153,6 @@ class MainWindow(QMainWindow):
             output,
             quality=quality,
             fps=fps,
-            timing_factors=self._timing_factors(),
         )
 
     def _on_preview_video_ready(self, output: Path) -> None:

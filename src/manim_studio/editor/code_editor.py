@@ -278,6 +278,25 @@ class CodeEditor(ScintillaEdit):
         self.setText(text.replace("\r\n", "\n").replace("\r", "\n"))
         self.restyle()
 
+    def replace_text(self, text: str) -> None:
+        """Replace the whole buffer as a single undoable edit, keeping the caret line.
+
+        Unlike :meth:`set_text` this stays on the undo stack, so a generated rewrite
+        (such as applying timeline edits to the source) can be undone with Ctrl+Z.
+        """
+        normalised = text.replace("\r\n", "\n").replace("\r", "\n")
+        line = self.current_line()
+        self.autoCCancel()
+        self.callTipCancel()
+        self.beginUndoAction()
+        try:
+            self.targetWholeDocument()
+            self.replaceTarget(len(normalised.encode("utf-8")), normalised)
+        finally:
+            self.endUndoAction()
+        self.restyle()
+        self.go_to_line(line)
+
     def load_file(self, path: str | Path) -> None:
         """Read a UTF-8 Python file into the buffer and reset modification state."""
         target = Path(path)

@@ -481,8 +481,12 @@ class SceneHost:
         with contextlib.suppress(Exception):
             screen.use()
 
-    def load(self, path: str | Path | None = None) -> None:
+    def load(self, path: str | Path | None = None, *, cause: str = "load") -> None:
         """(Re)load the scene atomically: import, trace, build, then commit.
+
+        ``cause`` is echoed in the ``log`` event (``"patches"`` for a reload that
+        only applies timeline edits) so the editor can keep the user's zoom and
+        playhead instead of treating it as a fresh scene.
 
         Nothing in the live host changes until the user's scene has been imported,
         traced and successfully constructed.  A broken edit therefore leaves the
@@ -556,6 +560,7 @@ class SceneHost:
             call_sites=list(self.call_lines),
             sites=[None if site is None else site.to_dict() for site in self.block_sites],
             patches=self._patch_report,
+            cause=cause,
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()
@@ -869,13 +874,15 @@ class SceneHost:
             raise PatchError(f"'patches' must be a list, got {type(raw).__name__}")
         return tuple(parse_patch(item) for item in raw)
 
-    def _load_with_patches(self, patches: tuple[Patch, ...] | None, path: Path | None) -> None:
+    def _load_with_patches(
+        self, patches: tuple[Patch, ...] | None, path: Path | None, *, cause: str = "load"
+    ) -> None:
         """Load with a new patch set, restoring the old one if the load fails."""
         previous = self._patches
         if patches is not None:
             self._patches = patches
         try:
-            self.load(path)
+            self.load(path, cause=cause)
         except BaseException:
             self._patches = previous
             raise
@@ -884,7 +891,7 @@ class SceneHost:
         """Apply a new patch set: reload the patched scene and re-pose the playhead."""
         patches = self._parse_patches(message.get("patches") or [])
         self.stop_event.clear()
-        self._load_with_patches(patches, None)
+        self._load_with_patches(patches, None, cause="patches")
         total = self.blocks[-1].end if self.blocks else 0.0
         self._pending_scrub = max(0.0, min(float(message.get("time") or 0.0), total))
         self._playhead_hint = self._pending_scrub

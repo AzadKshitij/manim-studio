@@ -45,7 +45,7 @@ The frames channel is only opened in `--embedded` mode.
 
 | `event` | Fields | Meaning |
 | --- | --- | --- |
-| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps`, `call_sites[]`, `sites[]`, `patches{}` | runtime trace finished |
+| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps`, `call_sites[]`, `sites[]`, `patches{}`, `cause` | runtime trace finished; `cause` is `"load"` or `"patches"` (a reload that only applied timeline edits, so the editor keeps zoom and playhead) |
 | `status` | `state` (`idle`/`playing`/`seeking`/`error`/`closed`), `index?`, `note?` | lifecycle |
 | `tick` | `time`, `index`, `scrubbing?`, `cached?` | playhead update during playback/scrub (≤20 Hz) |
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |

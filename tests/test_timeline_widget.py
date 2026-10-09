@@ -313,9 +313,31 @@ class TestContextMenu:
             "Copy timing",
             "Paste timing",
             "Reset retime",
+            "Delete this call",
             "Jump to code",
             "Zoom to block",
         ]
+
+    def test_loop_blocks_offer_a_per_iteration_retime(self, timeline: TimelineWidget) -> None:
+        assert "Retime this iteration only…" not in [
+            a.text() for a in timeline.context_menu(1).actions()
+        ]
+        timeline.set_block_markers({1: 3}, [])
+        iteration = QSignalSpy(timeline.blockIterationEditRequested)
+        self._action(timeline.context_menu(1), "Retime this iteration only…").trigger()
+        assert iteration.at(0)[0] == 1
+
+    def test_delete_signal(self, timeline: TimelineWidget) -> None:
+        deleted = QSignalSpy(timeline.blockDeleteRequested)
+        self._action(timeline.context_menu(2), "Delete this call").trigger()
+        assert deleted.at(0)[0] == 2
+
+    def test_block_markers_are_queryable_and_ignore_trivial_fan_out(
+        self, timeline: TimelineWidget
+    ) -> None:
+        timeline.set_block_markers({0: 1, 1: 4}, [2])
+        assert [timeline.iterations(i) for i in range(3)] == [1, 4, 1]
+        assert timeline.is_edited(2) and not timeline.is_edited(0)
 
     def test_play_and_loop_and_export_signals(self, timeline: TimelineWidget) -> None:
         play = QSignalSpy(timeline.blockPlayRequested)

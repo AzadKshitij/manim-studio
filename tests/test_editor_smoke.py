@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ from PySide6.QtGui import QImage
 from manim_studio.editor import main_window as main_window_module
 from manim_studio.editor.code_editor import PY_KEYWORD
 from manim_studio.editor.main_window import MainWindow
+from manim_studio.export import build_export_plan
+from manim_studio.patches import Anchor, Delete, SetDuration
+from manim_studio.sidecar import load_sidecar
 from manim_studio.timeline_model import TimelineLog
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
@@ -31,6 +35,8 @@ class _StubController:
         self.plays: list[int] = []
         self.play_args: list[tuple[int | None, float]] = []
         self.timings: list[tuple[list[dict[str, float]], float]] = []
+        self.patch_sets: list[tuple[list[dict[str, object]], float]] = []
+        self.patches: list[dict[str, object]] = []
         self.stops = 0
         self.is_running = True
 
@@ -63,6 +69,11 @@ class _StubController:
         self.timings.append((list(timings), float(time_seconds)))
         return True
 
+    def set_patches(self, patches, time_seconds: float = 0.0) -> bool:
+        self.patches = list(patches)
+        self.patch_sets.append((list(patches), float(time_seconds)))
+        return True
+
     def shutdown(self) -> None:
         pass
 
@@ -77,6 +88,28 @@ SAMPLE_LOG_EVENT = {
     "stats": {"play": 2, "wait": 1},
     "total_duration": 3.5,
 }
+
+#: Same trace as the host reports it for a scene with edit-able call sites.
+EDIT_LOG = {
+    **SAMPLE_LOG_EVENT,
+    "sites": [
+        {"id": "S.construct:play:aa:0", "occ": 0},
+        {"id": "S.construct:wait:bb:0", "occ": 0},
+        {"id": "S.construct:play:cc:0", "occ": 0},
+    ],
+    "patches": {"applied": 0, "orphaned": []},
+}
+WAIT_SITE = Anchor("S.construct:wait:bb:0")
+
+
+@pytest.fixture
+def scene_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A throwaway copy of the showcase, so sidecar files never land in the repo."""
+    copy = tmp_path / "feature_showcase.py"
+    shutil.copy(SCENE_FILE, copy)
+    monkeypatch.setattr(f"{__name__}.SCENE_FILE", copy)
+    return copy
+
 
 #: Same trace with per-block call-site lines, for caret-highlight tests.
 CARET_LOG = {**SAMPLE_LOG_EVENT, "call_sites": [10, 12, 14]}
@@ -622,6 +655,7 @@ class TestPlayFromPlayhead:
             window.controller = original  # type: ignore[assignment]
 
 
+@pytest.mark.usefixtures("scene_copy")
 class TestNumericDuration:
     """Double-clicking a block asks for an exact duration and retimes it."""
 
@@ -631,10 +665,10 @@ class TestNumericDuration:
         window.controller = stub  # type: ignore[assignment]
         window._original_controller = original  # type: ignore[attr-defined]
         window.open_path(SCENE_FILE)
-        window.events.on_log(SAMPLE_LOG_EVENT)
+        window.events.on_log(EDIT_LOG)
         # events.on_log was called directly, bypassing the controller signal that
-        # normally rebuilds the timing stack; do it explicitly.
-        window._on_trace_log(SAMPLE_LOG_EVENT)
+        # tells the edit controller which call each block came from.
+        window._on_trace_log(EDIT_LOG)
         return stub
 
     def _restore(self, window: MainWindow) -> None:
@@ -651,25 +685,33 @@ class TestNumericDuration:
                 type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (2.5, True))}),
             )
             window.timeline.blockDurationEditRequested.emit(1)
+            # Shown at once (projected) and sent to the host as an anchored patch.
             assert window.timeline.log.block_by_index(1).duration == pytest.approx(2.5)
-            assert stub.timings and stub.timings[-1][0] == [{"index": 1, "duration": 2.5}]
+            assert stub.patch_sets[-1][0] == [
+                {"op": "set_duration", "site": WAIT_SITE.site_id, "seconds": 2.5}
+            ]
+            assert stub.timings == []  # the old per-index overlay is gone
         finally:
             self._restore(window)
 
-    def test_timing_factors_reflect_the_retime(
-        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    def test_the_edit_is_persisted_and_baked_into_exports(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch, scene_copy: Path
     ) -> None:
         self._stub(window)
         try:
-            assert window._timing_factors() == {}
+            assert load_sidecar(scene_copy) == ()
             monkeypatch.setattr(
                 main_window_module,
                 "QInputDialog",
                 type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (2.5, True))}),
             )
             window.timeline.blockDurationEditRequested.emit(1)
-            # base block 1 is 0.5 s -> 2.5 s is a 5x factor, used to bake exports.
-            assert window._timing_factors() == pytest.approx({1: 5.0})
+            patch = SetDuration(WAIT_SITE, 2.5)
+            assert load_sidecar(scene_copy) == (patch,)
+            # Exports read the sidecar, so the render matches the timeline.
+            assert build_export_plan(scene_copy).patches == (patch,)
+            assert window._edits_label.text() == "1 timeline edit"
+            assert window.timeline.is_edited(1)
         finally:
             self._restore(window)
 
@@ -686,7 +728,7 @@ class TestNumericDuration:
             )
             window.timeline.blockDurationEditRequested.emit(1)
             assert window.timeline.log.block_by_index(1).duration == pytest.approx(before)
-            assert stub.timings == []
+            assert stub.patch_sets == []
         finally:
             self._restore(window)
 
@@ -891,6 +933,7 @@ class _StubExports:
         return True
 
 
+@pytest.mark.usefixtures("scene_copy")
 class TestBlockContextMenu:
     """The window actions behind the timeline's block context menu."""
 
@@ -900,8 +943,8 @@ class TestBlockContextMenu:
         window.controller = stub  # type: ignore[assignment]
         window._original_controller = original  # type: ignore[attr-defined]
         window.open_path(SCENE_FILE)
-        window.events.on_log(SAMPLE_LOG_EVENT)
-        window._on_trace_log(SAMPLE_LOG_EVENT)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
         return stub
 
     def _restore(self, window: MainWindow) -> None:
@@ -940,13 +983,26 @@ class TestBlockContextMenu:
         finally:
             self._restore(window)
 
-    def test_reset_block_timing_restores_the_base(self, window: MainWindow) -> None:
-        self._stub(window)
+    def test_reset_block_timing_drops_the_edit_and_reruns_the_scene(
+        self, window: MainWindow, scene_copy: Path
+    ) -> None:
+        stub = self._stub(window)
         try:
             window._on_block_resized(1, 2.0)
             assert window.timeline.log.block_by_index(1).duration == pytest.approx(2.0)
             window._reset_block_timing(1)
-            assert window.timeline.log.block_by_index(1).duration == pytest.approx(0.5)
+            # No edits are left, so the host is told to run the untouched scene.
+            assert stub.patch_sets[-1][0] == []
+            assert load_sidecar(scene_copy) == ()
+        finally:
+            self._restore(window)
+
+    def test_delete_block_adds_a_delete_edit(self, window: MainWindow, scene_copy: Path) -> None:
+        stub = self._stub(window)
+        try:
+            window._delete_block(1)
+            assert stub.patch_sets[-1][0] == [{"op": "delete", "site": WAIT_SITE.site_id}]
+            assert load_sidecar(scene_copy) == (Delete(WAIT_SITE),)
         finally:
             self._restore(window)
 

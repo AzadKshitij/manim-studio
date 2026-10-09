@@ -37,8 +37,15 @@ LOG = {
     ],
     "total_duration": 3.5,
     "call_sites": [7, 8, 9],
+    "sites": [
+        {"id": "Controls.construct:play:aa:0", "occ": 0},
+        {"id": "Controls.construct:wait:bb:0", "occ": 0},
+        {"id": "Controls.construct:play:cc:0", "occ": 0},
+    ],
+    "patches": {"applied": 0, "orphaned": []},
     "fps": 30,
 }
+SITES = [site["id"] for site in LOG["sites"]]  # type: ignore[index, union-attr]
 
 
 class RecordingController:
@@ -46,6 +53,7 @@ class RecordingController:
 
     def __init__(self) -> None:
         self.commands: list[tuple[str, tuple]] = []
+        self.patches: list[dict] = []
         self.is_running = True
 
     def _record(self, name: str, *payload: object) -> bool:
@@ -72,6 +80,10 @@ class RecordingController:
 
     def set_timing(self, timings, time_seconds: float = 0.0) -> bool:
         return self._record("set_timing", list(timings), float(time_seconds))
+
+    def set_patches(self, patches, time_seconds: float = 0.0) -> bool:
+        self.patches = list(patches)
+        return self._record("set_patches", list(patches), float(time_seconds))
 
     def exec_code(self, code: str) -> bool:
         return self._record("exec", code)
@@ -250,15 +262,18 @@ class TestContextMenuButtons:
         recorder = window.controller
         self._action(window, 0, "Copy timing").trigger()  # duration 1.0
         self._action(window, 2, "Paste timing").trigger()
-        assert recorder.last("set_timing")[0] == [{"index": 2, "duration": 1.0}]  # type: ignore[union-attr]
+        assert recorder.last("set_patches")[0] == [  # type: ignore[union-attr]
+            {"op": "set_duration", "site": SITES[2], "seconds": 1.0}
+        ]
 
     def test_reset_retime(self, window: MainWindow) -> None:
         recorder = window.controller
         window._on_block_resized(1, 3.0)
-        assert recorder.count("set_timing") == 1  # type: ignore[union-attr]
+        assert recorder.count("set_patches") == 1  # type: ignore[union-attr]
         self._action(window, 1, "Reset retime").trigger()
-        assert recorder.count("set_timing") == 2  # type: ignore[union-attr]
-        assert window.timeline.log.block_by_index(1).duration == pytest.approx(0.5)
+        assert recorder.count("set_patches") == 2  # type: ignore[union-attr]
+        # With no edits left the host is told to run the untouched scene again.
+        assert recorder.last("set_patches")[0] == []  # type: ignore[union-attr]
 
     def test_jump_to_code(self, window: MainWindow) -> None:
         self._action(window, 2, "Jump to code").trigger()
@@ -314,11 +329,14 @@ class TestFullPlaybackFlow:
         window.seek_to_block(2)
         assert recorder.last("seek") == (2,)  # type: ignore[union-attr]
 
-        # 4. retime then undo (separate timing stack).
+        # 4. retime then undo (separate timeline-edit stack).
         window.timeline.blockResized.emit(0, 2.0)
         assert window.timeline.log.block_by_index(0).duration == pytest.approx(2.0)
+        assert recorder.last("set_patches")[0] == [  # type: ignore[union-attr]
+            {"op": "set_duration", "site": SITES[0], "seconds": 2.0}
+        ]
         window.timeline.undoRequested.emit()
-        assert window.timeline.log.block_by_index(0).duration == pytest.approx(1.0)
+        assert recorder.last("set_patches")[0] == []  # type: ignore[union-attr]
 
         # 5. stop everything.
         window.request_stop()

@@ -12,8 +12,9 @@ application exclusively through signals.
 from __future__ import annotations
 
 import colorsys
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QPoint, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -23,6 +24,7 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPen,
+    QPolygonF,
     QResizeEvent,
     QWheelEvent,
 )
@@ -35,6 +37,9 @@ from manim_studio.timeline_model import (
     format_duration,
     snap_time,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 __all__ = ["TimelineWidget"]
 
@@ -82,6 +87,8 @@ class TimelineWidget(QWidget):
     blockExportRangeRequested = Signal(int)
     blockResetTimingRequested = Signal(int)
     blockStillRequested = Signal(int)
+    blockDeleteRequested = Signal(int)  # remove the block's call from the scene
+    blockIterationEditRequested = Signal(int)  # retime only this loop iteration
     undoRequested = Signal()
     redoRequested = Signal()
 
@@ -98,6 +105,8 @@ class TimelineWidget(QWidget):
         self._range: tuple[float, float] | None = None  # loop / export range
         self._range_anchor = 0.0
         self._timing_clipboard: float | None = None
+        self._iterations: dict[int, int] = {}  # block -> loop iterations sharing its call
+        self._edited: frozenset[int] = frozenset()  # blocks whose call has timeline edits
         self._context_menu: QMenu | None = None  # kept for tests
         self._looping = False  # mirrors the transport's loop toggle
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
@@ -145,6 +154,19 @@ class TimelineWidget(QWidget):
     def active_block(self) -> int | None:
         """Block highlighted for the editor caret, or ``None``."""
         return self._active_index
+
+    def set_block_markers(self, iterations: Mapping[int, int], edited: Iterable[int]) -> None:
+        """Annotate blocks: loop fan-out (``xN``) and which calls carry timeline edits."""
+        self._iterations = {int(i): int(n) for i, n in iterations.items() if int(n) > 1}
+        self._edited = frozenset(int(i) for i in edited)
+        self.update()
+
+    def iterations(self, index: int) -> int:
+        """How many blocks share block ``index``'s call (``1`` unless it is in a loop)."""
+        return self._iterations.get(index, 1)
+
+    def is_edited(self, index: int) -> bool:
+        return index in self._edited
 
     def set_active_block(self, index: int | None) -> None:
         """Highlight the block the editor caret currently sits in (or clear it)."""
@@ -219,8 +241,15 @@ class TimelineWidget(QWidget):
         paste = menu.addAction("Paste timing")
         paste.setEnabled(self._timing_clipboard is not None)
         paste.triggered.connect(lambda: self._paste_timing(index))
+        if self.iterations(index) > 1:
+            menu.addAction("Retime this iteration only…").triggered.connect(
+                lambda: self.blockIterationEditRequested.emit(index)
+            )
         menu.addAction("Reset retime").triggered.connect(
             lambda: self.blockResetTimingRequested.emit(index)
+        )
+        menu.addAction("Delete this call").triggered.connect(
+            lambda: self.blockDeleteRequested.emit(index)
         )
         menu.addSeparator()
         menu.addAction("Jump to code").triggered.connect(lambda: self.blockActivated.emit(index))
@@ -541,6 +570,12 @@ class TimelineWidget(QWidget):
                     f"{block.name}  ·  #{block.index}  ·  "
                     f"{format_duration(block.start)} - {format_duration(block.end)}\n"
                     "Drag the right edge to retime this section"
+                    + (
+                        f"\nLoop body (×{self.iterations(block.index)}): "  # noqa: RUF001
+                        "a retime applies to every iteration"
+                        if self.iterations(block.index) > 1
+                        else ""
+                    )
                 )
             self.update()
         if self._mode == "scrub":
@@ -739,10 +774,35 @@ class TimelineWidget(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(0x5F, 0xE3, 0xC8))
             painter.drawRect(QRectF(left + 1, track_top + 2, max(2.0, min(width - 2, 10.0)), 3))
+        iterations = self.iterations(block.index)
+        badge = f"×{iterations}" if iterations > 1 else ""  # noqa: RUF001
+        badge_width = metrics.horizontalAdvance(badge) + 6 if badge else 0
         if width >= MIN_BLOCK_LABEL_WIDTH:
             painter.setPen(QColor(0x10, 0x10, 0x10))
-            text = metrics.elidedText(block.name, Qt.TextElideMode.ElideRight, int(width - 8))
+            text = metrics.elidedText(
+                block.name, Qt.TextElideMode.ElideRight, int(width - 8 - badge_width)
+            )
             painter.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter, text)
+        if badge and width >= MIN_BLOCK_LABEL_WIDTH + badge_width:
+            # A loop body: edits to this block apply to every iteration.
+            painter.setPen(QColor(0x10, 0x10, 0x10, 200))
+            painter.drawText(
+                rect.adjusted(0, 0, -4, 0),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                badge,
+            )
+        if block.index in self._edited:
+            # A corner flag: this block's call carries a timeline edit (not in the source).
+            flag = QPolygonF(
+                [
+                    QPointF(rect.right() - 9, rect.top()),
+                    QPointF(rect.right(), rect.top()),
+                    QPointF(rect.right(), rect.top() + 9),
+                ]
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0xFF, 0xB4, 0x54))
+            painter.drawPolygon(flag)
 
     def _draw_playhead(self, painter: QPainter, height: int) -> None:
         x = self._view.time_to_x(self._playhead)

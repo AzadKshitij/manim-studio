@@ -117,7 +117,10 @@ class PreviewEvents(QObject):
         except Exception as exc:
             self._shell.append(f"bad trace payload: {exc}")
             return
-        self._timeline.set_log(timeline_log)
+        # A reload that only applies timeline edits is not a new scene: keep the
+        # user's zoom, playhead and selected block instead of starting over.
+        edited = message.get("cause") == "patches"
+        self._timeline.set_log(timeline_log, keep_view=edited)
         self._timeline.set_fps(message.get("fps"))
         self._total_duration = timeline_log.total_duration
         self._call_lines = parse_call_lines(message.get("call_sites"))
@@ -125,11 +128,22 @@ class PreviewEvents(QObject):
         # left by the previous failure.
         self._editor.clear_error_marker()
         self._preview_panel.set_cache_status("")
-        # The host shows the final frame by default; line the playhead up with it and
-        # forget any previously selected block so Play restarts from the beginning.
-        self._timeline.set_playhead(self._total_duration if self._initial_frame == "end" else 0.0)
-        self._preview_panel.set_time(self._timeline.playhead_time, self._total_duration)
-        self._play_from_index = None
+        if edited:
+            position = min(self._timeline.playhead_time, self._total_duration)
+            self._timeline.set_playhead(position)
+            self._preview_panel.set_time(position, self._total_duration)
+            if self._play_from_index is not None and (
+                self._play_from_index >= timeline_log.num_blocks
+            ):
+                self._play_from_index = None
+        else:
+            # The host shows the final frame by default; line the playhead up with it
+            # and forget any previously selected block so Play restarts from the start.
+            self._timeline.set_playhead(
+                self._total_duration if self._initial_frame == "end" else 0.0
+            )
+            self._preview_panel.set_time(self._timeline.playhead_time, self._total_duration)
+            self._play_from_index = None
         self._status_line(
             f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
         )
