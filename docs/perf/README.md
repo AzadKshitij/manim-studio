@@ -274,3 +274,21 @@ scene, so the host keeps it instead of running `construct()` a second time. A/B 
 This is the time before the new frame appears after an edit, so it is the latency the
 user feels (the filmstrip crawl in R1/R2 happens in the background). `initial_frame="start"`
 still runs the second, truncated `construct()`.
+
+### Summary — `rendering` branch vs. the commit it started from (2026-10-09)
+
+Same benchmark (`tests/test_perf.py -m gl`, 720p `feature_showcase`), old code (`4e39d1f`,
+extracted to a scratch directory) and new code alternated over 3 rounds on an otherwise idle
+machine; medians. Raw reports: `before-rendering-branch.json`, `after-rendering-branch.json`.
+
+| metric | before | after | change |
+| --- | --- | --- | --- |
+| edit -> new frame shown (reload -> `log`) | 0.126–0.131 s | **0.069–0.075 s** | **-44%** |
+| retime last block -> filmstrip complete | 1.077 s | **0.284 s** | **-74%** |
+| edit mid-scene block -> filmstrip complete | 1.094 s | **0.477 s** | **-56%** |
+| edit mid-scene non-play line -> filmstrip complete | 1.186 s | **0.476 s** | **-60%** |
+| full crawl (first load) | 0.857 s (≈ 120 fps) | **0.550 s (≈ 200 fps)** | **-36%** |
+| real-time playback | 28.5 effective fps | 28.5 effective fps | unchanged (no regression) |
+
+Real-time playback is ~95% of the 30 fps target with no unexplained stalls; the remaining
+~7% is per-block overhead and was not changed by this work.
