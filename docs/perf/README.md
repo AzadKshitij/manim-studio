@@ -187,3 +187,25 @@ A/B on `feature_showcase` (initial frame = end):
 
 The playhead's region is ready ~13× sooner; the full crawl still takes the same
 time and `crawl_fps` is unchanged within noise.
+
+### R1 — single-pass filmstrip crawl (2026-10-09, branch `rendering`)
+
+`FilmstripCrawler` no longer replays `construct()` once per block. After the
+playhead's block (posed directly, so `time_to_playhead` is unchanged) it streams the
+scene once: `ScrubEngine.stream_frames` suspends `construct()` on a greenlet (same GL
+thread) at every frame of every uncached block. Equivalence is covered by
+`test_streamed_frames_match_replay_poses` (cached frames vs replay poses).
+A/B on `feature_showcase` at 720p, old and new code run back to back on the same
+machine (`tests/test_perf.py -m gl`, `docs/perf/after-single-pass.json`):
+
+| metric | per-block replay (before) | single pass |
+| --- | --- | --- |
+| full crawl (`crawl_seconds`) | 1.06 s | **0.62 s** |
+| crawl throughput | 100.6 fps | **172.9 fps** |
+| `time_to_playhead` | 0.10 s | 0.11 s (unchanged) |
+| reload -> filmstrip rebuilt (3 edit shapes) | 1.30–1.46 s | **0.86–0.93 s** |
+
+Load itself (`load_timings.total`, ~0.12–0.14 s) is unchanged; this change targets the
+crawl only. The showcase is a small, light scene (24 blocks), so the saving is the
+floor: replay cost grows with the Python/mobject work before each block, and the old
+crawler paid it once per block.

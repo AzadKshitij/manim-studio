@@ -42,7 +42,7 @@ explaining why not.
 | `manim_studio/ipc.py` | JSON-line protocol + binary frame framing | stdlib, `frame_codec` |
 | `manim_studio/frame_codec.py` | Frame payload codec (zstd default, zlib/raw fallback) | stdlib (+ `zstandard` imported lazily) |
 | `manim_studio/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
-| `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
+| `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + single-pass filmstrip crawler (construct() suspended on a greenlet, same GL thread) | `manimlib`, `greenlet` lazily |
 | `manim_studio/theme.py` | Colour themes: model, built-ins, JSON theme files, derived colours (ADR 0008) | stdlib only |
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
 | `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |

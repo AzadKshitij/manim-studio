@@ -737,9 +737,9 @@ class TestFilmstripCrawlerInProcess:
             assert host._filmstrip is not None and host._filmstrip.is_empty
             host._ensure_crawler()
             assert host._crawler is not None
-            # The default initial frame is the end, so the crawl starts nearest
-            # the playhead (the last block) rather than from the beginning.
-            assert host._crawler._order[0] == len(host.blocks) - 1
+            # The default initial frame is the end, so the playhead's block (the
+            # last one) is cached first, then one streamed pass fills the rest.
+            assert host._crawler._head is host.blocks[-1]
             for _ in range(5000):
                 if host._crawler.done:
                     break
@@ -759,6 +759,52 @@ class TestFilmstripCrawlerInProcess:
             host.load()
             assert host._filmstrip is not None and host._filmstrip.is_empty
             assert host._crawler is None
+        finally:
+            host._shutdown()
+
+    def test_streamed_frames_match_replay_poses(self) -> None:
+        """The single-pass crawl must cache what a direct replay pose would render."""
+        import numpy as np
+
+        from manim_studio.preview_host import HostConfig, SceneHost
+        from manim_studio.scrub import ScrubEngine, read_upright_rgba
+
+        host = SceneHost(HostConfig(scene_path=SCENE_FILE, embedded=True, size=(320, 180)))
+        host._create_window()
+        host.frame_pump = _NullPump()
+        try:
+            host.load()
+            host._ensure_crawler()
+            assert host._crawler is not None
+            while not host._crawler.done:
+                host._crawler.step()
+            strip = host._filmstrip
+            assert strip is not None
+
+            scene = host._make_scene(skip_animations=True)
+            scene.camera.use_window_fbo(False)
+            engine = ScrubEngine(scene, host.blocks)
+            fps = host._fps
+            worst = 0.0
+            checked = 0
+            for block in host.blocks:
+                if block.duration <= 0:
+                    continue
+                # One frame in the middle of every block, away from block boundaries
+                # where two blocks share a frame index.
+                index = round((block.start + block.duration / 2) * fps)
+                blob = strip.get(index)
+                if blob is None:
+                    continue
+                cached = np.frombuffer(_frame_from_blob(blob).rgba, dtype=np.uint8)
+                engine.pose(index / fps)
+                scene.camera.capture(*scene.render_groups)
+                rgba, _, _ = read_upright_rgba(scene.camera)
+                posed = np.frombuffer(rgba, dtype=np.uint8)
+                worst = max(worst, float(np.abs(cached.astype(int) - posed.astype(int)).mean()))
+                checked += 1
+            assert checked >= len(host.blocks) // 2
+            assert worst < 3.0, f"streamed frames drift from replay poses (mean abs diff {worst})"
         finally:
             host._shutdown()
 

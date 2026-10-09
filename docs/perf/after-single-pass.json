@@ -1,0 +1,111 @@
+{
+  "end_to_end": {
+    "crawl_fps": 172.9,
+    "crawl_frames": 107,
+    "crawl_seconds": 0.619,
+    "frames_deduped": 13,
+    "frames_dropped": 0,
+    "frames_sent": 80,
+    "host_timings": {
+      "crawl_capture": {
+        "avg_ms": 4.317,
+        "count": 107,
+        "max_ms": 23.416
+      },
+      "crawl_encode": {
+        "avg_ms": 0.609,
+        "count": 107,
+        "max_ms": 1.063
+      },
+      "encode": {
+        "avg_ms": 0.954,
+        "count": 80,
+        "max_ms": 91.047
+      },
+      "handoff": {
+        "avg_ms": 0.015,
+        "count": 94,
+        "max_ms": 0.041
+      },
+      "readback": {
+        "avg_ms": 2.686,
+        "count": 94,
+        "max_ms": 5.575
+      },
+      "render": {
+        "avg_ms": 24.991,
+        "count": 94,
+        "max_ms": 33.846
+      },
+      "send": {
+        "avg_ms": 0.506,
+        "count": 80,
+        "max_ms": 4.555
+      }
+    },
+    "play_frames": 79,
+    "play_realtime_ratio": 1.073,
+    "play_seconds": 3.165,
+    "playback_fps": 24.96,
+    "stopped": true,
+    "time_to_playhead_s": 0.10807439999916824,
+    "total_duration": 2.95,
+    "trace_seconds": 2.831
+  },
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-09T15:51:55",
+  "machine": {
+    "cpu_count": 16,
+    "platform": "Windows-11-10.0.26100-SP0",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "python": "3.13.2"
+  },
+  "reload": {
+    "edit_middle_block": {
+      "crawl_frames": 107,
+      "load_timings": {
+        "check": 0.0046,
+        "commit": 0.0026,
+        "import": 0.0019,
+        "initial_scene": 0.0595,
+        "patch": 0.0017,
+        "total": 0.1317,
+        "trace": 0.0614
+      },
+      "reload_to_crawl_done_s": 0.857,
+      "reload_to_log_s": 0.136
+    },
+    "edit_non_play_line": {
+      "crawl_frames": 107,
+      "load_timings": {
+        "check": 0.0175,
+        "commit": 0.0026,
+        "import": 0.002,
+        "initial_scene": 0.0563,
+        "patch": 0.0021,
+        "total": 0.1348,
+        "trace": 0.0543
+      },
+      "reload_to_crawl_done_s": 0.934,
+      "reload_to_log_s": 0.139
+    },
+    "retime_last_block": {
+      "crawl_frames": 109,
+      "load_timings": {
+        "check": 0.0179,
+        "commit": 0.0026,
+        "import": 0.0017,
+        "initial_scene": 0.0584,
+        "patch": 0.0016,
+        "total": 0.1368,
+        "trace": 0.0545
+      },
+      "reload_to_crawl_done_s": 0.874,
+      "reload_to_log_s": 0.142
+    }
+  }
+}
