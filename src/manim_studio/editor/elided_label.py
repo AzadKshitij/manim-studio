@@ -34,22 +34,28 @@ class ElidedLabel(QLabel):
         parent: QWidget | None = None,
         *,
         mode: Qt.TextElideMode = Qt.TextElideMode.ElideRight,
+        max_hint: int = 320,
     ) -> None:
         super().__init__("", parent)
         self._full = ""
         self._base_tip = ""
         self._mode = mode
+        self._max_hint = max_hint
         self.setTextFormat(Qt.TextFormat.PlainText)
-        # Ignored: the layout gives the label whatever is left and never asks for more.
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        # Preferred, but with a zero minimum and a capped preferred width (below): the label
+        # gets a real slot in a layout without ever being able to demand a wide window.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.setText(text)
 
     def text(self) -> str:
         return self._full
 
     def setText(self, text: str) -> None:
+        changed = text != self._full
         self._full = text
         self._refresh()
+        if changed:
+            self.updateGeometry()  # the preferred width follows the full text
 
     def setToolTip(self, tip: str) -> None:
         self._base_tip = tip
@@ -58,15 +64,28 @@ class ElidedLabel(QLabel):
     def minimumSizeHint(self) -> QSize:
         return QSize(0, super().minimumSizeHint().height())
 
+    def sizeHint(self) -> QSize:
+        # Based on the *full* text (not the elided display, which would shrink as the
+        # layout shrinks it) but capped, so a huge text cannot ask for a huge slot.
+        base = super().sizeHint()
+        wanted = self.fontMetrics().horizontalAdvance(self._full) + self._chrome(base.width())
+        return QSize(min(wanted, self._max_hint), base.height())
+
+    def _chrome(self, hint_width: int) -> int:
+        """Width the style adds around the text (padding, margins, indent)."""
+        return max(0, hint_width - self.fontMetrics().horizontalAdvance(super().text()))
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._refresh()
 
     def _refresh(self) -> None:
-        width = self.contentsRect().width()
+        width = self.width() - self._chrome(super().sizeHint().width())
         shown = self._full
-        if width > 0:
-            shown = self.fontMetrics().elidedText(self._full, self._mode, width)
+        metrics = self.fontMetrics()
+        # Check the fit ourselves: elidedText can shorten text that fits exactly.
+        if self.width() > 0 and metrics.horizontalAdvance(self._full) > width:
+            shown = metrics.elidedText(self._full, self._mode, max(width, 0))
         if shown != super().text():
             super().setText(shown)
         elided = shown != self._full

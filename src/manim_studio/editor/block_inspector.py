@@ -13,18 +13,16 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from PySide6.QtCore import Signal, SignalInstance
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
-    QToolButton,
     QWidget,
 )
 
 from manim_studio.editor.elided_label import ElidedLabel
-from manim_studio.editor.glyphs import icon_button
 from manim_studio.theme import current_theme
 
 __all__ = ["BlockInfo", "BlockInspector", "describe_clips"]
@@ -77,9 +75,6 @@ class BlockInspector(QWidget):
 
     #: ``(block index, seconds, this iteration only)``
     durationCommitted = Signal(int, float, bool)
-    jumpRequested = Signal(int)
-    resetRequested = Signal(int)
-    deleteRequested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -110,15 +105,6 @@ class BlockInspector(QWidget):
         self.details = ElidedLabel("", self)
         self.details.setToolTip("Animations, source line and edit state of the selected block")
 
-        self.jump_button = icon_button("jump_to_code", "Jump to the block's source line", self)
-        self.reset_button = icon_button("reset", "Reset this block's timeline edits", self)
-        self.delete_button = icon_button(
-            "delete", "Delete this block's call (a timeline edit)", self
-        )
-        self.jump_button.clicked.connect(lambda: self._emit(self.jumpRequested))
-        self.reset_button.clicked.connect(lambda: self._emit(self.resetRequested))
-        self.delete_button.clicked.connect(lambda: self._emit(self.deleteRequested))
-
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 2, 8, 2)
         layout.setSpacing(6)
@@ -126,9 +112,6 @@ class BlockInspector(QWidget):
             self.title,
             self.duration_spin,
             self.scope,
-            self.jump_button,
-            self.reset_button,
-            self.delete_button,
             self.note,
         ):
             layout.addWidget(widget)
@@ -151,13 +134,8 @@ class BlockInspector(QWidget):
             return  # unchanged: do not clobber a half-typed duration
         self._info = info
         empty = info is None
-        for widget in (self.duration_spin, self.scope, self.jump_button):
-            widget.setEnabled(not empty)
-        editable = bool(info and info.editable)
-        self.duration_spin.setEnabled(editable)
-        self.delete_button.setEnabled(editable)
-        self.reset_button.setEnabled(bool(info and info.edited))
-        self.jump_button.setEnabled(bool(info and info.line is not None))
+        self.scope.setEnabled(not empty)
+        self.duration_spin.setEnabled(bool(info and info.editable))
         if info is None:
             self.title.setText("")
             self.details.setText("")
@@ -184,10 +162,6 @@ class BlockInspector(QWidget):
 
     # ------------------------------------------------------------------
 
-    def _emit(self, signal: SignalInstance) -> None:
-        if self._info is not None:
-            signal.emit(self._info.index)
-
     def _commit(self) -> None:
         info = self._info
         if info is None or not info.editable:
@@ -196,6 +170,3 @@ class BlockInspector(QWidget):
         if abs(value - info.duration) < 1e-4:
             return  # focus left the field without a change
         self.durationCommitted.emit(info.index, value, bool(self.scope.currentData()))
-
-    def buttons(self) -> tuple[QToolButton, ...]:
-        return (self.jump_button, self.reset_button, self.delete_button)

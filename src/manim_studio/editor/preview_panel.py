@@ -67,7 +67,7 @@ class PreviewPanel(QWidget):
         header.addStretch(1)
         header.addWidget(self._time_label)
         header.addSpacing(8)
-        header.addWidget(self._state_label, 1)
+        header.addWidget(self._state_label)
 
         self._viewport = QLabel()
         self._viewport.setAlignment(Qt.AlignmentFlag.AlignCenter)

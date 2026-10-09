@@ -15,14 +15,12 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QSlider,
     QSplitter,
     QStatusBar,
     QToolBar,
@@ -39,7 +37,7 @@ from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
 from manim_studio.editor.file_watcher import FileWatcher
-from manim_studio.editor.glyphs import glyph, icon_button, refresh_glyphs
+from manim_studio.editor.glyphs import glyph, refresh_glyphs
 from manim_studio.editor.icon import load_icon
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
@@ -131,8 +129,6 @@ class MainWindow(QMainWindow):
         self._build_status_bar()
         self.video = VideoModeController(
             transport=self.transport,
-            slider=self._scrub_slider,
-            position_label=self._scrub_position,
             preview_panel=self.preview_panel,
             timeline=self.timeline,
             stop_playback=self.controller.stop_playback,
@@ -181,19 +177,6 @@ class MainWindow(QMainWindow):
         bottom_layout.addWidget(self.timeline)
         self.inspector = BlockInspector(self)
         bottom_layout.addWidget(self.inspector)
-
-        self._scrub_slider = QSlider(Qt.Orientation.Horizontal, self)
-        self._scrub_slider.setRange(0, 0)
-        self._scrub_slider.setEnabled(False)
-        self._scrub_slider.setToolTip("Scrub the rendered preview video")
-        self._scrub_position = QLabel("—", self)
-        scrub_row = QHBoxLayout()
-        scrub_row.setContentsMargins(6, 0, 6, 4)
-        self._render_preview_button = icon_button("render", "Render preview video  (Ctrl+R)", self)
-        scrub_row.addWidget(self._render_preview_button)
-        scrub_row.addWidget(self._scrub_slider, 1)
-        scrub_row.addWidget(self._scrub_position)
-        bottom_layout.addLayout(scrub_row)
 
         vertical = QSplitter(Qt.Orientation.Vertical, self)
         vertical.addWidget(horizontal)
@@ -389,9 +372,6 @@ class MainWindow(QMainWindow):
         self.transport_bar.editRequested.connect(self._on_transport_edit)
         self.timeline.blockSelected.connect(self._on_block_selected)
         self.inspector.durationCommitted.connect(self._on_inspector_duration)
-        self.inspector.jumpRequested.connect(self._on_block_activated)
-        self.inspector.resetRequested.connect(self._reset_block_timing)
-        self.inspector.deleteRequested.connect(self._delete_block)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
         self.transport_bar.jumpRequested.connect(self._on_transport_jump)
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
@@ -413,7 +393,6 @@ class MainWindow(QMainWindow):
         self.controller.hostLogReceived.connect(self.shell.append)
         self.watcher.file_changed.connect(self._on_file_changed)
         self.watcher.file_missing.connect(lambda path: self._set_status(f"file missing: {path}"))
-        self._render_preview_button.clicked.connect(self.render_preview_video)
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
         self.exports.statusChanged.connect(self._set_status)
         self.exports.outputLine.connect(self.shell.append)
@@ -1119,6 +1098,7 @@ class MainWindow(QMainWindow):
                 "redo": self.patches.can_redo,
                 "delete": editable,
                 "reset": index is not None and self.patches.block_is_edited(index),
+                "jump": index is not None and self.events.call_line(index) is not None,
                 "hold": running and not self.timeline.log.is_empty,
                 "apply": self.patches.edit_count > 0,
                 "diff": self.patches.edit_count > 0,
@@ -1139,6 +1119,8 @@ class MainWindow(QMainWindow):
             self._delete_block(index)
         elif action_id == "reset" and index is not None:
             self._reset_block_timing(index)
+        elif action_id == "jump" and index is not None:
+            self._on_block_activated(index)
         elif action_id == "hold":
             self.insert_hold_at_playhead()
         elif action_id == "apply":
@@ -1330,7 +1312,6 @@ class MainWindow(QMainWindow):
 
     def _on_preview_video_ready(self, output: Path) -> None:
         self.transport.load(output)
-        self._scrub_slider.setEnabled(True)
         self._set_status(f"preview video ready: {output}")
 
     def _on_preview_video_failed(self, exit_code: int) -> None:

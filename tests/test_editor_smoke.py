@@ -1265,8 +1265,8 @@ class TestTimelineToolbar:
             self._restore(window)
 
     def test_render_and_toolbar_buttons_are_icon_only(self, window: MainWindow) -> None:
-        assert window._render_preview_button.text() == ""
-        assert "Render preview video" in window._render_preview_button.toolTip()
+        assert not hasattr(window, "_render_preview_button")  # the scrub bar is gone
+        assert not hasattr(window, "_scrub_slider")
         for name in ("Reload", "Play", "Stop", "Render preview"):
             action = window._toolbar_actions[name]
             assert not action.icon().isNull()
@@ -1314,15 +1314,15 @@ class TestInspectorEditing:
         finally:
             self._restore(window)
 
-    def test_inspector_buttons_reach_the_window_actions(self, window: MainWindow) -> None:
+    def test_timeline_toolbar_buttons_reach_the_window_actions(self, window: MainWindow) -> None:
         stub = self._stub(window)
         try:
             window.timeline.set_selected_block(1)
             window._refresh_inspector()
-            window.inspector.delete_button.click()
+            window.transport_bar.edit_button("delete").click()
             assert stub.patch_sets[-1][0] == [{"op": "delete", "site": WAIT_SITE.site_id}]
             window._refresh_inspector()
-            window.inspector.reset_button.click()
+            window.transport_bar.edit_button("reset").click()
             assert stub.patch_sets[-1][0] == []
         finally:
             self._restore(window)
