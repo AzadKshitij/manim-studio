@@ -263,3 +263,25 @@ class TestApplyToSource:
     ) -> None:
         controller.set_block_duration(4, 2.0)
         assert controller.plan_apply("def broken(:\n") is None
+
+
+class TestDurationKind:
+    def test_reports_how_each_call_spells_its_duration(self, controller: PatchController) -> None:
+        # SOURCE: play without run_time, play with literal run_time (loop), wait(1)
+        assert controller.duration_kind(0) == "absent"
+        assert controller.duration_kind(1) == "literal"
+        assert controller.duration_kind(4) == "literal"
+        assert controller.duration_kind(99) is None
+
+    def test_the_source_index_is_cached_until_the_file_changes(
+        self, controller: PatchController, scene: Path, sites: list[str]
+    ) -> None:
+        first = controller._source_index()
+        assert controller._source_index() is first  # no re-parse per call
+        scene.write_text(SOURCE.replace("self.wait(1)", "self.wait(t * 2)"), encoding="utf-8")
+        import os
+
+        stat = scene.stat()
+        os.utime(scene, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+        assert controller._source_index() is not first
+        assert controller.duration_kind(4) == "expr"

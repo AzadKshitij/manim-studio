@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from manim_studio import APP_NAME
 from manim_studio.editor import api_cache, scene_files
+from manim_studio.editor.block_inspector import BlockInfo, BlockInspector
 from manim_studio.editor.code_editor import CodeEditor
 from manim_studio.editor.completion_controller import CompletionController
 from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
@@ -160,13 +161,8 @@ class MainWindow(QMainWindow):
         self._edits_label = self.transport_bar.edits_label
         bottom_layout.addWidget(self.transport_bar)
         bottom_layout.addWidget(self.timeline)
-        self._inspector = QLabel("", self)
-        self._inspector.setContentsMargins(8, 2, 8, 2)
-        self._inspector.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._inspector.setToolTip(
-            "The selected block (the one under the editor caret, else under the playhead)"
-        )
-        bottom_layout.addWidget(self._inspector)
+        self.inspector = BlockInspector(self)
+        bottom_layout.addWidget(self.inspector)
 
         self._scrub_slider = QSlider(Qt.Orientation.Horizontal, self)
         self._scrub_slider.setRange(0, 0)
@@ -367,6 +363,10 @@ class MainWindow(QMainWindow):
         self.transport_bar.playPauseRequested.connect(self._toggle_play)
         self.transport_bar.editRequested.connect(self._on_transport_edit)
         self.timeline.blockSelected.connect(self._on_block_selected)
+        self.inspector.durationCommitted.connect(self._on_inspector_duration)
+        self.inspector.jumpRequested.connect(self._on_block_activated)
+        self.inspector.resetRequested.connect(self._reset_block_timing)
+        self.inspector.deleteRequested.connect(self._delete_block)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
         self.transport_bar.jumpRequested.connect(self._on_transport_jump)
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
@@ -1142,8 +1142,33 @@ class MainWindow(QMainWindow):
         return "  ·  ".join(parts)
 
     def _refresh_inspector(self) -> None:
-        self._inspector.setText(self.inspector_text())
+        self.inspector.show_block(self._block_info())
         self._refresh_edit_buttons()
+
+    def _block_info(self) -> BlockInfo | None:
+        """What the inspector shows for the selected block."""
+        index = self.selected_block_index()
+        block = None if index is None else self.timeline.log.block_by_index(index)
+        if index is None or block is None:
+            return None
+        running = self._path is not None and self.controller.is_running
+        return BlockInfo(
+            index=index,
+            name=block.name,
+            duration=block.duration,
+            line=self.events.call_line(index),
+            animations=", ".join(
+                f"{c.animation}({c.target}) {c.duration:.2f}s" for c in self.events.clips(index)
+            ),
+            loops=self.patches.iteration_count(index),
+            edited=self.patches.block_is_edited(index),
+            duration_kind=self.patches.duration_kind(index),
+            editable=running and self.patches.block_ref(index) is not None,
+        )
+
+    def _on_inspector_duration(self, index: int, seconds: float, iteration_only: bool) -> None:
+        """The inspector's duration field was committed."""
+        self._on_block_resized(index, seconds, iteration_only=iteration_only)
 
     def apply_edits_to_source(self) -> None:
         """Write the timeline edits into the scene file (one undoable editor edit)."""

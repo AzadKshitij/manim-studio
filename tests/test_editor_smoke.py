@@ -1271,3 +1271,58 @@ class TestTimelineToolbar:
             action = window._toolbar_actions[name]
             assert not action.icon().isNull()
             assert action.toolTip() == name
+
+
+@pytest.mark.usefixtures("scene_copy")
+class TestInspectorEditing:
+    def _stub(self, window: MainWindow) -> _StubController:
+        stub = _StubController()
+        window._original_controller = window.controller  # type: ignore[attr-defined]
+        window.controller = stub  # type: ignore[assignment]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        return stub
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_typing_a_duration_in_the_inspector_retimes_the_selected_block(
+        self, window: MainWindow
+    ) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            window._refresh_inspector()
+            assert window.inspector.title.text().startswith("#1")
+            window.inspector.duration_spin.setValue(3.0)
+            window.inspector.duration_spin.editingFinished.emit()
+            assert stub.patch_sets[-1][0] == [
+                {"op": "set_duration", "site": WAIT_SITE.site_id, "seconds": 3.0}
+            ]
+            assert window.timeline.log.block_by_index(1).duration == pytest.approx(3.0)
+        finally:
+            self._restore(window)
+
+    def test_the_inspector_knows_the_block_is_editable(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            window.timeline.set_selected_block(0)
+            window._refresh_inspector()
+            assert window.inspector.info is not None
+            assert window.inspector.info.editable is True
+        finally:
+            self._restore(window)
+
+    def test_inspector_buttons_reach_the_window_actions(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            window._refresh_inspector()
+            window.inspector.delete_button.click()
+            assert stub.patch_sets[-1][0] == [{"op": "delete", "site": WAIT_SITE.site_id}]
+            window._refresh_inspector()
+            window.inspector.reset_button.click()
+            assert stub.patch_sets[-1][0] == []
+        finally:
+            self._restore(window)

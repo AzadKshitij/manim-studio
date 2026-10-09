@@ -28,7 +28,7 @@ from manim_studio.patches import (
     parse_patch,
 )
 from manim_studio.sidecar import PatchStack, SidecarError, load_sidecar, save_sidecar
-from manim_studio.site_index import index_source
+from manim_studio.site_index import SiteIndex, index_source
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -72,6 +72,7 @@ class PatchController(QObject):
         self._refs: tuple[BlockRef | None, ...] = ()
         self._orphans: tuple[OrphanedEdit, ...] = ()
         self._applied = 0
+        self._index_cache: tuple[int, SiteIndex] | None = None
 
     # -- state -------------------------------------------------------------
 
@@ -288,13 +289,31 @@ class PatchController(QObject):
     # -- internals ---------------------------------------------------------
 
     def _site(self, site_id: str) -> Any:
+        index = self._source_index()
+        return None if index is None else index.by_id(site_id)
+
+    def _source_index(self) -> SiteIndex | None:
+        """The call-site index of the scene file, cached until the file changes."""
         if self._scene_path is None:
             return None
         try:
-            source = self._scene_path.read_text(encoding="utf-8")
-            return index_source(source).by_id(site_id)
+            stamp = self._scene_path.stat().st_mtime_ns
+        except OSError:
+            return None
+        if self._index_cache is not None and self._index_cache[0] == stamp:
+            return self._index_cache[1]
+        try:
+            index = index_source(self._scene_path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
             return None
+        self._index_cache = (stamp, index)
+        return index
+
+    def duration_kind(self, index: int) -> str | None:
+        """How block ``index``'s call spells its duration: literal, absent or expr."""
+        ref = self.block_ref(index)
+        site = None if ref is None else self._site(ref.site_id)
+        return None if site is None else str(site.duration.kind)
 
     def _commit(self, changed: bool) -> bool:
         if not changed:
