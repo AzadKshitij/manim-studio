@@ -355,10 +355,23 @@ class TimelineView:
         """Map a scene time to a widget x coordinate (may be off-screen)."""
         return (time - self.start) / (self.span or 1e-6) * self.width
 
-    def x_to_time(self, x: float) -> float:
-        """Map a widget x coordinate to a scene time, clamped to the trace."""
+    def x_to_time(self, x: float, *, clamp: bool = True) -> float:
+        """Map a widget x coordinate to a scene time (clamped to the trace by default).
+
+        ``clamp=False`` lets a drag reach past the current end, which is how a block
+        is stretched beyond the old total duration.
+        """
         time = self.start + x / self.width * (self.span or 1e-6)
-        return min(max(time, 0.0), self.total)
+        return min(max(time, 0.0), self.total) if clamp else max(time, 0.0)
+
+    def with_total(self, total: float) -> TimelineView:
+        """The same window (start and zoom) over a trace that is now ``total`` long.
+
+        A longer trace keeps the zoom level, so content pushed past the right edge
+        becomes reachable by scrolling instead of the whole view silently rescaling;
+        a shorter one clamps the window to what exists.
+        """
+        return replace(self, total=total)
 
     def zoom_at(self, x: float, factor: float, *, min_span: float = 0.05) -> TimelineView:
         """Zoom around an x coordinate by ``factor`` (>1 zooms in)."""

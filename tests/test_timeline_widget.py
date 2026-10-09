@@ -573,3 +573,77 @@ class TestLanes:
         timeline.resize(800, 260)
         timeline.set_clips(self._clips())
         timeline.grab()  # exercises paintEvent and _draw_lanes
+
+
+class TestScrollAfterStretch:
+    """Lengthening a section must keep later blocks reachable (scrollbar + drag)."""
+
+    @staticmethod
+    def _stretched(timeline: TimelineWidget, extra: float) -> TimelineLog:
+        first = timeline.log.blocks[0]
+        return timeline.log.scaled_block_duration(first.index, first.duration + extra)
+
+    def test_stretching_keeps_the_zoom_and_enables_the_scrollbar(
+        self, timeline: TimelineWidget
+    ) -> None:
+        span_before = timeline.view().span
+        assert timeline.scrollbar.isEnabled() is False  # everything fits
+        timeline.set_log(self._stretched(timeline, 5.0), keep_view=True)
+        view = timeline.view()
+        assert view.span == pytest.approx(span_before)  # the zoom did not silently change
+        assert view.total == pytest.approx(timeline.log.total_duration)
+        assert timeline.scrollbar.isEnabled() is True
+        assert timeline.scrollbar.maximum() > 0
+
+    def test_the_scrollbar_reaches_the_pushed_out_blocks(self, timeline: TimelineWidget) -> None:
+        timeline.set_log(self._stretched(timeline, 5.0), keep_view=True)
+        last = timeline.log.blocks[-1]
+        assert timeline.view().end < last.end  # off-screen to the right
+        timeline.scrollbar.setValue(timeline.scrollbar.maximum())
+        assert timeline.view().end == pytest.approx(timeline.log.total_duration, abs=1e-3)
+        assert timeline.view().time_to_x(last.end) <= timeline.width() + 1
+
+    def test_shrinking_clamps_the_window(self, timeline: TimelineWidget) -> None:
+        timeline.set_log(self._stretched(timeline, 5.0), keep_view=True)
+        timeline.scrollbar.setValue(timeline.scrollbar.maximum())
+        timeline.set_log(make_log(), keep_view=True)
+        assert timeline.view().end <= timeline.log.total_duration + 1e-6
+        assert timeline.view().start >= 0.0
+
+    def test_dragging_a_block_edge_past_the_end_is_possible_and_scrollable(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        timeline.set_snapping(False)
+        last = timeline.log.blocks[-1]
+        view = timeline.view()
+        edge_x = int(view.time_to_x(last.end))
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(edge_x - 1, 40))
+        assert timeline._mode == "resize"
+        # Far past the right edge of the widget: the old clamp would have capped this.
+        qtbot.mouseMove(timeline, QPoint(timeline.width() + 400, 40))
+        assert timeline._resize_duration is not None
+        assert timeline._resize_duration > last.duration + 1.0
+        assert timeline.scrollbar.maximum() > 0  # the grown timeline is scrollable
+        qtbot.mouseRelease(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(timeline.width() + 400, 40)
+        )
+
+    def test_holding_the_edge_near_the_window_edge_autoscrolls(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        timeline.set_snapping(False)
+        timeline.set_log(self._stretched(timeline, 8.0), keep_view=True)
+        first_end = timeline.log.blocks[0].end
+        view = timeline.view()
+        qtbot.mousePress(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(view.time_to_x(first_end)) - 1, 40)
+        )
+        assert timeline._mode == "resize"
+        qtbot.mouseMove(timeline, QPoint(timeline.width() - 4, 40))
+        start_before = timeline.view().start
+        timeline._autoscroll_tick()
+        assert timeline.view().start > start_before
+        qtbot.mouseRelease(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(timeline.width() - 4, 40)
+        )
+        assert timeline._autoscroll.isActive() is False

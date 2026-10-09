@@ -315,3 +315,23 @@ class TestSnapTime:
         assert snap_time(1.234, fps=0, candidates=(), tolerance=0.0, step=0.0) == pytest.approx(
             1.234
         )
+
+
+class TestViewTotals:
+    def test_x_to_time_can_reach_past_the_end_when_unclamped(self) -> None:
+        view = TimelineView(total=4.0, width=400.0)
+        assert view.x_to_time(900.0) == pytest.approx(4.0)  # clamped by default
+        assert view.x_to_time(900.0, clamp=False) == pytest.approx(9.0)
+        assert view.x_to_time(-50.0, clamp=False) == 0.0
+
+    def test_with_total_keeps_the_zoom_when_the_trace_grows(self) -> None:
+        view = TimelineView(total=4.0, width=400.0)
+        grown = view.with_total(10.0)
+        assert grown.span == pytest.approx(4.0) and grown.start == 0.0
+        assert grown.is_zoomed  # now there is something to scroll to
+        assert grown.end < grown.total
+
+    def test_with_total_clamps_when_the_trace_shrinks(self) -> None:
+        view = TimelineView(total=10.0, width=400.0, start=6.0, span=4.0)
+        shrunk = view.with_total(7.0)
+        assert shrunk.end <= 7.0 + 1e-9 and shrunk.start >= 0.0

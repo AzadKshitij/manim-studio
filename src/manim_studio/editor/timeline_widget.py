@@ -14,7 +14,7 @@ from __future__ import annotations
 import colorsys
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -61,6 +61,8 @@ SNAP_PX = 8.0
 BLOCK_ROW_HEIGHT = 30.0
 LANE_HEIGHT = 15.0
 MAX_LANES = 6
+#: Holding a block edge this close to the window edge scrolls the timeline.
+AUTOSCROLL_MARGIN_PX = 28.0
 
 
 def block_color(name: str) -> QColor:
@@ -123,6 +125,9 @@ class TimelineWidget(QWidget):
         self._resize_index: int | None = None
         self._resize_duration: float | None = None
         self._syncing_scrollbar = False
+        self._autoscroll = QTimer(self)
+        self._autoscroll.setInterval(30)
+        self._autoscroll.timeout.connect(self._autoscroll_tick)
         self._scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
         self._scrollbar.setSingleStep(1)
         self._scrollbar.setToolTip("Scroll the zoomed timeline")
@@ -346,6 +351,10 @@ class TimelineWidget(QWidget):
             self._view = TimelineView(
                 total=max(log.total_duration, 0.01), width=float(max(self.width(), 1))
             )
+        else:
+            # A retime changes the total: keep the zoom and let the scrollbar reach
+            # whatever now lies past the right edge (or clamp if the trace shrank).
+            self._view = self._view.with_total(max(log.total_duration, 0.01))
         self._playhead = min(self._playhead, log.total_duration)
         self._hover_index = None
         self._active_index = None
@@ -569,6 +578,7 @@ class TimelineWidget(QWidget):
             edge = self._edge_hit(event.position().x())
             if edge is not None:
                 self._mode = "resize"
+                self._autoscroll.start()
                 self._resize_index = edge.index
                 self._resize_duration = edge.duration
                 self._hover_index = edge.index
@@ -592,15 +602,8 @@ class TimelineWidget(QWidget):
             self.viewChanged.emit()
             return
         if self._mode == "resize" and self._resize_index is not None:
-            block = self._log.block_by_index(self._resize_index)
-            if block is not None:
-                edge = self._snap(
-                    self._view.x_to_time(event.position().x()),
-                    exclude=self._resize_index,
-                    include_playhead=True,
-                )
-                self._resize_duration = max(MIN_BLOCK_DURATION, edge - block.start)
-            self.update()
+            self._last_mouse_x = event.position().x()
+            self._update_resize(self._last_mouse_x)
             return
         block = self._log.block_at(self._view.x_to_time(event.position().x()))
         hover = block.index if block is not None else None
@@ -638,8 +641,47 @@ class TimelineWidget(QWidget):
         if self._mode == "scrub":
             self._request_scrub(event.position().x())
 
+    def _update_resize(self, x: float) -> None:
+        """Recompute the stretched duration for a pointer at ``x`` (may be off-screen)."""
+        if self._resize_index is None:
+            return
+        block = self._log.block_by_index(self._resize_index)
+        if block is not None:
+            edge = self._snap(
+                self._view.x_to_time(x, clamp=False),
+                exclude=self._resize_index,
+                include_playhead=True,
+            )
+            self._resize_duration = max(MIN_BLOCK_DURATION, edge - block.start)
+            # Stretching the last blocks past the old end must stay scrollable.
+            projected = self._display_log().total_duration
+            if projected > self._view.total:
+                self._view = self._view.with_total(projected)
+                self._sync_scrollbar()
+        self.update()
+
+    def _autoscroll_tick(self) -> None:
+        """While a block edge is held near the window edge, scroll that way."""
+        if self._mode != "resize":
+            self._autoscroll.stop()
+            return
+        width = float(max(self.width(), 1))
+        overshoot = 0.0
+        if self._last_mouse_x > width - AUTOSCROLL_MARGIN_PX:
+            overshoot = self._last_mouse_x - (width - AUTOSCROLL_MARGIN_PX)
+        elif self._last_mouse_x < AUTOSCROLL_MARGIN_PX:
+            overshoot = self._last_mouse_x - AUTOSCROLL_MARGIN_PX
+        if not overshoot:
+            return
+        step = max(-40.0, min(40.0, overshoot * 0.5)) or (1.0 if overshoot > 0 else -1.0)
+        self._view = self._view.pan_px(step)
+        self._update_resize(self._last_mouse_x)
+        self._sync_scrollbar()
+        self.viewChanged.emit()
+
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         was, self._mode = self._mode, None
+        self._autoscroll.stop()
         press, self._press_pos = self._press_pos, None
         if was == "range":
             if self._range is not None:
