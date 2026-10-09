@@ -1,6 +1,6 @@
 # ADR 0006 — Exports bake the editor's retiming into the render
 
-- Status: accepted (2026-10-08)
+- Status: superseded by [ADR 0007](0007-sidecar-timeline-edits.md) (was accepted 2026-10-08)
 - Context: The timeline lets the user drag a block's right edge to retime that
   section. The live host honours the retiming for scrubbing and playback (ADR
   0002 and `TimingScaler`), but exports shell out to `manimgl -w` through

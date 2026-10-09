@@ -32,8 +32,11 @@ explaining why not.
 | Module | Responsibility | May import |
 | --- | --- | --- |
 | `manim_studio/timeline_model.py` | Pure data model for trace blocks, px/time math, JSON (de)serialization | stdlib only |
-| `manim_studio/timing.py` | Pure per-block duration overrides with undo/redo | stdlib, `timeline_model` |
-| `manim_studio/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls | stdlib, `timeline_model` |
+| `manim_studio/site_index.py` | Static index of `self.play()`/`self.wait()` call sites with stable fingerprints | stdlib only |
+| `manim_studio/patches.py` | Anchored timeline edits (`SetDuration`, `Delete`) and the text-splice engine that applies them | stdlib, `site_index` |
+| `manim_studio/patch_runtime.py` | `__studio__` helper for per-iteration (loop) edits | stdlib only |
+| `manim_studio/sidecar.py` | `<scene>.studio.json` IO, patch temp files and the `PatchStack` undo history | stdlib, `patches` |
+| `manim_studio/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls; tags blocks with their call site | stdlib, `timeline_model` |
 | `manim_studio/python_highlight.py` | Pygments-powered Python token spans for the code editor | stdlib, `pygments` |
 | `manim_studio/python_completion.py` | Jedi-backed completion candidates and call signatures | stdlib, `jedi` |
 | `manim_studio/ipc.py` | JSON-line protocol + binary frame framing | stdlib, `frame_codec` |
@@ -43,12 +46,12 @@ explaining why not.
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
 | `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
 | `manim_studio/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
-| `manim_studio/export.py` | Video export via `manimgl -w` subprocess | `subprocess` |
+| `manim_studio/export.py` | Video export via `manimgl -w` subprocess; bakes the sidecar's edits in | `subprocess`, `sidecar` |
 | `manim_studio/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |
 | `manim_studio/latex.py` | LaTeX detection, runtime env and end-to-end probe | stdlib only |
 | `manim_studio/latex_install.py` | On-demand TinyTeX download/install | stdlib, `latex` |
 | `manim_studio/latex_compat.py` | Runtime fix for manimgl 1.7.2 `-no-pdf`/MiKTeX bug | `manimlib` lazily |
-| `manim_studio/manimgl_launcher.py` | Export entry point (manimgl CLI + LaTeX fix) | `manimlib` lazily |
+| `manim_studio/manimgl_launcher.py` | Export entry point (manimgl CLI + LaTeX fix + `--patch-file`) | `manimlib` lazily |
 | `manim_studio/editor/*` | Qt shell, Scintilla, timeline widget, panels | PySide6 |
 | `manim_studio/cli.py` | Agent-facing CLI (`trace`, `export`, `check`, `new`, `preview`) | everything above |
 
@@ -60,9 +63,9 @@ wire protocol and `docs/adr/` for architectural decisions.
 
 Hard dependency rules:
 
-1. Pure modules (`timeline_model`, `timing`, `tracer`, `ipc`, `filmstrip`, `templates`,
-   `api_index`) must never import Qt, `manimlib`, or `moderngl`. They are the
-   fully-tested core.
+1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`) must never import Qt,
+   `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.
 3. GL lives in `preview_host` and nothing else. **One context, one thread.** The Qt GUI
@@ -77,7 +80,7 @@ loopback TCP socket (editor listens, host connects back; port passed on argv).
 
 - **Stage 1 (external window):** host opens a visible GL window. Editor never embeds.
 - **Stage 2 (embedded):** host hides its GL window, renders into the default framebuffer,
-  reads it back with `fbo.read()`, zlib-compresses RGBA, and streams length-prefixed
+  reads it back with `fbo.read()`, compresses RGBA (zstd, zlib or raw), and streams length-prefixed
   frames over a dedicated frame connection. The editor expands each frame into a
   `QImage` on the GUI thread from a `QTimer`-driven poll.
 - Frame backpressure: at most one in-flight frame; if the socket is congested the host
@@ -102,6 +105,24 @@ Protocol details live in `docs/protocol.md`. Any change to the protocol bumps
   by a block-granular crawler that renders each frame at O(1) per frame; scrub
   requests are served cache-first and fall back to a replay pose on a miss. The
   cache is replaced on every load/reload, so cached frames are never stale.
+
+## 4b. Timeline edits (ADR 0007)
+
+The timeline is an editing surface, not just a view.
+
+- Edits are **patches anchored on a call site** (a fingerprint of the call with its
+  duration removed), never on a block index, stored in `<scene>.studio.json` next to
+  the scene. The `.py` is untouched until `Timeline > Apply timeline edits to source`.
+- The host, scrub, filmstrip, playback and export all run the **same patched source
+  text** (`apply_patches` + `load_scene_module(source=...)`); never add a second path
+  that retimes at runtime.
+- An edit whose call no longer exists is **orphaned** (reported, kept, never applied
+  elsewhere). Do not add fuzzy re-anchoring that could move an edit onto another call.
+- Per-iteration edits go through `__studio__.dur`; they cannot be baked into plain
+  source (`apply_patches(runtime=False)` reports them as orphaned/unbakeable).
+- Editor code talks to the host through `PatchController` -> `PreviewController
+  .set_patches`; the host answers with a `log` event (`cause="patches"`) that carries
+  each block's `sites` and the applied/orphaned report.
 
 ## 5. Code style
 
@@ -153,7 +174,8 @@ The editor is designed to be driven headlessly by agents:
 ```powershell
 uv run manim-studio check scenes/foo.py            # discover scenes + syntax check
 uv run manim-studio trace scenes/foo.py --json     # runtime blocks, stats, timing
-uv run manim-studio export scenes/foo.py -o out.mp4 --quality low
+uv run manim-studio export scenes/foo.py -o out.mp4 --quality low   # honours foo.studio.json
+uv run manim-studio export scenes/foo.py --no-sidecar               # render the source as written
 uv run manim-studio new scenes/foo.py --template circle_to_square
 uv run manim-studio preview scenes/foo.py           # standalone GL preview window
 ```
