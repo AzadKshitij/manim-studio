@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -19,8 +20,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
-    QMessageBox,
     QMenu,
+    QMessageBox,
     QSlider,
     QSplitter,
     QStatusBar,
@@ -46,6 +47,7 @@ from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.editor.preview_panel import PreviewPanel
 from manim_studio.editor.shell_panel import ShellPanel
 from manim_studio.editor.stats_controller import StatsController
+from manim_studio.editor.styling import apply_theme
 from manim_studio.editor.timeline_controller import MediaTransport
 from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
@@ -53,6 +55,17 @@ from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.scene_runner import check_scene_file
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
+from manim_studio.theme import (
+    BUILTIN_THEMES,
+    Theme,
+    ThemeError,
+    current_theme,
+    discover_themes,
+    load_theme,
+    save_theme,
+    set_current_theme,
+    themes_dir,
+)
 from manim_studio.timeline_model import TimelineLog, format_duration
 
 __all__ = ["MainWindow"]
@@ -84,6 +97,9 @@ class MainWindow(QMainWindow):
         self._auto_preview = auto_preview
         self._restore_settings = restore_settings
         self._settings = QSettings("ManimStudio", "ManimStudio")
+        self._theme_key = "builtin:chalkboard"
+        if restore_settings:
+            self._restore_theme()
         self._api_names = api_cache.load_api_names()
         # Toolbar actions by label (used by the control-surface tests).
         self._toolbar_actions: dict[str, QAction] = {}
@@ -271,6 +287,9 @@ class MainWindow(QMainWindow):
         )
         self._snap_action.toggled.connect(self.timeline.set_snapping)
         view_menu.addAction(self._snap_action)
+        view_menu.addSeparator()
+        self._theme_menu = view_menu.addMenu("Theme")
+        self._theme_menu.aboutToShow.connect(self._populate_theme_menu)
 
         tools_menu = menu_bar.addMenu("&Tools")
         self._add_action(tools_menu, "LaTeX setup…", self.open_latex_setup)
@@ -1090,6 +1109,7 @@ class MainWindow(QMainWindow):
                 "hold": running and not self.timeline.log.is_empty,
                 "apply": self.patches.edit_count > 0,
                 "diff": self.patches.edit_count > 0,
+                "orphans": self.patches.orphan_count > 0,
                 "discard_orphans": self.patches.orphan_count > 0,
                 "discard_all": self.patches.edit_count > 0,
             }
@@ -1109,10 +1129,11 @@ class MainWindow(QMainWindow):
         elif action_id == "hold":
             self.insert_hold_at_playhead()
         elif action_id == "apply":
-                "orphans": self.patches.orphan_count > 0,
             self.apply_edits_to_source()
         elif action_id == "diff":
             self.show_edits_diff()
+        elif action_id == "orphans":
+            self.show_orphan_menu()
         elif action_id == "discard_orphans":
             self.discard_orphaned_edits()
         elif action_id == "discard_all":
@@ -1132,8 +1153,6 @@ class MainWindow(QMainWindow):
         parts = [f"#{block.index} {block.name}", format_duration(block.duration)]
         line = self.events.call_line(block.index)
         if line is not None:
-        elif action_id == "orphans":
-            self.show_orphan_menu()
             parts.append(f"line {line}")
         clips = self.events.clips(block.index)
         if clips:
@@ -1211,25 +1230,6 @@ class MainWindow(QMainWindow):
         dialog = EditsDiffDialog(unified_diff(source, plan.text, self._path.name), notes, self)
         dialog.exec()
 
-    def discard_orphaned_edits(self) -> None:
-        if self.patches.discard_orphans():
-            self._set_status("orphaned timeline edits discarded")
-
-    def discard_all_edits(self) -> None:
-        if self.patches.clear():
-            self._set_status("all timeline edits discarded (Timeline > Undo brings them back)")
-
-    # ------------------------------------------------------------------
-    # Export / preview video
-    # ------------------------------------------------------------------
-
-    def preview_video_path(self) -> Path | None:
-        if self._path is None:
-            return None
-        return scene_files.preview_video_path(self._path)
-
-    def render_preview_video(self) -> None:
-        if self._path is None:
     def orphan_menu(self) -> QMenu:
         """The orphan tray: every edit whose call is gone, each with its reason."""
         menu = QMenu(self)
@@ -1253,6 +1253,25 @@ class MainWindow(QMainWindow):
         button = self.transport_bar.edit_button("orphans")
         self.orphan_menu().exec(button.mapToGlobal(button.rect().bottomLeft()))
 
+    def discard_orphaned_edits(self) -> None:
+        if self.patches.discard_orphans():
+            self._set_status("orphaned timeline edits discarded")
+
+    def discard_all_edits(self) -> None:
+        if self.patches.clear():
+            self._set_status("all timeline edits discarded (Timeline > Undo brings them back)")
+
+    # ------------------------------------------------------------------
+    # Export / preview video
+    # ------------------------------------------------------------------
+
+    def preview_video_path(self) -> Path | None:
+        if self._path is None:
+            return None
+        return scene_files.preview_video_path(self._path)
+
+    def render_preview_video(self) -> None:
+        if self._path is None:
             self._set_status("open a scene first")
             return
         self.exports.render_preview_video(
@@ -1359,6 +1378,108 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Themes
+    # ------------------------------------------------------------------
+
+    def _theme_for_key(self, key: str) -> Theme | None:
+        kind, _, value = key.partition(":")
+        if kind == "builtin":
+            return BUILTIN_THEMES.get(value)
+        if kind == "file":
+            try:
+                return load_theme(value)
+            except ThemeError:
+                return None
+        return None
+
+    def _restore_theme(self) -> None:
+        """Apply the theme saved by the last session (before any widget is built)."""
+        key = str(self._settings.value("theme", self._theme_key))
+        theme = self._theme_for_key(key)
+        if theme is None:
+            return
+        self._theme_key = key
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_theme(app, theme)
+        else:
+            set_current_theme(theme)
+
+    def set_theme(self, theme: Theme, key: str) -> None:
+        """Switch the whole editor to ``theme`` and remember it for the next start."""
+        self._theme_key = key
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_theme(app, theme)
+        else:
+            set_current_theme(theme)
+        self.editor.apply_theme(theme)
+        self.preview_panel.apply_theme(theme)
+        self.inspector.apply_theme()
+        self.timeline.update()
+        self._settings.setValue("theme", key)
+        self._set_status(f"Theme: {theme.name}")
+
+    def _populate_theme_menu(self) -> None:
+        menu = self._theme_menu
+        menu.clear()
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+
+        def add_choice(label: str, key: str) -> None:
+            action = QAction(label, menu, checkable=True)
+            action.setChecked(key == self._theme_key)
+            action.triggered.connect(lambda checked=False, k=key: self._choose_theme(k))
+            group.addAction(action)
+            menu.addAction(action)
+
+        for slug, theme in BUILTIN_THEMES.items():
+            add_choice(theme.name, f"builtin:{slug}")
+        user_themes = discover_themes()
+        if user_themes:
+            menu.addSeparator()
+            for stem, path in user_themes.items():
+                add_choice(stem, f"file:{path}")
+        menu.addSeparator()
+        self._add_action(menu, "Load theme file…", self.load_theme_file)
+        self._add_action(menu, "Save current theme as…", self.save_current_theme)
+
+    def _choose_theme(self, key: str) -> None:
+        theme = self._theme_for_key(key)
+        if theme is None:
+            self._set_status("Could not load that theme")
+            return
+        self.set_theme(theme, key)
+
+    def load_theme_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load theme", str(themes_dir()), "Theme files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            theme = load_theme(path)
+        except ThemeError as exc:
+            QMessageBox.warning(self, "Load theme", str(exc))
+            return
+        self.set_theme(theme, f"file:{path}")
+
+    def save_current_theme(self) -> None:
+        theme = current_theme()
+        folder = themes_dir()
+        suggested = str(folder / f"{theme.name.lower().replace(' ', '-')}.json")
+        path, _ = QFileDialog.getSaveFileName(self, "Save theme", suggested, "Theme files (*.json)")
+        if not path:
+            return
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            save_theme(theme, path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Save theme", f"Could not save the theme: {exc}")
+            return
+        self._set_status(f"Saved theme to {path}")
 
     def _set_status(self, text: str) -> None:
         self.statusBar().showMessage(text)

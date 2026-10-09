@@ -11,7 +11,6 @@ application exclusively through signals.
 
 from __future__ import annotations
 
-import colorsys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
@@ -30,6 +29,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QMenu, QScrollBar, QSizePolicy, QWidget
 
+from manim_studio.theme import current_theme, ink_on, mix
 from manim_studio.timeline_model import (
     TimelineBlock,
     TimelineLog,
@@ -66,10 +66,9 @@ AUTOSCROLL_MARGIN_PX = 28.0
 
 
 def block_color(name: str) -> QColor:
-    """Stable pastel colour derived from the animation name."""
-    hue = (hash_name(name) % 360) / 360.0
-    red, green, blue = colorsys.hsv_to_rgb(hue, 0.45, 0.85)
-    return QColor(int(red * 255), int(green * 255), int(blue * 255))
+    """Stable lane colour for an animation name, taken from the theme's lane palette."""
+    lanes = current_theme().lanes
+    return QColor(lanes[hash_name(name) % len(lanes)])
 
 
 def hash_name(name: str) -> int:
@@ -801,14 +800,15 @@ class TimelineWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         width = self.width()
         height = max(0, self.height() - SCROLLBAR_HEIGHT)
-        painter.fillRect(self.rect(), QColor(0x18, 0x18, 0x18))
+        theme = current_theme()
+        painter.fillRect(self.rect(), QColor(theme.colors.surface))
         self._draw_ruler(painter, width)
         track_top = RULER_HEIGHT
         track_height = (
             BLOCK_ROW_HEIGHT if self.lane_count() else max(24.0, height - RULER_HEIGHT - 10.0)
         )
         if self._log.is_empty:
-            painter.setPen(QColor(0x88, 0x88, 0x88))
+            painter.setPen(QColor(theme.colors.muted))
             painter.drawText(
                 self.rect(), Qt.AlignmentFlag.AlignCenter, "No trace yet — reload the preview"
             )
@@ -847,7 +847,7 @@ class TimelineWidget(QWidget):
         if right < 0 or left > self.width():
             return
         rect = QRectF(left + 1, track_top + 4, max(2.0, right - left - 2), track_height - 8)
-        pen = QPen(QColor(0xFF, 0xFF, 0xFF))
+        pen = QPen(QColor(current_theme().colors.text))
         pen.setWidthF(2.5)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -861,9 +861,10 @@ class TimelineWidget(QWidget):
         top = self._lanes_top()
         width = self.width()
         painter.setPen(Qt.PenStyle.NoPen)
+        colors = current_theme().colors
+        stripes = (QColor(colors.editor), QColor(mix(colors.editor, colors.surface, 0.5)))
         for lane in range(lanes):
-            shade = 0x20 if lane % 2 == 0 else 0x1B
-            painter.setBrush(QColor(shade, shade, shade))
+            painter.setBrush(stripes[lane % 2])
             painter.drawRect(QRectF(0.0, top + lane * LANE_HEIGHT, float(width), LANE_HEIGHT))
         traced = {block.index: block for block in self._log.blocks}
         for block in display.blocks:
@@ -886,20 +887,22 @@ class TimelineWidget(QWidget):
                     LANE_HEIGHT - 4,
                 )
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(block_color(clip.animation))
+                brush = block_color(clip.animation)
+                brush_hex = brush.name()
+                painter.setBrush(brush)
                 painter.drawRoundedRect(rect, 3, 3)
                 if block.index == self._active_index or block.index == self._hover_index:
                     outline = QPen(
-                        QColor(0x5F, 0xE3, 0xC8)
+                        QColor(colors.accent)
                         if block.index == self._active_index
-                        else QColor(0xFF, 0xFF, 0xFF)
+                        else QColor(colors.text)
                     )
                     outline.setWidthF(1.2)
                     painter.setPen(outline)
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawRoundedRect(rect, 3, 3)
                 if rect.width() >= MIN_BLOCK_LABEL_WIDTH:
-                    painter.setPen(QColor(0x10, 0x10, 0x10))
+                    painter.setPen(QColor(ink_on(brush_hex)))
                     label = metrics.elidedText(
                         clip.animation, Qt.TextElideMode.ElideRight, int(rect.width() - 6)
                     )
@@ -918,19 +921,21 @@ class TimelineWidget(QWidget):
             return
         band = QRectF(left, 0.0, max(1.0, right - left), float(height))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0x5F, 0xE3, 0xC8, 36))
+        accent = QColor(current_theme().colors.accent)
+        painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 36))
         painter.drawRect(band)
-        pen = QPen(QColor(0x5F, 0xE3, 0xC8))
+        pen = QPen(accent)
         pen.setWidthF(1.5)
         painter.setPen(pen)
         painter.drawLine(int(left), 0, int(left), height)
         painter.drawLine(int(right), 0, int(right), height)
 
     def _draw_ruler(self, painter: QPainter, width: int) -> None:
-        painter.setPen(QColor(0x55, 0x55, 0x55))
+        colors = current_theme().colors
+        painter.setPen(QColor(colors.border_strong))
         painter.drawLine(0, int(RULER_HEIGHT), width, int(RULER_HEIGHT))
         step = self._nice_step(self._view.span or 1.0, width)
-        painter.setPen(QColor(0x99, 0x99, 0x99))
+        painter.setPen(QColor(colors.muted))
         time = 0.0
         while time <= self._view.total + 1e-9:
             x = self._view.time_to_x(time)
@@ -956,6 +961,7 @@ class TimelineWidget(QWidget):
         if right < 0 or left > self.width():
             return
         width = max(2.0, right - left)
+        colors = current_theme().colors
         color = block_color(block.name)
         playing = self._playing and self._playhead >= block.start and self._playhead < block.end
         rect = QRectF(left + 1, track_top + 4, max(1.0, width - 2), track_height - 8)
@@ -963,34 +969,36 @@ class TimelineWidget(QWidget):
         painter.setBrush(color.lighter(125) if playing else color)
         painter.drawRoundedRect(rect, 4, 4)
         if hovered or current:
-            pen = QPen(QColor(0xFF, 0xFF, 0xFF) if hovered else QColor(0x7F, 0xC6, 0xFF))
+            pen = QPen(QColor(colors.text) if hovered else QColor(colors.accent))
             pen.setWidthF(1.5)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect, 4, 4)
         if active:
-            # The block the editor caret sits in: a bright aquamarine outline plus
-            # a top notch so it reads differently from hover/current/playing.
-            pen = QPen(QColor(0x5F, 0xE3, 0xC8))
+            # The block the editor caret sits in: an accent outline plus a top
+            # notch so it reads differently from hover/current/playing.
+            pen = QPen(QColor(colors.accent))
             pen.setWidthF(2.0)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 5, 5)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0x5F, 0xE3, 0xC8))
+            painter.setBrush(QColor(colors.accent))
             painter.drawRect(QRectF(left + 1, track_top + 2, max(2.0, min(width - 2, 10.0)), 3))
         iterations = self.iterations(block.index)
         badge = f"×{iterations}" if iterations > 1 else ""  # noqa: RUF001
         badge_width = metrics.horizontalAdvance(badge) + 6 if badge else 0
         if width >= MIN_BLOCK_LABEL_WIDTH:
-            painter.setPen(QColor(0x10, 0x10, 0x10))
+            painter.setPen(QColor(ink_on(color.name())))
             text = metrics.elidedText(
                 block.name, Qt.TextElideMode.ElideRight, int(width - 8 - badge_width)
             )
             painter.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter, text)
         if badge and width >= MIN_BLOCK_LABEL_WIDTH + badge_width:
             # A loop body: edits to this block apply to every iteration.
-            painter.setPen(QColor(0x10, 0x10, 0x10, 200))
+            ink = QColor(ink_on(color.name()))
+            ink.setAlpha(200)
+            painter.setPen(ink)
             painter.drawText(
                 rect.adjusted(0, 0, -4, 0),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
@@ -1006,14 +1014,15 @@ class TimelineWidget(QWidget):
                 ]
             )
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0xFF, 0xB4, 0x54))
+            painter.setBrush(QColor(colors.warn))
             painter.drawPolygon(flag)
 
     def _draw_playhead(self, painter: QPainter, height: int) -> None:
         x = self._view.time_to_x(self._playhead)
         if x < -2 or x > self.width() + 2:
             return
-        color = QColor(0xE6, 0x5A, 0x4C) if self._playing else QColor(0xFF, 0xFF, 0xFF)
+        colors = current_theme().colors
+        color = QColor(colors.playhead if self._playing else colors.text)
         pen = QPen(color)
         pen.setWidthF(2.0)
         painter.setPen(pen)
@@ -1029,10 +1038,10 @@ class TimelineWidget(QWidget):
         chip = QRectF(
             min(max(x - text_width / 2, 2), self.width() - text_width - 2), 10, text_width, 16
         )
-        painter.setBrush(QColor(0x2D, 0x2D, 0x30))
-        painter.setPen(QPen(QColor(0x55, 0x55, 0x55)))
+        painter.setBrush(QColor(colors.raised))
+        painter.setPen(QPen(QColor(colors.border_strong)))
         painter.drawRoundedRect(chip, 3, 3)
-        painter.setPen(QColor(0xDD, 0xDD, 0xDD))
+        painter.setPen(QColor(colors.text))
         painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, chip_text)
         painter.setPen(QPen(color))
         painter.drawLine(int(x), 26, int(x), 30)

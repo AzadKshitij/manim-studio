@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from manim_studio.editor.glyphs import icon_button
+from manim_studio.theme import current_theme
 
 __all__ = ["BlockInfo", "BlockInspector"]
 
@@ -82,7 +83,7 @@ class BlockInspector(QWidget):
         )
 
         self.note = QLabel("", self)
-        self.note.setStyleSheet("color: #b8860b;")
+        self.apply_theme()
         self.details = QLabel("", self)
         self.details.setToolTip("Animations, source line and edit state of the selected block")
 
@@ -112,6 +113,10 @@ class BlockInspector(QWidget):
         self.show_block(None)
 
     # ------------------------------------------------------------------
+
+    def apply_theme(self) -> None:
+        """Recolour the warning note from the current theme."""
+        self.note.setStyleSheet(f"color: {current_theme().colors.warn};")
 
     @property
     def info(self) -> BlockInfo | None:

@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from pygments.style import Style
-from pygments.styles import get_style_by_name
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFontDatabase, QKeyEvent
 from PySide6.QtWidgets import QWidget
@@ -28,7 +27,12 @@ from manim_studio.python_highlight import (
     TokenKind,
     highlight_spans,
     kind_at,
-    representative_token,
+)
+from manim_studio.theme import (
+    PAPER,
+    Theme,
+    current_theme,
+    derive,
 )
 
 __all__ = ["CodeEditor"]
@@ -58,10 +62,6 @@ PY_DECORATOR = 15
 PY_CONSTANT = 16
 PY_BUILTIN = 17
 
-# Pygments style names used to colour each token kind (chrome stays ours).
-_PYGMENTS_DARK = "monokai"
-_PYGMENTS_LIGHT = "friendly"
-
 # Token kind -> Scintilla style id.
 _ROLE_STYLE: dict[TokenKind, int] = {
     TokenKind.COMMENT: PY_COMMENT,
@@ -80,7 +80,15 @@ _ROLE_STYLE: dict[TokenKind, int] = {
 MARKER_ERROR = 0
 INDIC_ERROR = 8
 
-_MONOSPACE_CANDIDATES = ("Consolas", "Cascadia Mono", "Menlo", "DejaVu Sans Mono", "Courier New")
+_MONOSPACE_CANDIDATES = (
+    "JetBrains Mono",
+    "Cascadia Mono",
+    "Consolas",
+    "Cascadia Mono",
+    "Menlo",
+    "DejaVu Sans Mono",
+    "Courier New",
+)
 
 # Buffer identifiers are offered as instant (worker-free) completions.  One
 # identifier-shaped word token; the cap keeps the popup list bounded on huge
@@ -95,17 +103,6 @@ def _colorref(rgb: int) -> int:
     green = (rgb >> 8) & 0xFF
     blue = rgb & 0xFF
     return (blue << 16) | (green << 8) | red
-
-
-def _parse_hex(value: str) -> int | None:
-    """Parse a Pygments colour string (``#rgb``/``rrggbb``) to 0xRRGGBB."""
-    value = value.lstrip("#")
-    if len(value) == 3:
-        value = "".join(ch * 2 for ch in value)
-    try:
-        return int(value, 16)
-    except ValueError:
-        return None
 
 
 class CodeEditor(ScintillaEdit):
@@ -137,7 +134,7 @@ class CodeEditor(ScintillaEdit):
         self._completion_timer.timeout.connect(self._request_completions)
         self.setAcceptDrops(True)
         self._configure_base()
-        self.apply_theme(dark=True)
+        self.apply_theme()
         self._connect_signals()
 
     # ------------------------------------------------------------------
@@ -158,7 +155,6 @@ class CodeEditor(ScintillaEdit):
         self.setIndentationGuides(True)
         self.setScrollWidthTracking(True)
         self.setCaretLineVisible(True)
-        self.setCaretFore(_colorref(0xFFFFFF))
         # Margin 0: line numbers. Margin 1: error glyphs.
         self.setMarginTypeN(0, SC_MARGIN_NUMBER)
         self.setMarginWidthN(0, 48)
@@ -166,31 +162,37 @@ class CodeEditor(ScintillaEdit):
         self.setMarginWidthN(1, 16)
         self.setMarginSensitiveN(1, True)
         self.markerDefine(MARKER_ERROR, Scintilla.MarkerSymbol.Bookmark)
-        self.markerSetFore(MARKER_ERROR, _colorref(0xFFFFFF))
-        self.markerSetBack(MARKER_ERROR, _colorref(0xCF5044))
         self.indicSetStyle(INDIC_ERROR, 1)  # INDIC_SQUIGGLE
-        self.indicSetFore(INDIC_ERROR, _colorref(0xCF5044))
         self.setZoom(0)
 
-    def apply_theme(self, *, dark: bool = True) -> None:
-        """Apply the editor chrome and Pygments token colours as Scintilla styles."""
-        palette = _DARK if dark else _LIGHT
+    def apply_theme(self, theme: Theme | None = None, *, dark: bool | None = None) -> None:
+        """Apply the editor chrome and token colours as Scintilla styles.
+
+        ``theme`` defaults to the application's current theme; ``dark=False`` picks the
+        built-in light theme instead (kept for callers that only know light/dark).
+        """
+        if theme is None:
+            theme = PAPER if dark is False else current_theme()
+        palette = _editor_palette(theme)
         family = self._monospace_family()
         try:
             self.styleSetFont(STYLE_DEFAULT, family)
         except Exception:  # pragma: no cover - font fallback
             self.styleSetFont(STYLE_DEFAULT, "Courier New")
-        self.styleSetSize(STYLE_DEFAULT, 11)
+        # Theme sizes are pixels; Scintilla sizes are points (96 dpi: 0.75 pt per px).
+        self.styleSetSize(STYLE_DEFAULT, math.ceil(theme.metrics.editor_font_size * 0.75))
         self.styleSetFore(STYLE_DEFAULT, _colorref(palette["default_fg"]))
         self.styleSetBack(STYLE_DEFAULT, _colorref(palette["default_bg"]))
         self.styleClearAll()
-        style = self._pygments_style(dark)
         for kind, style_id in _ROLE_STYLE.items():
-            info = style.style_for_token(representative_token(kind))
-            colour = _parse_hex(str(info.get("color") or ""))
-            self.styleSetFore(style_id, _colorref(colour or palette["default_fg"]))
-            self.styleSetBold(style_id, bool(info.get("bold")))
-            self.styleSetItalic(style_id, bool(info.get("italic")))
+            colour, italic = _token_style(theme, kind)
+            self.styleSetFore(style_id, _colorref(colour))
+            self.styleSetBold(style_id, False)
+            self.styleSetItalic(style_id, italic)
+        self.setCaretFore(_colorref(palette["default_fg"]))
+        self.markerSetFore(MARKER_ERROR, _colorref(palette["error_fg"]))
+        self.markerSetBack(MARKER_ERROR, _colorref(palette["error"]))
+        self.indicSetFore(INDIC_ERROR, _colorref(palette["error"]))
         # Line-number margin.
         self.styleSetFore(STYLE_LINENUMBER, _colorref(palette["line_number_fg"]))
         self.styleSetBack(STYLE_LINENUMBER, _colorref(palette["gutter_bg"]))
@@ -215,15 +217,6 @@ class CodeEditor(ScintillaEdit):
         self.setCaretLineBack(_colorref(palette["caret_line_bg"]))
         self.setCaretLineBackAlpha(palette["caret_line_alpha"])
         self.restyle()
-
-    @staticmethod
-    def _pygments_style(dark: bool) -> type[Style]:
-        """Resolve the Pygments style object, falling back to ``default``."""
-        name = _PYGMENTS_DARK if dark else _PYGMENTS_LIGHT
-        try:
-            return get_style_by_name(name)
-        except Exception:  # pragma: no cover - unknown style name
-            return get_style_by_name("default")
 
     def restyle(self) -> None:
         """Re-tokenise the buffer and push token styles into Scintilla.
@@ -617,29 +610,45 @@ def _dedent(lines: list[str]) -> list[str]:
     return [line[common:] if len(line) >= common else line for line in lines]
 
 
-# Selection bands sit under the Pygments token colours (setSelFore keeps the
-# token foreground), so they must contrast with the background but stay dark
-# enough on the dark theme for the light token colours (e.g. #F8F8F2) to read.
-# Scintilla's unstyled default is an opaque light grey (#C0C0C0), which washed
-# them out on the dark theme.
-_DARK: dict[str, Any] = {
-    "default_fg": 0xD4D4D4,
-    "default_bg": 0x1E1E1E,
-    "gutter_bg": 0x252526,
-    "line_number_fg": 0x858585,
-    "selection_bg": 0x264F78,
-    "selection_alpha": 256,
-    "caret_line_bg": 0x2A2D2E,
-    "caret_line_alpha": 256,
-}
+def _hex_int(colour: str) -> int:
+    return int(colour[1:], 16)
 
-_LIGHT: dict[str, Any] = {
-    "default_fg": 0x1F1F1F,
-    "default_bg": 0xFFFFFF,
-    "gutter_bg": 0xF3F3F3,
-    "line_number_fg": 0x7A7A7A,
-    "selection_bg": 0xADD6FF,
-    "selection_alpha": 256,
-    "caret_line_bg": 0xEDEDED,
-    "caret_line_alpha": 256,
-}
+
+def _editor_palette(theme: Theme) -> dict[str, Any]:
+    """Scintilla chrome colours (0xRRGGBB ints) for ``theme``.
+
+    Selection bands sit under the token colours (``setSelFore(False, ...)`` keeps the
+    token foreground), so they are a muted accent that every token colour still reads
+    on.  Scintilla's unstyled default is an opaque light grey that washed them out.
+    """
+    c = theme.colors
+    d = derive(theme)
+    return {
+        "default_fg": _hex_int(c.text),
+        "default_bg": _hex_int(c.editor),
+        "gutter_bg": _hex_int(c.surface),
+        "line_number_fg": _hex_int(c.faint),
+        "selection_bg": _hex_int(d.selection),
+        "selection_alpha": 256,
+        "caret_line_bg": _hex_int(d.caret_line),
+        "caret_line_alpha": 256,
+        "error": _hex_int(c.err),
+        "error_fg": _hex_int(c.editor),
+    }
+
+
+def _token_style(theme: Theme, kind: TokenKind) -> tuple[int, bool]:
+    """Colour (0xRRGGBB) and italic flag for a token kind under ``theme``."""
+    syntax = theme.syntax
+    colours = {
+        TokenKind.COMMENT: syntax.comment,
+        TokenKind.STRING: syntax.string,
+        TokenKind.NUMBER: syntax.number,
+        TokenKind.KEYWORD: syntax.keyword,
+        TokenKind.CONSTANT: syntax.builtin,
+        TokenKind.FUNCTION: syntax.function,
+        TokenKind.CLASS: syntax.class_,
+        TokenKind.BUILTIN: syntax.builtin,
+        TokenKind.DECORATOR: syntax.builtin,
+    }
+    return _hex_int(colours.get(kind, theme.colors.text)), kind is TokenKind.COMMENT

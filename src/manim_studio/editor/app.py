@@ -1,17 +1,18 @@
-"""Application bootstrap: QApplication, dark Fusion theme, main window."""
+"""Application bootstrap: QApplication, themed Fusion style, main window."""
 
 from __future__ import annotations
 
 import logging
 import sys
 
-from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from manim_studio import APP_NAME, ORG_NAME
 from manim_studio.editor.icon import load_icon
+from manim_studio.editor.styling import apply_theme
+from manim_studio.theme import CHALKBOARD
 
-__all__ = ["create_application", "dark_palette", "run_editor"]
+__all__ = ["create_application", "run_editor"]
 
 log = logging.getLogger(__name__)
 
@@ -38,35 +39,6 @@ def _set_windows_app_id(app_id: str) -> None:
         log.warning("could not set the Windows AppUserModelID", exc_info=True)
 
 
-def dark_palette() -> QPalette:
-    """A neutral dark palette for the whole application."""
-    palette = QPalette()
-    window = QColor(0x1E, 0x1E, 0x1E)
-    base = QColor(0x25, 0x25, 0x26)
-    text = QColor(0xD4, 0xD4, 0xD4)
-    palette.setColor(QPalette.ColorRole.Window, window)
-    palette.setColor(QPalette.ColorRole.WindowText, text)
-    palette.setColor(QPalette.ColorRole.Base, base)
-    palette.setColor(QPalette.ColorRole.AlternateBase, window)
-    palette.setColor(QPalette.ColorRole.ToolTipBase, base)
-    palette.setColor(QPalette.ColorRole.ToolTipText, text)
-    palette.setColor(QPalette.ColorRole.Text, text)
-    palette.setColor(QPalette.ColorRole.Button, QColor(0x2D, 0x2D, 0x30))
-    palette.setColor(QPalette.ColorRole.ButtonText, text)
-    palette.setColor(QPalette.ColorRole.BrightText, QColor(0xFF, 0x80, 0x80))
-    palette.setColor(QPalette.ColorRole.Link, QColor(0x7F, 0xC6, 0xFF))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(0x09, 0x47, 0x71))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
-    disabled = QColor(0x7F, 0x7F, 0x7F)
-    for role in (
-        QPalette.ColorRole.WindowText,
-        QPalette.ColorRole.Text,
-        QPalette.ColorRole.ButtonText,
-    ):
-        palette.setColor(QPalette.ColorGroup.Disabled, role, disabled)
-    return palette
-
-
 def create_application(argv: list[str] | None = None) -> QApplication:
     """Return the process-wide QApplication, configured once."""
     existing = QApplication.instance()
@@ -76,8 +48,7 @@ def create_application(argv: list[str] | None = None) -> QApplication:
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(ORG_NAME)
     _set_windows_app_id(WINDOWS_APP_ID)
-    app.setStyle("Fusion")
-    app.setPalette(dark_palette())
+    apply_theme(app, CHALKBOARD)
     app.setWindowIcon(load_icon())
     return app
 

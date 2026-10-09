@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from manim_studio.stats import TimingStats
+from manim_studio.theme import Theme, current_theme
 from manim_studio.timeline_model import format_duration
 
 __all__ = ["PreviewPanel"]
@@ -55,7 +56,6 @@ class PreviewPanel(QWidget):
         self._mode_label.setObjectName("previewMode")
         self._cache_label = QLabel("")
         self._cache_label.setObjectName("previewCache")
-        self._cache_label.setStyleSheet("color: #888888;")
         self._time_label = QLabel("0.0s")
         self._time_label.setObjectName("previewTime")
 
@@ -71,7 +71,6 @@ class PreviewPanel(QWidget):
         self._viewport.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._viewport.setMinimumSize(320, 180)
         self._viewport.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._viewport.setStyleSheet("background-color: #101010; color: #888888;")
 
         self._placeholder = QLabel(
             "External GL window mode\n\n"
@@ -79,7 +78,6 @@ class PreviewPanel(QWidget):
             "Switch to embedded mode to see it here."
         )
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._placeholder.setStyleSheet("background-color: #101010; color: #888888;")
 
         self._stack = QStackedLayout()
         self._stack.addWidget(self._placeholder)
@@ -90,7 +88,19 @@ class PreviewPanel(QWidget):
         layout.addLayout(header)
         layout.addLayout(self._stack, 1)
 
+        self._state = "idle"
+        self._state_detail = ""
         self.set_mode(embedded=True)
+        self.apply_theme()
+
+    def apply_theme(self, theme: Theme | None = None) -> None:
+        """Restyle the preview well and status text from ``theme`` (default: current)."""
+        colors = (theme or current_theme()).colors
+        well = f"background-color: {colors.preview}; color: {colors.muted};"
+        self._viewport.setStyleSheet(well)
+        self._placeholder.setStyleSheet(well)
+        self._cache_label.setStyleSheet(f"color: {colors.faint};")
+        self.set_status(self._state, self._state_detail)
 
     # ------------------------------------------------------------------
     # State
@@ -130,15 +140,18 @@ class PreviewPanel(QWidget):
         self._rescale(fast=False)
 
     def set_status(self, state: str, detail: str = "") -> None:
+        self._state = state
+        self._state_detail = detail
         text = state if not detail else f"{state} — {detail}"
         self._state_label.setText(text)
+        colors = current_theme().colors
         color = {
-            "idle": "#8FD48F",
-            "playing": "#7FC6FF",
-            "seeking": "#FFD37F",
-            "error": "#FF8080",
-            "crashed": "#FF8080",
-        }.get(state, "#CCCCCC")
+            "idle": colors.ok,
+            "playing": colors.accent,
+            "seeking": colors.warn,
+            "error": colors.err,
+            "crashed": colors.err,
+        }.get(state, colors.muted)
         self._state_label.setStyleSheet(f"color: {color};")
 
     def set_cache_status(self, text: str) -> None:

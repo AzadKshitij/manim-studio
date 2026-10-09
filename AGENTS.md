@@ -43,6 +43,7 @@ explaining why not.
 | `manim_studio/frame_codec.py` | Frame payload codec (zstd default, zlib/raw fallback) | stdlib (+ `zstandard` imported lazily) |
 | `manim_studio/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
 | `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
+| `manim_studio/theme.py` | Colour themes: model, built-ins, JSON theme files, derived colours (ADR 0008) | stdlib only |
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
 | `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
 | `manim_studio/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
@@ -52,6 +53,7 @@ explaining why not.
 | `manim_studio/latex_install.py` | On-demand TinyTeX download/install | stdlib, `latex` |
 | `manim_studio/latex_compat.py` | Runtime fix for manimgl 1.7.2 `-no-pdf`/MiKTeX bug | `manimlib` lazily |
 | `manim_studio/manimgl_launcher.py` | Export entry point (manimgl CLI + LaTeX fix + `--patch-file`) | `manimlib` lazily |
+| `manim_studio/editor/styling.py` | `Theme` -> `QPalette` + Qt style sheet; applied app-wide | PySide6, `theme` |
 | `manim_studio/editor/*` | Qt shell, Scintilla, timeline widget, panels | PySide6 |
 | `manim_studio/cli.py` | Agent-facing CLI (`trace`, `export`, `check`, `new`, `preview`) | everything above |
 
@@ -64,7 +66,7 @@ wire protocol and `docs/adr/` for architectural decisions.
 Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`) must never import Qt,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.
