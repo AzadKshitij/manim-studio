@@ -60,8 +60,7 @@ from manim_studio.scrub import (
     read_upright_rgba,
 )
 from manim_studio.stats import TimingStats, process_rss_bytes
-from manim_studio.timeline_model import TimelineBlock, TimelineLog
-from manim_studio.timing import TimingOverrides
+from manim_studio.timeline_model import TimelineBlock
 from manim_studio.tracer import BlockSite, TraceEvent, TraceRecorder
 
 __all__ = ["FramePump", "HostConfig", "SceneHost", "TickThrottler", "main", "parse_size"]
@@ -268,8 +267,6 @@ class SceneHost:
         self.stats: dict[str, int] = {}
         self.events: tuple[TraceEvent, ...] = ()
         self.control_sock: socket.socket | None = None
-        self._base_blocks: tuple[TimelineBlock, ...] = ()
-        self._timing_factors: dict[int, float] = {}
         self.call_lines: tuple[int | None, ...] = ()
         #: Timeline edits (sidecar patches) the loaded scene runs with.
         self._patches: tuple[Patch, ...] = config.patches
@@ -523,8 +520,6 @@ class SceneHost:
         self.scene_class = scene_class
         self._loaded_once = True
         self.blocks = snapshot.blocks
-        self._base_blocks = snapshot.blocks
-        self._timing_factors = {}
         self.call_lines = self._scene_call_lines(snapshot.call_sites, scene_path)
         self.block_sites = snapshot.block_sites
         self._patch_report = {
@@ -732,7 +727,7 @@ class SceneHost:
             return
         scene = self._make_scene(skip_animations=True)
         scene.camera.use_window_fbo(False)
-        engine = ScrubEngine(scene, self.blocks, factors=self._timing_factors)
+        engine = ScrubEngine(scene, self.blocks)
         self._crawler_engine = engine
         self._crawler = FilmstripCrawler(
             engine,
@@ -817,52 +812,6 @@ class SceneHost:
             if block.start <= time_seconds < block.end:
                 return block
         return self.blocks[0] if time_seconds < self.blocks[0].start else self.blocks[-1]
-
-    # ------------------------------------------------------------------
-    # Timing overrides
-    # ------------------------------------------------------------------
-
-    def _apply_timing(self, timings: list[dict[str, Any]]) -> None:
-        """Rebuild ``self.blocks`` from the base trace plus per-block durations.
-
-        Only durations the editor actually changed are honoured; a factor of 1
-        (or a block with no override) leaves the base timing alone.
-        """
-        overrides = TimingOverrides(TimelineLog(self._base_blocks))
-        for item in timings:
-            index = int(item.get("index", -1))
-            duration = float(item.get("duration", 0.0))
-            if not 0 <= index < len(self._base_blocks) or duration <= 0:
-                continue
-            overrides.set_duration(index, duration)
-        self._timing_factors = {
-            index: duration / self._base_blocks[index].duration
-            for index, duration in overrides.durations.items()
-            if self._base_blocks[index].duration > 0
-        }
-        self.blocks = overrides.log().blocks
-
-    def _cmd_set_timing(self, message: dict[str, Any]) -> None:
-        """Retime the timeline: rebuild replay state and re-pose at the playhead."""
-        if not self._base_blocks:
-            return
-        self._apply_timing(list(message.get("timings") or []))
-        # Everything derived from the timeline is now stale: replay, crawl, cache.
-        self._dispose_scrub_engine()
-        self._dispose_filmstrip()
-        self._filmstrip = Filmstrip()
-        self._crawl_disabled = False
-        total = self.blocks[-1].end if self.blocks else 0.0
-        self.emit(
-            Event.TIMING,
-            trace_id=self._trace_id,
-            blocks=[block.to_dict() for block in self.blocks],
-            total_duration=total,
-            timings=list(message.get("timings") or []),
-        )
-        time_seconds = float(message.get("time") or 0.0)
-        self._pending_scrub = max(0.0, min(time_seconds, total))
-        self._playhead_hint = self._pending_scrub
 
     # ------------------------------------------------------------------
     # Timeline patches
@@ -988,8 +937,6 @@ class SceneHost:
                 self.emit(Event.PONG, t=time.time())
             elif command == Command.STATS:
                 self.emit(Event.STATS, **self._stats_payload())
-            elif command == Command.SET_TIMING:
-                self._cmd_set_timing(message)
             elif command == Command.SET_PATCHES:
                 self._cmd_set_patches(message)
             elif command in (Command.LOAD, Command.RELOAD):
@@ -1041,8 +988,8 @@ class SceneHost:
         self.stop_event.clear()
         scene = self._make_scene(skip_animations=False, start=start, end=end)
         self._activate_scene(scene)
-        if self._timing_factors or rate != 1.0:
-            TimingScaler(scene, self._timing_factors, speed=rate)
+        if rate != 1.0:
+            TimingScaler(scene, {}, speed=rate)
         self.emit_status("playing", index=start)
         self.tick.reset()
         error: BaseException | None = None
@@ -1133,7 +1080,7 @@ class SceneHost:
             scene = self._make_scene(skip_animations=True)
             if self.config.embedded:
                 scene.camera.use_window_fbo(False)
-            self._scrub_engine = ScrubEngine(scene, self.blocks, factors=self._timing_factors)
+            self._scrub_engine = ScrubEngine(scene, self.blocks)
         engine = self._scrub_engine
         try:
             block = engine.pose(time_seconds)

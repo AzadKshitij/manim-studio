@@ -62,7 +62,6 @@ class PreviewEvents(QObject):
         self._call_lines: tuple[int | None, ...] = ()
 
         controller.logReceived.connect(self.on_log)
-        controller.timingChanged.connect(self.on_timing)
         controller.statusChanged.connect(self.on_status)
         controller.tickReceived.connect(self.on_tick)
         controller.stoppedReceived.connect(self.on_stopped)
@@ -147,23 +146,6 @@ class PreviewEvents(QObject):
         self._status_line(
             f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
         )
-
-    def on_timing(self, message: dict[str, Any]) -> None:
-        """The host confirmed a retime: adopt its authoritative blocks.
-
-        Unlike a fresh trace this keeps the current zoom and playhead (clamped to
-        the new total), so stretching a section does not snap the view around.
-        """
-        try:
-            timeline_log = parse_log(message.get("blocks", []))
-        except Exception as exc:  # malformed payload must not kill the editor
-            self._shell.append(f"bad timing payload: {exc}")
-            return
-        self._timeline.set_log(timeline_log, keep_view=True)
-        self._total_duration = timeline_log.total_duration
-        position = min(self._timeline.playhead_time, self._total_duration)
-        self._timeline.set_playhead(position)
-        self._preview_panel.set_time(position, self._total_duration)
 
     def on_status(self, state: str, message: dict[str, Any]) -> None:
         note = str(message.get("note", ""))

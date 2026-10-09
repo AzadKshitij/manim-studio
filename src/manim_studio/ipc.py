@@ -80,7 +80,6 @@ class Command:
     EXEC: Final = "exec"
     PING: Final = "ping"
     STATS: Final = "stats"
-    SET_TIMING: Final = "set_timing"
     SET_PATCHES: Final = "set_patches"
     QUIT: Final = "quit"
 
@@ -97,7 +96,6 @@ class Event:
     EXEC_RESULT: Final = "exec_result"
     FILMSTRIP: Final = "filmstrip"
     STATS: Final = "stats"
-    TIMING: Final = "timing"
     PONG: Final = "pong"
 
 

@@ -34,7 +34,6 @@ class _StubController:
         self.seeks: list[int] = []
         self.plays: list[int] = []
         self.play_args: list[tuple[int | None, float]] = []
-        self.timings: list[tuple[list[dict[str, float]], float]] = []
         self.patch_sets: list[tuple[list[dict[str, object]], float]] = []
         self.patches: list[dict[str, object]] = []
         self.stops = 0
@@ -63,10 +62,6 @@ class _StubController:
 
     def stop_playback(self) -> bool:
         self.stops += 1
-        return True
-
-    def set_timing(self, timings, time_seconds: float = 0.0) -> bool:
-        self.timings.append((list(timings), float(time_seconds)))
         return True
 
     def set_patches(self, patches, time_seconds: float = 0.0) -> bool:
@@ -690,7 +685,6 @@ class TestNumericDuration:
             assert stub.patch_sets[-1][0] == [
                 {"op": "set_duration", "site": WAIT_SITE.site_id, "seconds": 2.5}
             ]
-            assert stub.timings == []  # the old per-index overlay is gone
         finally:
             self._restore(window)
 
@@ -923,13 +917,9 @@ class TestTransport:
 class _StubExports:
     def __init__(self) -> None:
         self.stills: list[tuple[str, str | None, str, tuple[int, int] | None]] = []
-        self.timing_factors: dict[int, float] | None = None
 
-    def export_still(
-        self, path, scene_name, output, *, animation_range=None, timing_factors=None
-    ) -> bool:
+    def export_still(self, path, scene_name, output, *, animation_range=None) -> bool:
         self.stills.append((str(path), scene_name, str(output), animation_range))
-        self.timing_factors = timing_factors
         return True
 
 

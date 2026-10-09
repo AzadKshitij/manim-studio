@@ -69,45 +69,6 @@ class TestParseSize:
             parse_size(text)
 
 
-class TestApplyTiming:
-    """Timing overrides rebase the host's blocks without touching the trace."""
-
-    def _host(self) -> SceneHost:
-        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
-        host._base_blocks = (
-            TimelineBlock(0, "ShowCreation", 0.0, 1.0),
-            TimelineBlock(1, "Wait", 1.0, 0.5),
-            TimelineBlock(2, "Transform", 1.5, 2.0),
-        )
-        host.blocks = host._base_blocks
-        return host
-
-    def test_doubling_shifts_later_blocks(self) -> None:
-        host = self._host()
-        host._apply_timing([{"index": 0, "duration": 2.0}])
-        assert [(b.start, b.duration) for b in host.blocks] == [
-            (0.0, 2.0),
-            (2.0, 0.5),
-            (2.5, 2.0),
-        ]
-        assert host._timing_factors == {0: 2.0}
-
-    def test_empty_timings_restore_the_base(self) -> None:
-        host = self._host()
-        host._apply_timing([{"index": 1, "duration": 1.5}])
-        host._apply_timing([])
-        assert host.blocks == host._base_blocks
-        assert host._timing_factors == {}
-
-    def test_unknown_or_invalid_entries_are_ignored(self) -> None:
-        host = self._host()
-        host._apply_timing([{"index": 9, "duration": 1.0}, {"index": -1, "duration": 1.0}])
-        assert host._timing_factors == {}
-        host._apply_timing([{"index": 0, "duration": 0.0}, {"index": 1, "duration": -2.0}])
-        assert host._timing_factors == {}
-        assert host.blocks == host._base_blocks
-
-
 class TestStopRace:
     """A play queued before a STOP must not clear the pause (loop replay race)."""
 
@@ -664,35 +625,6 @@ class TestHostIntegration:
                 ),
                 timeout=60,
             )
-
-    def test_set_timing_retimes_and_reposes(self, host_session: Any) -> None:
-        """Retiming a block returns the shifted timeline and keeps the host usable."""
-        peer = host_session[0]
-        peer.drain()
-        peer.send(Command.RELOAD)
-        log = peer.wait_event(
-            lambda event: event.get("event") == Event.LOG and event.get("trace_id") is not None
-        )
-        blocks = log["blocks"]
-        target = blocks[0]["duration"] * 2.0
-        try:
-            peer.send(Command.SET_TIMING, timings=[{"index": 0, "duration": target}], time=0.0)
-            timing = peer.wait_event(lambda event: event.get("event") == Event.TIMING, timeout=30)
-            assert timing["trace_id"] == log["trace_id"]
-            assert timing["blocks"][0]["duration"] == pytest.approx(target)
-            assert timing["blocks"][1]["start"] == pytest.approx(blocks[0]["start"] + target)
-            # The host must still pose and render after the retime.
-            peer.send(Command.SCRUB, time=min(target / 2, timing["total_duration"]))
-            peer.wait_event(
-                lambda event: event.get("event") == Event.TICK and event.get("scrubbing") is True,
-                timeout=30,
-            )
-            errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
-            assert not errors, errors
-        finally:
-            # The host is shared for the module: always restore the base timing.
-            peer.send(Command.SET_TIMING, timings=[], time=0.0)
-            peer.wait_event(lambda event: event.get("event") == Event.TIMING, timeout=30)
 
 
 @pytest.mark.gl

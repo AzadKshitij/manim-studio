@@ -84,7 +84,6 @@ class _StubShell:
 
 class _StubController(QObject):
     logReceived = Signal(dict)
-    timingChanged = Signal(dict)
     statusChanged = Signal(str, dict)
     tickReceived = Signal(float, int, bool)
     stoppedReceived = Signal(dict)
@@ -150,44 +149,55 @@ class TestOnLog:
         assert h.timeline.log.num_blocks == 2
 
 
-class TestOnTiming:
-    def test_applies_blocks_and_keeps_the_view(self) -> None:
+class TestLogCausedByPatches:
+    """A reload that only applies timeline edits keeps the user's place."""
+
+    @staticmethod
+    def _retimed(duration: float = 2.0, blocks: int = 2) -> dict:
+        return {
+            **SAMPLE_LOG,
+            "cause": "patches",
+            "blocks": [
+                {"name": "ShowCreation", "start": 0.0, "duration": duration, "index": 0},
+                {"name": "Wait", "start": duration, "duration": 0.5, "index": 1},
+            ][:blocks],
+        }
+
+    def test_keeps_the_view_playhead_and_selected_block(self) -> None:
         h = _Harness()
-        h.events.on_log(SAMPLE_LOG)
-        h.events.on_timing(
-            {
-                "blocks": [
-                    {"name": "ShowCreation", "start": 0.0, "duration": 2.0, "index": 0},
-                    {"name": "Wait", "start": 2.0, "duration": 0.5, "index": 1},
-                ]
-            }
-        )
+        h.events.on_log(SAMPLE_LOG)  # a fresh load: playhead goes to the end
+        h.timeline.set_playhead(0.5)
+        h.events.play_from_index = 1
+        h.events.on_log(self._retimed())
         assert h.timeline.keep_view is True
+        assert h.timeline.playhead_time == pytest.approx(0.5)
+        assert h.events.play_from_index == 1
         assert h.events.total_duration == pytest.approx(2.5)
         assert h.panel.times[-1][1] == pytest.approx(2.5)
 
     def test_clamps_the_playhead_to_the_new_total(self) -> None:
         h = _Harness()
         h.events.on_log(SAMPLE_LOG)  # total 1.5, playhead 1.5
-        h.events.on_timing(
-            {"blocks": [{"name": "ShowCreation", "start": 0.0, "duration": 0.4, "index": 0}]}
-        )
-        assert h.events.total_duration == pytest.approx(0.4)
-        assert h.timeline.playhead_time == pytest.approx(0.4)
+        h.events.on_log(self._retimed(duration=0.2, blocks=1))
+        assert h.events.total_duration == pytest.approx(0.2)
+        assert h.timeline.playhead_time == pytest.approx(0.2)
 
-    def test_malformed_payload_reports_and_keeps_timeline(self) -> None:
+    def test_forgets_a_selected_block_that_no_longer_exists(self) -> None:
         h = _Harness()
         h.events.on_log(SAMPLE_LOG)
-        h.events.on_timing({"blocks": [{"nope": True}]})
-        assert h.timeline.log.num_blocks == 2
-        assert h.shell.lines and "bad timing payload" in h.shell.lines[-1]
+        h.events.play_from_index = 1
+        h.events.on_log(self._retimed(blocks=1))
+        assert h.events.play_from_index is None
 
-    def test_controller_signal_is_wired(self) -> None:
+    def test_a_normal_load_still_starts_over(self) -> None:
         h = _Harness()
-        h.controller.timingChanged.emit(
-            {"blocks": [{"name": "ShowCreation", "start": 0.0, "duration": 1.0, "index": 0}]}
-        )
-        assert h.events.total_duration == pytest.approx(1.0)
+        h.events.on_log(SAMPLE_LOG)
+        h.timeline.set_playhead(0.5)
+        h.events.play_from_index = 1
+        h.events.on_log(SAMPLE_LOG)
+        assert h.timeline.keep_view is False
+        assert h.events.play_from_index is None
+        assert h.timeline.playhead_time == pytest.approx(h.events.total_duration)
 
 
 class TestCallLines:

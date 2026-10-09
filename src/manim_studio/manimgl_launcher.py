@@ -5,17 +5,12 @@ the manimgl LaTeX compatibility fix first, so ``Tex``/``Brace`` exports also
 work on MiKTeX.  :func:`manim_studio.export.build_export_plan` uses this module
 instead of ``manimlib`` directly.
 
-Timeline edits reach the render through two optional arguments, both consumed
-before manimgl's own CLI parser sees them (``manimlib.config`` parses ``sys.argv``
-at import time, so a leftover flag would make it exit with error 2):
-
-``--patch-file``
-    A sidecar-format JSON file of anchored timeline patches
-    (:mod:`manim_studio.patches`).  The scene file is executed as patched in-memory
-    source, exactly what the editor's preview runs, so preview and export agree.
-``--timing-file``
-    A legacy JSON ``{block_index: factor}`` map; installs a
-    :class:`~manim_studio.scrub.TimingScaler` on every scene.
+Timeline edits reach the render through ``--patch-file``: a sidecar-format JSON
+file of anchored patches (:mod:`manim_studio.patches`).  The argument is consumed
+before manimgl's own CLI parser sees it (``manimlib.config`` parses ``sys.argv`` at
+import time, so a leftover flag would make it exit with error 2).  The scene file
+is then executed as patched in-memory source, exactly what the editor's preview
+runs, so preview and export agree.
 """
 
 from __future__ import annotations
@@ -30,7 +25,6 @@ if TYPE_CHECKING:
 
 __all__ = ["main"]
 
-_TIMING_ARG = "--timing-file"
 _PATCH_ARG = "--patch-file"
 
 
@@ -51,28 +45,6 @@ def _consume_path_arg(argv: list[str], flag: str) -> Path | None:
     return None
 
 
-def _consume_timing_arg(argv: list[str]) -> dict[int, float]:
-    """Pop ``--timing-file`` from ``argv`` and return the parsed factors."""
-    path = _consume_path_arg(argv, _TIMING_ARG)
-    return {} if path is None else _load_factors(path)
-
-
-def _load_factors(path: Path) -> dict[int, float]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    factors: dict[int, float] = {}
-    for index, factor in payload.items():
-        try:
-            factors[int(index)] = float(factor)
-        except (TypeError, ValueError):
-            continue
-    return factors
-
-
 def _consume_patch_arg(argv: list[str]) -> tuple[Patch, ...]:
     """Pop ``--patch-file`` from ``argv`` and return the parsed patches."""
     path = _consume_path_arg(argv, _PATCH_ARG)
@@ -87,21 +59,6 @@ def _consume_patch_arg(argv: list[str]) -> tuple[Patch, ...]:
     except (OSError, ValueError, KeyError, TypeError, PatchError) as exc:
         sys.stderr.write(f"manim-studio: ignoring unreadable patch file {path}: {exc}\n")
         return ()
-
-
-def _install_timing_scaler(factors: dict[int, float]) -> None:
-    """Wrap ``Scene.run`` so retimed blocks render at their new ``run_time``."""
-    from manimlib.scene.scene import Scene
-
-    from manim_studio.scrub import TimingScaler
-
-    original_run = Scene.run
-
-    def run(self):  # type: ignore[no-untyped-def]
-        TimingScaler(self, factors)
-        return original_run(self)
-
-    Scene.run = run
 
 
 def _install_patched_loader(patches: tuple[Patch, ...]) -> None:
@@ -145,8 +102,7 @@ def _install_patched_loader(patches: tuple[Patch, ...]) -> None:
 
 
 def main() -> int:
-    # Strip our arguments BEFORE importing anything that pulls in manimlib.
-    factors = _consume_timing_arg(sys.argv)
+    # Strip our argument BEFORE importing anything that pulls in manimlib.
     patches = _consume_patch_arg(sys.argv)
 
     from manim_studio.latex_compat import patch_manimgl_latex_compat
@@ -154,8 +110,6 @@ def main() -> int:
     patch_manimgl_latex_compat()
     from manimlib.__main__ import main as manimgl_main
 
-    if factors:
-        _install_timing_scaler(factors)
     if patches:
         _install_patched_loader(patches)
 

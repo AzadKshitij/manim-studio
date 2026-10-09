@@ -34,7 +34,6 @@ The frames channel is only opened in `--embedded` mode.
 | `stop` | — | interrupt playback at the current frame |
 | `seek` | `index` | jump to the state at the *end* of block `index` |
 | `scrub` | `time` | show the scene at an exact time (filmstrip-first, replay on miss) |
-| `set_timing` | `timings` (`[{index, duration}]`), `time?` | retime blocks (proportional scale of each play/wait) and re-pose at `time`; empty `timings` restores the trace (v3, additive) |
 | `set_patches` | `patches` (`[patch]`), `time?` | v4: run the scene with a new set of timeline edits (patched in-memory source), re-trace, answer with a `log`, then re-pose at `time` |
 | `exec` | `code` | run Python in the live scene namespace (IPython) |
 | `ping` | — | liveness check |
@@ -53,7 +52,6 @@ The frames channel is only opened in `--embedded` mode.
 | `exec_result` | `ok`, `stdout`, `stderr`, `result`, `error` | reply to `exec` |
 | `filmstrip` | `trace_id`, `frames`, `done`, `capped`, `fps`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `deduped`, `time_to_playhead?`, `timings` | background frame-cache progress with RAM accounting (v2 fields additive; older editors ignore them) |
 | `stats` | `trace_id`, `frames`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `deduped`, `fps`, `blocks`, `total_duration`, `size`, `scene_name?`, `timings` | on-demand snapshot for the App stats dialog (v2) |
-| `timing` | `trace_id`, `blocks[]`, `total_duration`, `timings` | reply to `set_timing` with the rebased timeline (v3, additive) |
 | `pong` | `t` | reply to `ping` |
 
 `log.blocks` is the spec `log.json` shape:

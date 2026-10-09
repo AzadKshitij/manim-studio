@@ -78,9 +78,6 @@ class RecordingController:
     def scrub(self, time_seconds: float) -> bool:
         return self._record("scrub", float(time_seconds))
 
-    def set_timing(self, timings, time_seconds: float = 0.0) -> bool:
-        return self._record("set_timing", list(timings), float(time_seconds))
-
     def set_patches(self, patches, time_seconds: float = 0.0) -> bool:
         self.patches = list(patches)
         return self._record("set_patches", list(patches), float(time_seconds))
@@ -111,13 +108,11 @@ class StubExports:
         self.stills: list[tuple] = []
         self.preview_renders: list[tuple] = []
 
-    def export_still(
-        self, path, scene_name, output, *, animation_range=None, timing_factors=None
-    ) -> bool:
+    def export_still(self, path, scene_name, output, *, animation_range=None) -> bool:
         self.stills.append((str(path), scene_name, str(output), animation_range))
         return True
 
-    def render_preview_video(self, path, scene_name, output, *, timing_factors=None) -> bool:
+    def render_preview_video(self, path, scene_name, output) -> bool:
         self.preview_renders.append((str(path), scene_name, str(output)))
         return True
 

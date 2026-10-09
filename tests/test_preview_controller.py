@@ -38,22 +38,6 @@ class TestPreviewControllerIntegration:
         finally:
             controller.shutdown()
 
-    def test_set_timing_round_trip(self, qtbot) -> None:
-        controller = PreviewController()
-        try:
-            controller.start(SCENE_FILE, embedded=True, size=(320, 180))
-            with qtbot.waitSignal(controller.logReceived, timeout=90000) as log_blocker:
-                pass
-            blocks = log_blocker.args[0]["blocks"]
-            target = blocks[0]["duration"] * 2.0
-            with qtbot.waitSignal(controller.timingChanged, timeout=30000) as timing_blocker:
-                assert controller.set_timing([{"index": 0, "duration": target}], 0.0) is True
-            payload = timing_blocker.args[0]
-            assert payload["blocks"][0]["duration"] == pytest.approx(target)
-            assert payload["blocks"][1]["start"] == pytest.approx(blocks[0]["start"] + target)
-        finally:
-            controller.shutdown()
-
     def test_set_patches_round_trip(self, qtbot) -> None:
         controller = PreviewController()
         try:
