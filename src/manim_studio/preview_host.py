@@ -532,11 +532,18 @@ class SceneHost:
         mark = lap("signature", mark)
 
         # ---- staged (failure-prone) phase: live state untouched -----------------
-        snapshot, trace_seconds = self._trace_scene_class(
-            scene_class, scene_path, self._site_resolver(scene_path, patch_result.patched_sites())
+        # When the preview opens on the end state, the traced scene *is* that scene: reuse
+        # it instead of running construct() a second time.
+        snapshot, trace_seconds, traced_scene = self._trace_scene_class(
+            scene_class,
+            scene_path,
+            self._site_resolver(scene_path, patch_result.patched_sites()),
+            keep_scene=self.config.initial_frame == "end",
         )
         mark = lap("trace", mark)
-        initial_scene = self._build_initial_scene(scene_class)
+        initial_scene = (
+            traced_scene if traced_scene is not None else self._build_initial_scene(scene_class)
+        )
         mark = lap("initial_scene", mark)
 
         # ---- commit -------------------------------------------------------------
@@ -666,19 +673,29 @@ class SceneHost:
         scene_class: type,
         scene_path: Path,
         site_resolver: Callable[[str, int, int], str | None] | None = None,
-    ) -> tuple[Any, float]:
-        """Run the scene once in skip mode and return (snapshot, wall seconds)."""
+        *,
+        keep_scene: bool = False,
+    ) -> tuple[Any, float, Any | None]:
+        """Run the scene once in skip mode: ``(snapshot, wall seconds, scene or None)``.
+
+        With ``keep_scene`` the finished scene is returned (tracer detached) instead of
+        released, so the caller can show its end state without running ``construct()`` a
+        second time.
+        """
         scene = self._make_scene(skip_animations=True, scene_class=scene_class)
         recorder = TraceRecorder(record_events=True, site_resolver=site_resolver)
         recorder.attach(scene)
         started = time.perf_counter()
+        keep = False
         try:
             run_construct(scene)
             snapshot = recorder.snapshot()
             elapsed = time.perf_counter() - started
+            keep = keep_scene
         finally:
             recorder.detach()
-            self._release_scene(scene)
+            if not keep:
+                self._release_scene(scene)
         total = snapshot.blocks[-1].end if snapshot.blocks else 0.0
         self.log.info(
             "trace: %d blocks, %.3fs, %.2fs wall",
@@ -686,7 +703,7 @@ class SceneHost:
             total,
             elapsed,
         )
-        return snapshot, elapsed
+        return snapshot, elapsed, scene if keep else None
 
     @staticmethod
     def _scene_call_lines(

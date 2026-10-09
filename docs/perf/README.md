@@ -257,3 +257,20 @@ Pitfall caught by measuring: the first version of the user-module fingerprint re
 a path for every loaded module and added ~0.8 s to every load. It now rejects modules
 by string prefix before touching the filesystem (~4 ms), reported as
 `load_timings.signature`.
+
+### R3 — one `construct()` per load (2026-10-09, branch `rendering`)
+
+When the preview opens on the end state (the default), the traced scene *is* the initial
+scene, so the host keeps it instead of running `construct()` a second time. A/B on
+`feature_showcase` 720p, old and new code alternated, three rounds
+(`load_timings.total` from the `log` event; reload command -> `log` event is within 5 ms of it):
+
+| edit | before | after |
+| --- | --- | --- |
+| retime last block | 0.117–0.136 s | **0.067–0.074 s** |
+| edit middle block | 0.122–0.127 s | **0.066–0.069 s** (-44%) |
+| edit non-play line | 0.114–0.137 s | **0.066–0.076 s** |
+
+This is the time before the new frame appears after an edit, so it is the latency the
+user feels (the filmstrip crawl in R1/R2 happens in the background). `initial_frame="start"`
+still runs the second, truncated `construct()`.
