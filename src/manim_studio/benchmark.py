@@ -245,4 +245,15 @@ def format_report(report: dict[str, Any]) -> str:
     if isinstance(end_to_end, dict):
         for name, value in sorted(end_to_end.items()):
             lines.append(f"e2e {name}: {value}")
+    reload_report = report.get("reload")
+    if isinstance(reload_report, dict):
+        for name, entry in reload_report.items():
+            if not isinstance(entry, dict):
+                continue
+            phases = entry.get("load_timings") or {}
+            detail = " ".join(f"{key}={value}" for key, value in phases.items())
+            lines.append(
+                f"reload {name}: log {entry.get('reload_to_log_s')}s, "
+                f"crawl done {entry.get('reload_to_crawl_done_s')}s [{detail}]"
+            )
     return "\n".join(lines)

@@ -495,13 +495,24 @@ class SceneHost:
         if path is not None:
             self.config.scene_path = Path(path)
         scene_path = self.config.scene_path
+        load_started = time.perf_counter()
+        phases: dict[str, float] = {}
+
+        def lap(name: str, since: float) -> float:
+            now = time.perf_counter()
+            phases[name] = round(now - since, 4)
+            return now
+
+        mark = load_started
         check = check_scene_file(scene_path)
         if not check.ok:
             raise SceneLoadError(f"{scene_path}: {check.error}")
+        mark = lap("check", mark)
 
         # Timeline edits run as patched in-memory source; the file on disk is untouched.
         patch_result = apply_patches(scene_path.read_text(encoding="utf-8"), self._patches)
         patched = patch_result.changed
+        mark = lap("patch", mark)
         module = load_scene_module(
             scene_path,
             is_reload=self._loaded_once,
@@ -509,12 +520,15 @@ class SceneHost:
             runtime=self._studio_runtime if patched else None,
         )
         scene_class = select_scene_class(module, self.config.scene_name, path=scene_path)
+        mark = lap("import", mark)
 
         # ---- staged (failure-prone) phase: live state untouched -----------------
         snapshot, trace_seconds = self._trace_scene_class(
             scene_class, scene_path, self._site_resolver(scene_path, patch_result.patched_sites())
         )
+        mark = lap("trace", mark)
         initial_scene = self._build_initial_scene(scene_class)
+        mark = lap("initial_scene", mark)
 
         # ---- commit -------------------------------------------------------------
         self.module = module
@@ -539,7 +553,9 @@ class SceneHost:
         self._dispose_filmstrip()
         self._filmstrip = Filmstrip()
         self._crawl_disabled = False
-        self.log.info("loaded %s (%s)", scene_class.__name__, scene_path)
+        phases["commit"] = round(time.perf_counter() - mark, 4)
+        phases["total"] = round(time.perf_counter() - load_started, 4)
+        self.log.info("loaded %s (%s) %s", scene_class.__name__, scene_path, phases)
 
         total = self.blocks[-1].end if self.blocks else 0.0
         self._playhead_hint = total if self.config.initial_frame == "end" else 0.0
@@ -559,6 +575,7 @@ class SceneHost:
             patches=self._patch_report,
             cause=cause,
             clips=[[clip.to_dict() for clip in clips] for clips in self.block_clips],
+            load_timings=phases,
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()

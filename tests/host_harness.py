@@ -127,7 +127,7 @@ class HostPeer:
         except queue.Empty:
             raise TimeoutError("no frame received") from None
 
-    def start_host(self, *extra: str) -> subprocess.Popen[bytes]:
+    def start_host(self, *extra: str, scene_file: Path | None = None) -> subprocess.Popen[bytes]:
         # Kept open for the process lifetime so host stderr can be inspected on
         # failure; a context manager would close it before the child starts.
         self.stderr_log = tempfile.TemporaryFile()  # noqa: SIM115
@@ -136,7 +136,7 @@ class HostPeer:
                 sys.executable,
                 "-m",
                 "manim_studio.preview_host",
-                str(SCENE_FILE),
+                str(scene_file or SCENE_FILE),
                 "--port",
                 str(self.port),
                 "--embedded",

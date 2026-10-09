@@ -211,3 +211,88 @@ class TestEndToEndBenchmark:
                     process.kill()
                     process.wait()
             peer.close()
+
+
+# Edit scenarios for the reload benchmark: (name, old text, new text) applied to a copy of
+# the showcase scene. They cover the three shapes of edit incremental rendering targets.
+RELOAD_SCENARIOS = (
+    (
+        "retime_last_block",
+        "self.play(FadeOut(title), run_time=0.2)",
+        "self.play(FadeOut(title), run_time=0.25)",
+    ),
+    ("edit_middle_block", "RIGHT * 0.5 + DOWN * 0.5", "RIGHT * 0.6 + DOWN * 0.5"),
+    ("edit_non_play_line", "radius=0.8)", "radius=0.9)"),
+)
+
+
+@pytest.mark.gl
+class TestReloadBenchmark:
+    """Cost of an edit: per-phase load timings plus time until the filmstrip is rebuilt."""
+
+    def test_reload_scenarios(self, tmp_path) -> None:
+        from tests.host_harness import SCENE_FILE
+
+        scene = tmp_path / "feature_showcase.py"
+        text = SCENE_FILE.read_text(encoding="utf-8")
+        scene.write_text(text, encoding="utf-8")
+
+        peer = HostPeer()
+        process = peer.start_host("--size", f"{WIDTH}x{HEIGHT}", scene_file=scene)
+        try:
+            try:
+                peer.accept_control()
+                peer.accept_frames()
+            except (TimeoutError, OSError) as exc:
+                pytest.skip(f"preview host did not start (GL unavailable?): {exc}")
+
+            peer.wait_event(lambda event: event.get("event") == Event.LOG)
+            peer.wait_event(
+                lambda event: event.get("event") == Event.FILMSTRIP and event.get("done"),
+                timeout=300,
+            )
+
+            scenarios: dict[str, Any] = {}
+            for name, old, new in RELOAD_SCENARIOS:
+                assert old in text, f"scenario {name!r} no longer matches the showcase scene"
+                scene.write_text(text.replace(old, new, 1), encoding="utf-8")
+                started = time.monotonic()
+                peer.send(Command.RELOAD)
+                log_event = peer.wait_event(lambda event: event.get("event") == Event.LOG)
+                reload_seconds = time.monotonic() - started
+                strip_event = peer.wait_event(
+                    lambda event: event.get("event") == Event.FILMSTRIP and event.get("done"),
+                    timeout=300,
+                )
+                scenarios[name] = {
+                    "reload_to_log_s": round(reload_seconds, 3),
+                    "reload_to_crawl_done_s": round(time.monotonic() - started, 3),
+                    "crawl_frames": int(strip_event.get("frames") or 0),
+                    "load_timings": log_event.get("load_timings", {}),
+                }
+                scene.write_text(text, encoding="utf-8")  # back to baseline for the next edit
+                peer.send(Command.RELOAD)
+                peer.wait_event(
+                    lambda event: event.get("event") == Event.FILMSTRIP and event.get("done"),
+                    timeout=300,
+                )
+
+            report = {
+                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "machine": benchmark.machine_info(),
+                "frame": {"width": WIDTH, "height": HEIGHT, "bytes": WIDTH * HEIGHT * 4},
+                "reload": scenarios,
+            }
+            _record(report)
+            for result in scenarios.values():
+                assert result["load_timings"].get("total", 0) > 0
+                assert result["crawl_frames"] > 0
+        finally:
+            if process.poll() is None:
+                peer.send(Command.QUIT)
+                try:
+                    process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            peer.close()
