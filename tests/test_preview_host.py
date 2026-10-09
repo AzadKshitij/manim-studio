@@ -294,6 +294,20 @@ def _drain_frames(peer: HostPeer) -> None:
             return
 
 
+def _settle_frames(peer: HostPeer, quiet_for: float = 0.7) -> None:
+    """Discard frames until the host has been silent for ``quiet_for`` seconds.
+
+    Playback and reload tests leave frames in flight (the pump encodes the latest
+    frame on its own thread), and those can land *after* a plain drain.  A scrub
+    assertion must not mistake such a stale frame for its own.
+    """
+    while True:
+        try:
+            peer.wait_frame(timeout=quiet_for)
+        except TimeoutError:
+            return
+
+
 def _content_pixels(frame: Frame) -> int:
     """Count pixels that are not the #333333 background (stroke coverage)."""
     count = 0
@@ -453,6 +467,17 @@ class TestHostIntegration:
         """Scrubbing mid-block must render an intermediate state (half-drawn circle)."""
         peer = host_session[0]
         peer.drain()
+        # Scrubs are served from the filmstrip cache (nearest frame within 3 frames,
+        # ADR 0003) while the background crawl is still filling it, so a half-filled
+        # cache would make exact-pose assertions race the crawler.  Start a fresh
+        # crawl, wait for it to finish, then let stale frames from earlier tests land.
+        peer.send(Command.RELOAD)
+        peer.wait_event(lambda event: event.get("event") == Event.LOG)
+        peer.wait_event(
+            lambda event: event.get("event") == Event.FILMSTRIP and event.get("done"),
+            timeout=60,
+        )
+        _settle_frames(peer)
 
         def scrub_to(time_seconds: float) -> Frame:
             # Frames are latest-wins by design, so a scrub frame can be dropped when
