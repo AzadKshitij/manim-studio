@@ -1166,3 +1166,108 @@ class TestEditing:
     def test_host_state_label(self, window: MainWindow) -> None:
         window.events.on_host_state("crashed")
         assert "crashed" in window._host_state_label.text()
+
+
+@pytest.mark.usefixtures("scene_copy")
+class TestTimelineToolbar:
+    """The icon buttons next to the transport drive the timeline operations."""
+
+    def _stub(self, window: MainWindow) -> _StubController:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window._original_controller = original  # type: ignore[attr-defined]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        return stub
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def _press(self, window: MainWindow, action_id: str) -> None:
+        button = window.transport_bar.edit_button(action_id)
+        assert button.isEnabled(), f"{action_id} should be enabled"
+        button.click()
+
+    def test_buttons_are_disabled_until_there_is_something_to_do(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            bar = window.transport_bar
+            assert not bar.edit_button("undo").isEnabled()
+            assert not bar.edit_button("apply").isEnabled()
+            assert not bar.edit_button("reset").isEnabled()
+            assert bar.edit_button("hold").isEnabled()  # a trace exists and the host runs
+            assert bar.edit_button("delete").isEnabled()  # the playhead block has a call site
+        finally:
+            self._restore(window)
+
+    def test_delete_acts_on_the_selected_block(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            self._press(window, "delete")
+            assert stub.patch_sets[-1][0] == [{"op": "delete", "site": WAIT_SITE.site_id}]
+            assert window.transport_bar.edit_button("undo").isEnabled()
+            assert window.transport_bar.edit_button("discard_all").isEnabled()
+        finally:
+            self._restore(window)
+
+    def test_undo_redo_and_reset_buttons(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            window._on_block_resized(1, 2.0)
+            window._refresh_edits_ui()
+            self._press(window, "reset")
+            assert stub.patch_sets[-1][0] == []
+            self._press(window, "undo")
+            assert stub.patch_sets[-1][0][0]["seconds"] == 2.0
+            self._press(window, "redo")
+            assert stub.patch_sets[-1][0] == []
+        finally:
+            self._restore(window)
+
+    def test_the_summary_chip_lives_in_the_timeline_toolbar(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            assert window._edits_label is window.transport_bar.edits_label
+            window._on_block_resized(1, 2.0)
+            assert window.transport_bar.edits_label.text() == "1 timeline edit"
+            assert not window.transport_bar.edits_label.isHidden()
+        finally:
+            self._restore(window)
+
+    def test_discard_all_button_clears_the_edits(
+        self, window: MainWindow, scene_copy: Path
+    ) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_block_resized(1, 2.0)
+            self._press(window, "discard_all")
+            assert stub.patch_sets[-1][0] == []
+            assert window.patches.edit_count == 0
+            assert window.transport_bar.edits_label.isHidden()
+        finally:
+            self._restore(window)
+
+    def test_clicking_a_block_selects_it_for_the_toolbar(self, window: MainWindow, qtbot) -> None:
+        self._stub(window)
+        try:
+            window.timeline.resize(900, 140)
+            x = int(window.timeline.view().time_to_x(2.5))  # inside block 2
+            from PySide6.QtCore import QPoint, Qt
+
+            qtbot.mouseClick(window.timeline, Qt.MouseButton.LeftButton, pos=QPoint(x, 50))
+            assert window.selected_block_index() == 2
+            assert window.inspector_text().startswith("#2 ")
+        finally:
+            self._restore(window)
+
+    def test_render_and_toolbar_buttons_are_icon_only(self, window: MainWindow) -> None:
+        assert window._render_preview_button.text() == ""
+        assert "Render preview video" in window._render_preview_button.toolTip()
+        for name in ("Reload", "Play", "Stop", "Render preview"):
+            action = window._toolbar_actions[name]
+            assert not action.icon().isNull()
+            assert action.toolTip() == name

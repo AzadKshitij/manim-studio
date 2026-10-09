@@ -100,7 +100,7 @@ def test_play_and_pause_buttons(live: LiveEditor, qtbot) -> None:  # type: ignor
     live.wait_status("playing")
     assert window.events.playing is True
     assert window._playback_active is True
-    assert play_button.text() == "Pause"
+    assert window.transport_bar.playing() is True
 
     # Pause: the host stops and the button returns to Play.
     before = len(live.stopped)
@@ -109,7 +109,7 @@ def test_play_and_pause_buttons(live: LiveEditor, qtbot) -> None:  # type: ignor
     live.wait_status("idle")
     assert window.events.playing is False
     assert window._playback_active is False
-    assert play_button.text() == "Play"
+    assert window.transport_bar.playing() is False
     assert live.stopped[-1]["user_stopped"] is True
     assert live.stopped[-1]["time"] < total  # stopped early, not at the end
     assert not live.errors

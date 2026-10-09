@@ -647,3 +647,45 @@ class TestScrollAfterStretch:
             timeline, Qt.MouseButton.LeftButton, pos=QPoint(timeline.width() - 4, 40)
         )
         assert timeline._autoscroll.isActive() is False
+
+
+class TestSelection:
+    def test_clicking_a_block_selects_it_and_emits(self, timeline: TimelineWidget, qtbot) -> None:
+        selected = QSignalSpy(timeline.blockSelected)
+        x = int(timeline.view().time_to_x(2.5))  # inside block 2
+        qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(x, 45))
+        assert timeline.selected_block == 2
+        assert selected.at(0)[0] == 2
+
+    def test_clicking_the_ruler_scrubs_without_selecting(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        x = int(timeline.view().time_to_x(2.5))
+        qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(x, 5))
+        assert timeline.selected_block is None
+
+    def test_dragging_scrubs_and_does_not_change_the_selection(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        timeline.set_selected_block(1)
+        view = timeline.view()
+        qtbot.mousePress(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(view.time_to_x(0.5)), 45)
+        )
+        qtbot.mouseMove(timeline, QPoint(int(view.time_to_x(3.0)), 45))
+        qtbot.mouseRelease(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(view.time_to_x(3.0)), 45)
+        )
+        assert timeline.selected_block == 1
+
+    def test_set_selected_block_validates_and_survives_a_retime(
+        self, timeline: TimelineWidget
+    ) -> None:
+        timeline.set_selected_block(99)
+        assert timeline.selected_block is None
+        timeline.set_selected_block(1)
+        first = timeline.log.blocks[0]
+        timeline.set_log(timeline.log.scaled_block_duration(0, first.duration + 1), keep_view=True)
+        assert timeline.selected_block == 1
+        timeline.set_log(make_log())  # a fresh trace forgets the selection
+        assert timeline.selected_block is None

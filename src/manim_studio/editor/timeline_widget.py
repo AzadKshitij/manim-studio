@@ -95,6 +95,7 @@ class TimelineWidget(QWidget):
     blockExportRangeRequested = Signal(int)
     blockResetTimingRequested = Signal(int)
     blockStillRequested = Signal(int)
+    blockSelected = Signal(object)  # clicked block index, or None when cleared
     blockDeleteRequested = Signal(int)  # remove the block's call from the scene
     blockIterationEditRequested = Signal(int)  # retime only this loop iteration
     undoRequested = Signal()
@@ -108,6 +109,7 @@ class TimelineWidget(QWidget):
         self._playing = False
         self._hover_index: int | None = None
         self._active_index: int | None = None  # block under the editor caret
+        self._selected_index: int | None = None  # block the user clicked
         self._snapping = True
         self._fps = 1.0 / FRAME_STEP
         self._range: tuple[float, float] | None = None  # loop / export range
@@ -218,6 +220,19 @@ class TimelineWidget(QWidget):
                 if block.start + clip.start <= time <= block.start + clip.start + clip.duration:
                     return block, clip
         return None
+
+    @property
+    def selected_block(self) -> int | None:
+        """The block the user clicked (the target of toolbar operations), or ``None``."""
+        return self._selected_index
+
+    def set_selected_block(self, index: int | None) -> None:
+        """Select a block (or clear the selection) without emitting ``blockSelected``."""
+        if index is not None and self._log.block_by_index(index) is None:
+            index = None
+        if index != self._selected_index:
+            self._selected_index = index
+            self.update()
 
     def set_active_block(self, index: int | None) -> None:
         """Highlight the block the editor caret currently sits in (or clear it)."""
@@ -358,6 +373,10 @@ class TimelineWidget(QWidget):
         self._playhead = min(self._playhead, log.total_duration)
         self._hover_index = None
         self._active_index = None
+        if not keep_view or (
+            self._selected_index is not None and log.block_by_index(self._selected_index) is None
+        ):
+            self._selected_index = None
         self._range = None
         if self._mode == "resize":
             self._mode = None
@@ -703,6 +722,15 @@ class TimelineWidget(QWidget):
                 self.blockResized.emit(index, duration)
         elif was == "scrub" and press is not None:
             self._request_scrub(event.position().x())
+            release = event.position().toPoint()
+            clicked = (release - press).manhattanLength() <= CLICK_SLOP_PX
+            if clicked and press.y() > RULER_HEIGHT:
+                block = self._log.block_at(self._view.x_to_time(press.x()))
+                picked = None if block is None else block.index
+                if picked != self._selected_index:
+                    self._selected_index = picked
+                    self.update()
+                self.blockSelected.emit(picked)
         event.accept()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
@@ -799,10 +827,31 @@ class TimelineWidget(QWidget):
                     current=block.index == current,
                     active=block.index == self._active_index,
                 )
+            self._draw_selection(painter, display, track_top, track_height)
             self._draw_lanes(painter, display, metrics)
         self._draw_range(painter, width, height)
         self._draw_playhead(painter, height)
         painter.end()
+
+    def _draw_selection(
+        self, painter: QPainter, display: TimelineLog, track_top: float, track_height: float
+    ) -> None:
+        """A bold outline around the selected block (distinct from hover and the caret)."""
+        if self._selected_index is None:
+            return
+        block = display.block_by_index(self._selected_index)
+        if block is None:
+            return
+        left = self._view.time_to_x(block.start)
+        right = self._view.time_to_x(block.end)
+        if right < 0 or left > self.width():
+            return
+        rect = QRectF(left + 1, track_top + 4, max(2.0, right - left - 2), track_height - 8)
+        pen = QPen(QColor(0xFF, 0xFF, 0xFF))
+        pen.setWidthF(2.5)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 5, 5)
 
     def _draw_lanes(self, painter: QPainter, display: TimelineLog, metrics: QFontMetrics) -> None:
         """One thin row per animated mobject, with a bar per animation of each block."""

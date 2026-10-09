@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QSlider,
     QSplitter,
     QStatusBar,
@@ -37,6 +36,7 @@ from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
 from manim_studio.editor.file_watcher import FileWatcher
+from manim_studio.editor.glyphs import glyph, icon_button
 from manim_studio.editor.icon import load_icon
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
@@ -157,6 +157,7 @@ class MainWindow(QMainWindow):
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         self.transport_bar = TimelineTransport(self)
+        self._edits_label = self.transport_bar.edits_label
         bottom_layout.addWidget(self.transport_bar)
         bottom_layout.addWidget(self.timeline)
         self._inspector = QLabel("", self)
@@ -174,7 +175,7 @@ class MainWindow(QMainWindow):
         self._scrub_position = QLabel("—", self)
         scrub_row = QHBoxLayout()
         scrub_row.setContentsMargins(6, 0, 6, 4)
-        self._render_preview_button = QPushButton("Render preview video", self)
+        self._render_preview_button = icon_button("render", "Render preview video  (Ctrl+R)", self)
         scrub_row.addWidget(self._render_preview_button)
         scrub_row.addWidget(self._scrub_slider, 1)
         scrub_row.addWidget(self._scrub_position)
@@ -289,11 +290,12 @@ class MainWindow(QMainWindow):
         self._scene_combo.setMinimumWidth(140)
         toolbar.addWidget(self._scene_combo)
         toolbar.addSeparator()
-        self._add_toolbar_action(toolbar, "Reload", self.reload_preview)
-        self._add_toolbar_action(toolbar, "Play", self.request_play)
-        self._add_toolbar_action(toolbar, "Stop", self.request_stop)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._add_toolbar_action(toolbar, "Reload", self.reload_preview, "reload")
+        self._add_toolbar_action(toolbar, "Play", self.request_play, "play")
+        self._add_toolbar_action(toolbar, "Stop", self.request_stop, "stop")
         toolbar.addSeparator()
-        self._add_toolbar_action(toolbar, "Render preview", self.render_preview_video)
+        self._add_toolbar_action(toolbar, "Render preview", self.render_preview_video, "render")
 
     def _build_shell_dock(self) -> None:
         self.shell = ShellPanel(self)
@@ -307,14 +309,7 @@ class MainWindow(QMainWindow):
         self._mem_label = QLabel("cache: —")
         self._mem_label.setToolTip("Filmstrip cache RAM and process memory (Help > App stats…)")
         self._latex_label = QLabel("")
-        self._edits_label = QLabel("")
-        self._edits_label.setToolTip(
-            "Timeline edits live in a sidecar file next to the scene, not in the source.\n"
-            "Timeline > Apply timeline edits to source writes them into the code."
-        )
-        self._edits_label.setVisible(False)
         self._cursor_label = QLabel("Ln 1, Col 1")
-        bar.addPermanentWidget(self._edits_label)
         bar.addPermanentWidget(self._cursor_label)
         bar.addPermanentWidget(self._latex_label)
         bar.addPermanentWidget(self._mem_label)
@@ -370,6 +365,8 @@ class MainWindow(QMainWindow):
         self.timeline.undoRequested.connect(self._undo_timing)
         self.timeline.redoRequested.connect(self._redo_timing)
         self.transport_bar.playPauseRequested.connect(self._toggle_play)
+        self.transport_bar.editRequested.connect(self._on_transport_edit)
+        self.timeline.blockSelected.connect(self._on_block_selected)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
         self.transport_bar.jumpRequested.connect(self._on_transport_jump)
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
@@ -436,8 +433,13 @@ class MainWindow(QMainWindow):
         menu.addAction(action)
         return action
 
-    def _add_toolbar_action(self, toolbar: QToolBar, text: str, slot: Any) -> QAction:
+    def _add_toolbar_action(
+        self, toolbar: QToolBar, text: str, slot: Any, glyph_name: str | None = None
+    ) -> QAction:
         action = QAction(text, self)
+        if glyph_name is not None:
+            action.setIcon(glyph(glyph_name))
+        action.setToolTip(text)
         action.triggered.connect(lambda checked=False: slot())
         toolbar.addAction(action)
         self._toolbar_actions[text] = action
@@ -1064,12 +1066,64 @@ class MainWindow(QMainWindow):
                 action.setEnabled(state)
         self._refresh_inspector()
 
+    def selected_block_index(self) -> int | None:
+        """The block toolbar operations act on: clicked, else caret, else playhead."""
+        index = self.timeline.selected_block
+        if index is None:
+            index = self.timeline.active_block
+        if index is None:
+            index = self.timeline.log.index_at(self.timeline.playhead_time)
+        return index
+
+    def _refresh_edit_buttons(self) -> None:
+        """Enable only the timeline operations that apply right now."""
+        index = self.selected_block_index()
+        running = self._path is not None and self.controller.is_running
+        editable = running and index is not None and self.patches.block_ref(index) is not None
+        self.transport_bar.set_edit_state(
+            {
+                "undo": self.patches.can_undo,
+                "redo": self.patches.can_redo,
+                "delete": editable,
+                "reset": index is not None and self.patches.block_is_edited(index),
+                "hold": running and not self.timeline.log.is_empty,
+                "apply": self.patches.edit_count > 0,
+                "diff": self.patches.edit_count > 0,
+                "discard_orphans": self.patches.orphan_count > 0,
+                "discard_all": self.patches.edit_count > 0,
+            }
+        )
+
+    def _on_transport_edit(self, action_id: str) -> None:
+        """A timeline-operation button was pressed."""
+        index = self.selected_block_index()
+        if action_id == "undo":
+            self._undo_timing()
+        elif action_id == "redo":
+            self._redo_timing()
+        elif action_id == "delete" and index is not None:
+            self._delete_block(index)
+        elif action_id == "reset" and index is not None:
+            self._reset_block_timing(index)
+        elif action_id == "hold":
+            self.insert_hold_at_playhead()
+        elif action_id == "apply":
+            self.apply_edits_to_source()
+        elif action_id == "diff":
+            self.show_edits_diff()
+        elif action_id == "discard_orphans":
+            self.discard_orphaned_edits()
+        elif action_id == "discard_all":
+            self.discard_all_edits()
+
+    def _on_block_selected(self, index: object) -> None:
+        """A block was clicked on the timeline (``None`` = clicked empty space)."""
+        self._refresh_inspector()
+
     def inspector_text(self) -> str:
         """Details of the selected block: caret block, else the one under the playhead."""
         log = self.timeline.log
-        index = self.timeline.active_block
-        if index is None:
-            index = log.index_at(self.timeline.playhead_time)
+        index = self.selected_block_index()
         block = None if index is None else log.block_by_index(index)
         if block is None:
             return ""
@@ -1089,6 +1143,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_inspector(self) -> None:
         self._inspector.setText(self.inspector_text())
+        self._refresh_edit_buttons()
 
     def apply_edits_to_source(self) -> None:
         """Write the timeline edits into the scene file (one undoable editor edit)."""
