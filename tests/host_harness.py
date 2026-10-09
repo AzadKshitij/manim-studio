@@ -47,6 +47,8 @@ class HostPeer:
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self.frames: queue.Queue[Frame] = queue.Queue()
         self.seen: list[dict[str, Any]] = []
+        #: ``time.monotonic()`` at which each frame was parsed, for fps statistics.
+        self.frame_times: list[float] = []
         self._threads: list[threading.Thread] = []
 
     def accept_control(self, timeout: float = 60.0) -> dict[str, Any]:
@@ -92,6 +94,7 @@ class HostPeer:
                 if not data:
                     return
                 for frame in parser.feed(data):
+                    self.frame_times.append(time.monotonic())
                     self.frames.put(frame)
         except OSError:
             return

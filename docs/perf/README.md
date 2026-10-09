@@ -209,3 +209,20 @@ Load itself (`load_timings.total`, ~0.12–0.14 s) is unchanged; this change tar
 crawl only. The showcase is a small, light scene (24 blocks), so the saving is the
 floor: replay cost grows with the Python/mobject work before each block, and the old
 crawler paid it once per block.
+
+### R0 — real-time fps metric (30 fps target) (2026-10-09, branch `rendering`)
+
+`tests/test_perf.py -m gl` now reports a `realtime` block (`docs/perf/baseline-realtime.json`)
+for real-time playback of the showcase at 720p, judged against 30 fps:
+
+- `effective_fps` = 30 × scene seconds / wall seconds — the rate the scene itself plays
+  at. This is the headline: the host skips frames identical to the previous one during
+  static waits, so *delivered* `fps` understates what the viewer sees.
+- `start_latency_ms` (PLAY → first frame), `p5_fps`, frame-interval p50/p95/max.
+- `sustains_realtime`: effective fps ≥ 95% of target **and** no frame gap ≥ 2 frame times.
+
+Baseline on `feature_showcase` (two runs): **27.5–27.7 effective fps** (play ratio
+1.08–1.09, i.e. ~8% slower than real time), start latency ~72–75 ms, steady interval
+p50 ≈ 33.5 ms, and one **~245 ms hitch** every run, so `sustains_realtime` is false.
+The hitch is the target for later work (suspect: construct-time mobject/LaTeX
+creation inside a play block).

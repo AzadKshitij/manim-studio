@@ -155,6 +155,7 @@ class TestEndToEndBenchmark:
             # duration.  A blocking encode on the GL thread pushes this above 1.0.
             _drain_frames(peer)
             play_started = time.monotonic()
+            frames_before_play = len(peer.frame_times)
             peer.send(Command.PLAY, **{"from": 0})
             stopped: dict[str, Any] | None = None
             deadline = play_started + 300
@@ -172,6 +173,18 @@ class TestEndToEndBenchmark:
                 peer.seen.append(event)
             play_seconds = time.monotonic() - play_started
 
+            play_times = peer.frame_times[frames_before_play:]
+            # The first frame marks play-start latency (scene rebuild up to the start
+            # block); steady-state fps and hitches are judged on the frames after it.
+            realtime = benchmark.realtime_fps_stats(
+                play_times[1:],
+                target_fps=benchmark.REALTIME_FPS,
+                scene_seconds=total_duration,
+                wall_seconds=play_seconds,
+            )
+            realtime["start_latency_ms"] = (
+                round((play_times[0] - play_started) * 1000.0, 1) if play_times else None
+            )
             peer.send(Command.STATS)
             stats_event = peer.wait_event(
                 lambda event: event.get("event") == Event.STATS, timeout=60
@@ -181,6 +194,7 @@ class TestEndToEndBenchmark:
                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "machine": benchmark.machine_info(),
                 "frame": {"width": WIDTH, "height": HEIGHT, "bytes": WIDTH * HEIGHT * 4},
+                "realtime": realtime,
                 "end_to_end": {
                     "trace_seconds": round(trace_seconds, 3),
                     "crawl_frames": crawl_frames,

@@ -14,6 +14,7 @@ still pulls in no third-party code at load time.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import platform
@@ -27,9 +28,10 @@ from typing import TYPE_CHECKING, Any
 from manim_studio import ipc
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 __all__ = [
+    "REALTIME_FPS",
     "bench_codecs",
     "bench_editor_frame",
     "bench_parser",
@@ -37,6 +39,7 @@ __all__ = [
     "format_report",
     "machine_info",
     "median_seconds",
+    "realtime_fps_stats",
     "write_report",
 ]
 
@@ -186,6 +189,63 @@ def bench_editor_frame(
     }
 
 
+REALTIME_FPS = 30
+
+
+def realtime_fps_stats(
+    arrival_times: Sequence[float],
+    *,
+    target_fps: int = REALTIME_FPS,
+    scene_seconds: float | None = None,
+    wall_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Delivered-frame rate and smoothness from per-frame arrival timestamps (seconds).
+
+    ``fps`` is frames delivered per second over the span between the first and last
+    arrival; ``p5_fps`` is the instantaneous rate at the 95th-percentile frame
+    interval, i.e. what the viewer sees during the worst 1-in-20 hitch.  A stream
+    ``sustains_realtime`` when it averages at least 95% of ``target_fps`` and the
+    worst-case hitch stays under two target frame intervals.
+
+    The host deliberately skips frames identical to the previous one (static waits),
+    so delivered ``fps`` understates what the viewer sees.  When ``scene_seconds``
+    (scripted duration) and ``wall_seconds`` (time the playback took) are given,
+    ``effective_fps`` = ``target_fps`` x scene/wall is the real-time rate of the
+    scene itself and is what ``sustains_realtime`` is judged on.
+    """
+    times = sorted(float(t) for t in arrival_times)
+    if len(times) < 2:
+        return {
+            "target_fps": target_fps,
+            "frames": len(times),
+            "fps": 0.0,
+            "effective_fps": 0.0,
+            "p5_fps": 0.0,
+            "interval_p50_ms": 0.0,
+            "interval_p95_ms": 0.0,
+            "interval_max_ms": 0.0,
+            "sustains_realtime": False,
+        }
+    intervals = sorted(b - a for a, b in itertools.pairwise(times))
+    span = times[-1] - times[0]
+    p95 = intervals[min(len(intervals) - 1, int(len(intervals) * 0.95))]
+    p50 = intervals[len(intervals) // 2]
+    fps = (len(times) - 1) / span if span > 0 else 0.0
+    budget = 1.0 / target_fps
+    effective = target_fps * scene_seconds / wall_seconds if scene_seconds and wall_seconds else fps
+    return {
+        "target_fps": target_fps,
+        "frames": len(times),
+        "fps": round(fps, 2),
+        "effective_fps": round(effective, 2),
+        "p5_fps": round(1.0 / p95, 2) if p95 > 0 else 0.0,
+        "interval_p50_ms": round(p50 * 1000.0, 2),
+        "interval_p95_ms": round(p95 * 1000.0, 2),
+        "interval_max_ms": round(intervals[-1] * 1000.0, 2),
+        "sustains_realtime": effective >= 0.95 * target_fps and intervals[-1] < 2.0 * budget,
+    }
+
+
 def machine_info() -> dict[str, Any]:
     """A few facts that make two report files comparable."""
     return {
@@ -245,6 +305,17 @@ def format_report(report: dict[str, Any]) -> str:
     if isinstance(end_to_end, dict):
         for name, value in sorted(end_to_end.items()):
             lines.append(f"e2e {name}: {value}")
+    realtime = report.get("realtime")
+    if isinstance(realtime, dict):
+        lines.append(
+            f"realtime: {realtime.get('effective_fps')} effective fps of "
+            f"{realtime.get('target_fps')} (delivered {realtime.get('fps')} fps, "
+            f"start latency {realtime.get('start_latency_ms')} ms, "
+            f"worst-5% {realtime.get('p5_fps')} fps, interval p50 "
+            f"{realtime.get('interval_p50_ms')} ms / p95 {realtime.get('interval_p95_ms')} ms / "
+            f"max {realtime.get('interval_max_ms')} ms) -> "
+            f"{'SUSTAINED' if realtime.get('sustains_realtime') else 'BELOW REALTIME'}"
+        )
     reload_report = report.get("reload")
     if isinstance(reload_report, dict):
         for name, entry in reload_report.items():
