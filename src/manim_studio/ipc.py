@@ -47,7 +47,7 @@ __all__ = [
     "hello_message",
 ]
 
-PROTOCOL_VERSION: Final = 4
+PROTOCOL_VERSION: Final = 5
 
 #: Refuse absurd frames (defensive upper bound: 4096x4096 RGBA).
 MAX_FRAME_PAYLOAD: Final = 4096 * 4096 * 4

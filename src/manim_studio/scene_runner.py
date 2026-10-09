@@ -41,6 +41,7 @@ __all__ = [
     "render_still",
     "run_trace",
     "select_scene_class",
+    "user_module_signature",
 ]
 
 DEFAULT_TRACE_RESOLUTION: tuple[int, int] = (854, 480)
@@ -330,6 +331,42 @@ def _reset_runtime_on_construct(module: Any, runtime: Any) -> None:
 
         functools.update_wrapper(construct, original)
         value.construct = construct  # type: ignore[attr-defined]
+
+
+def user_module_signature(scene_path: Path) -> tuple[tuple[str, int, int], ...]:
+    """Fingerprint of the user modules a loaded scene may depend on.
+
+    ``(path, mtime_ns, size)`` of every imported module that lives next to (or below)
+    the scene file, excluding the scene itself and any virtualenv/site-packages.  It is
+    how a reload notices an edited helper module that the scene file's own text cannot
+    reveal.  Call it *after* the scene module was imported.
+    """
+    try:
+        scene_file = scene_path.resolve()
+    except OSError:  # pragma: no cover - defensive
+        return ()
+    root = scene_file.parent
+    # Thousands of modules are loaded; reject almost all of them with a plain string
+    # prefix test before touching the filesystem (``Path.resolve`` is slow on Windows).
+    prefix = os.path.normcase(str(root))
+    found: list[tuple[str, int, int]] = []
+    for module in list(sys.modules.values()):
+        filename = module.__dict__.get("__file__") if hasattr(module, "__dict__") else None
+        if not isinstance(filename, str) or not filename.endswith(".py"):
+            continue
+        if not os.path.normcase(filename).startswith(prefix):
+            continue
+        try:
+            path = Path(filename).resolve()
+            if path == scene_file or not path.is_relative_to(root):
+                continue
+            if {"site-packages", ".venv", "venv", "__pycache__"} & set(path.parts):
+                continue
+            stat = path.stat()
+        except (OSError, ValueError):
+            continue
+        found.append((str(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(sorted(found))
 
 
 def load_scene_module(

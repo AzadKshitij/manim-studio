@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from manim_studio.timeline_model import TimelineBlock
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 
     from manim_studio.filmstrip import Filmstrip
     from manim_studio.stats import TimingStats
@@ -586,6 +586,7 @@ class FilmstripCrawler:
         frame_budget: int = 6,
         timings: TimingStats | None = None,
         start_time: float = 0.0,
+        cached_blocks: Collection[int] = (),
     ) -> None:
         self._engine = engine
         self._filmstrip = filmstrip
@@ -595,20 +596,25 @@ class FilmstripCrawler:
         self.frame_budget = max(1, int(frame_budget))
         self._blocks = tuple(engine._blocks)
         self._start_time = float(start_time)
-        #: Indices of blocks whose frames are all cached.
-        self._cached: set[int] = set()
+        #: Indices of blocks whose frames are all cached (carried over from a reload or
+        #: completed by this crawl).
+        self._cached: set[int] = set(cached_blocks)
         self._head: TimelineBlock | None = self._nearest_head(self._start_time)
         self._stream: Iterator[tuple[TimelineBlock, int]] | None = None
         #: Block being rendered and the next frame to render within it.
         self._cur_block: TimelineBlock | None = None
-        self._done_duration = 0.0
+        self._done_duration = sum(b.duration for b in self._blocks if b.index in self._cached)
         self._frame = 0
-        self._frames = 0
+        self._frames = filmstrip.frames
         self._done = False
         self._capped = False
         #: Seconds from construction until the playhead's block was cached.
         self._t0 = time_module.perf_counter()
-        self.seconds_to_playhead: float | None = None
+        self.seconds_to_playhead: float | None = (
+            0.0
+            if any(self._is_playhead_block(b) for b in self._blocks if b.index in self._cached)
+            else None
+        )
 
     # ------------------------------------------------------------------
 
@@ -623,6 +629,11 @@ class FilmstripCrawler:
     @property
     def frames(self) -> int:
         return self._frames
+
+    @property
+    def cached_blocks(self) -> frozenset[int]:
+        """Blocks whose frames are fully cached (reused from before or crawled)."""
+        return frozenset(self._cached)
 
     @property
     def progress(self) -> float:
@@ -651,6 +662,9 @@ class FilmstripCrawler:
         """Render up to :attr:`frame_budget` frames; returns the number rendered."""
         rendered = 0
         while rendered < self.frame_budget and not self._done:
+            if self._stream is None and self._head is None and not self._has_pending():
+                self._finish()  # everything was reused: no need to replay the scene at all
+                break
             if self._head is not None:
                 rendered += self._step_head(self._head)
                 continue
@@ -672,6 +686,9 @@ class FilmstripCrawler:
         return rendered
 
     # ------------------------------------------------------------------
+
+    def _has_pending(self) -> bool:
+        return any(b.duration > 0 and b.index not in self._cached for b in self._blocks)
 
     def _wanted(self, block: TimelineBlock) -> bool:
         return block.index not in self._cached

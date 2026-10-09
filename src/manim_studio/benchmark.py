@@ -323,8 +323,10 @@ def format_report(report: dict[str, Any]) -> str:
                 continue
             phases = entry.get("load_timings") or {}
             detail = " ".join(f"{key}={value}" for key, value in phases.items())
+            reuse = entry.get("reuse") or {}
+            reused = f" reused {reuse.get('blocks')}/{reuse.get('total')} blocks" if reuse else ""
             lines.append(
                 f"reload {name}: log {entry.get('reload_to_log_s')}s, "
-                f"crawl done {entry.get('reload_to_crawl_done_s')}s [{detail}]"
+                f"crawl done {entry.get('reload_to_crawl_done_s')}s{reused} [{detail}]"
             )
     return "\n".join(lines)

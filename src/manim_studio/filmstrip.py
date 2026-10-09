@@ -12,6 +12,10 @@ This module is pure stdlib so the eviction policy can be unit-tested anywhere.
 from __future__ import annotations
 
 from collections import OrderedDict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 __all__ = ["DEFAULT_MAX_BYTES", "DEFAULT_MAX_FRAMES", "Filmstrip"]
 
@@ -83,6 +87,25 @@ class Filmstrip:
                 if blob is not None:
                     return blob
         return None
+
+    def has_range(self, start: int, stop: int) -> bool:
+        """True when every frame index in ``[start, stop)`` is cached (no LRU refresh)."""
+        return all(index in self._frames for index in range(start, stop))
+
+    def retain(self, ranges: Iterable[tuple[int, int]]) -> int:
+        """Drop every frame outside the half-open ``(start, stop)`` ranges.
+
+        Used on reload to keep the frames of blocks an edit did not touch.  Returns
+        how many frames were kept.
+        """
+        spans = sorted(ranges)
+        kept: OrderedDict[int, bytes] = OrderedDict()
+        for index, blob in self._frames.items():
+            if any(start <= index < stop for start, stop in spans):
+                kept[index] = blob
+        self._frames = kept
+        self._bytes = sum(len(blob) for blob in kept.values())
+        return len(kept)
 
     def clear(self) -> None:
         self._frames.clear()

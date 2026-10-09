@@ -184,3 +184,44 @@ class TestPlayheadFirst:
         _, crawler = _crawler(start_time=0.0)
         _run(crawler)
         assert crawler.seconds_to_playhead is not None
+
+
+class TestCarriedOverBlocks:
+    def _carry(self, cached: set[int], *, start_time: float = 0.0, frame_budget: int = 1000):
+        engine = _StubEngine(BLOCKS)
+        strip = Filmstrip()
+        for index in cached:
+            strip.put(index, b"x")  # stand-in for the carried-over frames
+        crawler = scrub.FilmstripCrawler(
+            engine,
+            strip,
+            FPS,
+            start_time=start_time,
+            frame_budget=frame_budget,
+            cached_blocks=cached,
+        )
+        return engine, crawler
+
+    def test_only_uncached_blocks_are_streamed(self) -> None:
+        engine, crawler = self._carry({0, 1})
+        _run(crawler)
+        assert _blocks_streamed(engine) == [2, 3]
+        assert crawler.cached_blocks == {0, 1, 2, 3}
+
+    def test_fully_cached_scene_never_replays(self) -> None:
+        engine, crawler = self._carry({0, 1, 2, 3})
+        _run(crawler)
+        assert engine.streams == 0 and engine.poses == []
+        assert crawler.done and crawler.progress == pytest.approx(1.0)
+
+    def test_progress_starts_at_the_cached_share(self) -> None:
+        _, crawler = self._carry({0, 1})
+        assert crawler.progress == pytest.approx(0.5)
+
+    def test_playhead_block_already_cached_costs_zero_seconds(self) -> None:
+        _, crawler = self._carry({3}, start_time=3.5)
+        assert crawler.seconds_to_playhead == 0.0
+
+    def test_reported_frames_include_the_carried_ones(self) -> None:
+        _, crawler = self._carry({0, 1})
+        assert crawler.frames == 2

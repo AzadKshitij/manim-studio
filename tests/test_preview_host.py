@@ -726,7 +726,7 @@ class TestFilmstripCrawlerInProcess:
         "        self.play(Transform(first, second))\n"
     )
 
-    def test_crawl_fills_cache_and_reload_invalidates(self) -> None:
+    def test_crawl_fills_cache_and_unchanged_reload_keeps_it(self) -> None:
         from manim_studio.preview_host import HostConfig, SceneHost
 
         host = SceneHost(HostConfig(scene_path=SCENE_FILE, embedded=True, size=(320, 180)))
@@ -755,10 +755,147 @@ class TestFilmstripCrawlerInProcess:
             assert 0 < _content_pixels(partial) < _content_pixels(complete)
             assert partial.width == 320 and partial.height == 180
 
-            # Reloading replaces the cache immediately (freshness guarantee).
+            # An unchanged reload keeps every cached block (the code that produced
+            # the frames did not change) and needs no new crawl to finish.
+            frames_before = strip.frames
             host.load()
-            assert host._filmstrip is not None and host._filmstrip.is_empty
+            assert host._filmstrip is not None and host._filmstrip.frames > 0
+            assert host._filmstrip.frames <= frames_before
             assert host._crawler is None
+            assert host._reused_blocks
+        finally:
+            host._shutdown()
+
+    # ---- incremental reuse across reloads ---------------------------------------
+
+    @staticmethod
+    def _crawl(host: Any) -> None:
+        host._ensure_crawler()
+        assert host._crawler is not None
+        for _ in range(5000):
+            if host._crawler.done:
+                return
+            host._crawler.step()
+        raise AssertionError("crawl did not finish")
+
+    @staticmethod
+    def _host(scene: Path) -> Any:
+        from manim_studio.preview_host import HostConfig, SceneHost
+
+        host = SceneHost(HostConfig(scene_path=scene, embedded=True, size=(320, 180)))
+        host._create_window()
+        host.frame_pump = _NullPump()
+        return host
+
+    @staticmethod
+    def _snapshot(host: Any) -> dict[int, Any]:
+        import numpy as np
+
+        strip = host._filmstrip
+        assert strip is not None
+        return {
+            index: np.frombuffer(_frame_from_blob(blob).rgba, dtype=np.uint8)
+            for index in range(7200)
+            if (blob := strip.get(index)) is not None
+        }
+
+    def test_editing_the_last_block_reuses_everything_before_it(self, tmp_path: Path) -> None:
+        import numpy as np
+
+        scene = tmp_path / "scene.py"
+        text = SCENE_FILE.read_text(encoding="utf-8")
+        scene.write_text(text, encoding="utf-8")
+        host = self._host(scene)
+        try:
+            host.load()
+            self._crawl(host)
+            total_frames = host._filmstrip.frames
+
+            edited = text.replace(
+                "self.play(FadeOut(title), run_time=0.2)",
+                "self.play(FadeOut(title), run_time=0.25)",
+            )
+            assert edited != text
+            scene.write_text(edited, encoding="utf-8")
+            host.load()
+
+            fade = [b for b in host.blocks if b.name.startswith("FadeOut")][-1]  # the edited one
+            reused = host._reused_blocks
+            assert reused and max(reused) < fade.index
+            assert 0 < host._filmstrip.frames < total_frames
+            self._crawl(host)
+            incremental = self._snapshot(host)
+
+            # Ground truth: the same edit crawled from scratch must give the same frames.
+            host._fresh_next = True
+            host.load()
+            assert host._filmstrip.is_empty and not host._reused_blocks
+            self._crawl(host)
+            fresh = self._snapshot(host)
+            assert incremental.keys() == fresh.keys()
+            worst = max(
+                float(np.abs(incremental[i].astype(int) - fresh[i].astype(int)).mean())
+                for i in fresh
+            )
+            assert worst < 1.0, f"reused frames drift from a fresh crawl (mean abs diff {worst})"
+        finally:
+            host._shutdown()
+
+    def test_editing_before_the_first_block_reuses_nothing(self, tmp_path: Path) -> None:
+        scene = tmp_path / "scene.py"
+        text = SCENE_FILE.read_text(encoding="utf-8")
+        scene.write_text(text, encoding="utf-8")
+        host = self._host(scene)
+        try:
+            host.load()
+            self._crawl(host)
+            scene.write_text(text.replace("radius=1.1", "radius=1.3"), encoding="utf-8")
+            host.load()
+            assert host._filmstrip.is_empty and not host._reused_blocks
+        finally:
+            host._shutdown()
+
+    def test_fresh_reload_discards_the_cache(self, tmp_path: Path) -> None:
+        scene = tmp_path / "scene.py"
+        scene.write_text(SCENE_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+        host = self._host(scene)
+        try:
+            host.load()
+            self._crawl(host)
+            host._fresh_next = True
+            host.load()
+            assert host._filmstrip.is_empty and not host._reused_blocks
+            assert host._fresh_next is False  # one-shot
+        finally:
+            host._shutdown()
+
+    def test_editing_an_imported_helper_module_reuses_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.syspath_prepend(str(tmp_path))
+        helper = tmp_path / "reuse_helper_mod.py"
+        helper.write_text("SIZE = 1.0\n", encoding="utf-8")
+        scene = tmp_path / "scene.py"
+        scene.write_text(
+            "from manimlib import *\n"
+            "from reuse_helper_mod import SIZE\n\n\n"
+            "class Probe(Scene):\n"
+            "    def construct(self):\n"
+            "        circle = Circle(radius=SIZE)\n"
+            "        self.play(ShowCreation(circle), run_time=0.3)\n"
+            "        self.wait(0.2)\n",
+            encoding="utf-8",
+        )
+        host = self._host(scene)
+        try:
+            host.load()
+            self._crawl(host)
+            host.load()  # nothing changed: cache survives
+            assert host._reused_blocks
+            self._crawl(host)
+            helper.write_text("SIZE = 2.0  # edited\n", encoding="utf-8")
+            host.load()
+            assert host._filmstrip.is_empty and not host._reused_blocks
         finally:
             host._shutdown()
 

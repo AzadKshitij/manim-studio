@@ -1,4 +1,4 @@
-# Preview protocol (v4)
+# Preview protocol (v5)
 
 The editor (Qt) and the preview host (`manim_studio.preview_host`) communicate over
 loopback TCP. The editor listens; the host connects back to the port passed on argv.
@@ -12,7 +12,7 @@ The editor accepts two connections per host process. Every connection starts wit
 `hello` message that declares its channel:
 
 ```json
-{"event": "hello", "channel": "control", "protocol": 4, "role": "host",
+{"event": "hello", "channel": "control", "protocol": 5, "role": "host",
  "pid": 1234, "scene": "C:/path/scene.py", "scene_name": "Demo",
  "embedded": true, "size": [1280, 720], "fps": 30}
 ```
@@ -29,7 +29,7 @@ The frames channel is only opened in `--embedded` mode.
 | `cmd` | Fields | Meaning |
 | --- | --- | --- |
 | `load` | `path`, `scene_name?`, `patches?` | import and trace a (new) scene file, show the initial frame; `patches` (v4) replaces the timeline edits the scene runs with |
-| `reload` | `path?`, `patches?` | re-import the current file (deep-reloads user imports); omitted `patches` keeps the current set |
+| `reload` | `path?`, `patches?`, `fresh?` | re-import the current file (deep-reloads user imports); omitted `patches` keeps the current set; `fresh` (v5, also accepted by `load`) discards the cached frames instead of reusing the blocks an edit did not touch |
 | `play` | `from?` (block index, default 0), `to?` (inclusive end block), `rate?` (speed, default 1.0) | replay in real time from a block; `to` bounds it to a range (looping) and `rate` is a review-speed multiplier (v3, additive) |
 | `stop` | — | interrupt playback at the current frame |
 | `seek` | `index` | jump to the state at the *end* of block `index` |
@@ -44,7 +44,7 @@ The frames channel is only opened in `--embedded` mode.
 
 | `event` | Fields | Meaning |
 | --- | --- | --- |
-| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps`, `call_sites[]`, `sites[]`, `clips[]`, `patches{}`, `cause` | runtime trace finished; `cause` is `"load"` or `"patches"` (a reload that only applied timeline edits, so the editor keeps zoom and playhead) |
+| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps`, `call_sites[]`, `sites[]`, `clips[]`, `patches{}`, `load_timings{}`, `reuse{}`, `cause` | runtime trace finished; `cause` is `"load"` or `"patches"` (a reload that only applied timeline edits, so the editor keeps zoom and playhead) |
 | `status` | `state` (`idle`/`playing`/`seeking`/`error`/`closed`), `index?`, `note?` | lifecycle |
 | `tick` | `time`, `index`, `scrubbing?`, `cached?` | playhead update during playback/scrub (≤20 Hz) |
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |
@@ -53,6 +53,14 @@ The frames channel is only opened in `--embedded` mode.
 | `filmstrip` | `trace_id`, `frames`, `done`, `capped`, `fps`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `deduped`, `time_to_playhead?`, `timings` | background frame-cache progress with RAM accounting (v2 fields additive; older editors ignore them) |
 | `stats` | `trace_id`, `frames`, `bytes`, `max_bytes`, `max_frames`, `host_rss?`, `sent`, `dropped`, `deduped`, `fps`, `blocks`, `total_duration`, `size`, `scene_name?`, `timings` | on-demand snapshot for the App stats dialog (v2) |
 | `pong` | `t` | reply to `ping` |
+
+`log.load_timings` (v5) is the host-side cost of that load in seconds: `check`, `patch`,
+`import`, `signature`, `trace`, `initial_scene`, `commit`, `total`.
+
+`log.reuse` (v5) reports how much of the filmstrip survived the reload:
+`{"blocks": int, "total": int, "frames": int, "reason": str}` - cached blocks whose frames are
+still exact (see ADR 0009), the block count, the frames kept, and why the rest were dropped
+(`"edit at line N"`, `"edit outside construct()"`, ...). Additive: older editors ignore it.
 
 `log.blocks` is the spec `log.json` shape:
 `[{ "name": str, "start": float, "duration": float, "index": int }, ...]`.

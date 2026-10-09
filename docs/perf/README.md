@@ -226,3 +226,28 @@ Baseline on `feature_showcase` (two runs): **27.5–27.7 effective fps** (play r
 p50 ≈ 33.5 ms, and one **~245 ms hitch** every run, so `sustains_realtime` is false.
 The hitch is the target for later work (suspect: construct-time mobject/LaTeX
 creation inside a play block).
+
+### R2 — reuse unchanged blocks across reloads (2026-10-09, branch `rendering`)
+
+On reload the filmstrip now keeps the frames of blocks the edit cannot influence
+(`reuse.plan_reuse`, ADR 0009) instead of re-crawling the whole scene. Measured as
+**reload command → filmstrip complete**, `feature_showcase` 720p, old and new code
+alternated back to back on the same (noisy) machine, two rounds each
+(`tests/test_perf.py -m gl -k Reload`, `docs/perf/after-reuse.json`):
+
+| edit | blocks reused | before (single-pass, no reuse) | after |
+| --- | --- | --- | --- |
+| retime the last block | 12 / 15 | 1.41–1.52 s | **0.76 s** (-50%) |
+| edit a middle block | 5 / 15 | 1.41–1.51 s | **1.13 s** (-22%) |
+| edit a non-play line mid-scene | 6 / 15 | 1.47–1.66 s | **1.10 s** (-27%) |
+
+The saving is proportional to how much of the scene sits *before* the edit. The load
+itself (trace + initial scene, ~0.25–0.33 s here) is unchanged, and the not-yet-reused
+tail is still crawled by replaying `construct()` once in skip mode through the cached
+prefix, which is the next target. Absolute times are higher than R1's because the
+machine was busier; only the old/new pairs within one round are comparable.
+
+Pitfall caught by measuring: the first version of the user-module fingerprint resolved
+a path for every loaded module and added ~0.8 s to every load. It now rejects modules
+by string prefix before touching the filesystem (~4 ms), reported as
+`load_timings.signature`.

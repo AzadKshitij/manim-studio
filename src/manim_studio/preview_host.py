@@ -42,6 +42,7 @@ from manim_studio.ipc import (
 )
 from manim_studio.patch_runtime import StudioRuntime
 from manim_studio.patches import Patch, PatchedSites, PatchError, apply_patches, parse_patch
+from manim_studio.reuse import NO_REUSE, ReusePlan, RunSnapshot, plan_reuse
 from manim_studio.scene_runner import (
     SceneLoadError,
     check_scene_file,
@@ -51,6 +52,7 @@ from manim_studio.scene_runner import (
     manimlib_argv_guard,
     run_construct,
     select_scene_class,
+    user_module_signature,
 )
 from manim_studio.scrub import (
     FilmstripCrawler,
@@ -288,6 +290,11 @@ class SceneHost:
         self._crawler: FilmstripCrawler | None = None
         self._crawler_engine: ScrubEngine | None = None
         self._crawl_disabled = False
+        #: The executed run the current filmstrip belongs to, and which of its blocks the
+        #: filmstrip holds before the crawler exists (carried over from the last reload).
+        self._run: RunSnapshot | None = None
+        self._reused_blocks: frozenset[int] = frozenset()
+        self._fresh_next = False  # next load must not reuse cached frames
         self._trace_id = 0
         self._fps = 30
         # Where the editor's playhead is; the crawler fills the filmstrip
@@ -521,6 +528,8 @@ class SceneHost:
         )
         scene_class = select_scene_class(module, self.config.scene_name, path=scene_path)
         mark = lap("import", mark)
+        user_modules = user_module_signature(scene_path)
+        mark = lap("signature", mark)
 
         # ---- staged (failure-prone) phase: live state untouched -----------------
         snapshot, trace_seconds = self._trace_scene_class(
@@ -549,9 +558,28 @@ class SceneHost:
         self.events = snapshot.events
         self._fps = int(getattr(initial_scene.camera, "fps", 30)) or 30
         self._trace_id += 1
+        new_run = RunSnapshot(
+            text=patch_result.text,
+            scene_name=scene_class.__name__,
+            blocks=snapshot.blocks,
+            call_lines=self.call_lines,
+            sites=snapshot.block_sites,
+            signature=(tuple(self.config.size), self.config.fps, user_modules),
+        )
+        old_cached = self._crawler.cached_blocks if self._crawler else self._reused_blocks
+        old_strip = self._filmstrip
+        plan = NO_REUSE if self._fresh_next else plan_reuse(self._run, new_run, old_cached)
+        self._fresh_next = False
         self._dispose_scrub_engine()
         self._dispose_filmstrip()
-        self._filmstrip = Filmstrip()
+        self._filmstrip, self._reused_blocks = self._carry_filmstrip(old_strip, plan, new_run)
+        self._run = new_run
+        reuse_report = {
+            "blocks": len(self._reused_blocks),
+            "total": len(self.blocks),
+            "frames": self._filmstrip.frames,
+            "reason": plan.reason,
+        }
         self._crawl_disabled = False
         phases["commit"] = round(time.perf_counter() - mark, 4)
         phases["total"] = round(time.perf_counter() - load_started, 4)
@@ -576,6 +604,7 @@ class SceneHost:
             cause=cause,
             clips=[[clip.to_dict() for clip in clips] for clips in self.block_clips],
             load_timings=phases,
+            reuse=reuse_report,
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()
@@ -583,6 +612,28 @@ class SceneHost:
         self.push_current_frame()
         self.emit_status("idle", index=0)
         self._refresh_shell_namespace()
+
+    def _carry_filmstrip(
+        self, old: Filmstrip | None, plan: ReusePlan, run: RunSnapshot
+    ) -> tuple[Filmstrip, frozenset[int]]:
+        """Keep the frames of ``plan``'s blocks in the old filmstrip, else start empty.
+
+        A block owns the frame indices ``[round(start*fps), round(end*fps))``; its last
+        boundary frame is re-rendered as the next block's first.  Blocks whose frames
+        were partly evicted from the LRU are dropped from the plan.
+        """
+        if old is None or not plan.blocks:
+            return Filmstrip(), frozenset()
+        fps = self._fps
+        ranges: dict[int, tuple[int, int]] = {}
+        for index in plan.blocks:
+            block = run.blocks[index]
+            start = round(block.start * fps)
+            stop = max(round(block.end * fps), start + 1)
+            if old.has_range(start, stop):
+                ranges[index] = (start, stop)
+        old.retain(ranges.values())
+        return old, frozenset(ranges)
 
     @staticmethod
     def _site_resolver(
@@ -756,8 +807,13 @@ class SceneHost:
             on_progress=self._on_crawl_progress,
             timings=self.timings,
             start_time=self._playhead_hint,
+            cached_blocks=self._reused_blocks,
         )
-        self.log.info("filmstrip: crawl started (%d blocks)", len(self.blocks))
+        self.log.info(
+            "filmstrip: crawl started (%d blocks, %d reused)",
+            len(self.blocks),
+            len(self._reused_blocks),
+        )
 
     def _step_crawler(self) -> None:
         """Advance the crawl, never letting user-code errors kill the host."""
@@ -968,6 +1024,7 @@ class SceneHost:
                 # ``patches`` is authoritative when present; absent keeps what we had.
                 raw_patches = message.get("patches")
                 patches = None if raw_patches is None else self._parse_patches(raw_patches)
+                self._fresh_next = bool(message.get("fresh"))
                 self._load_with_patches(patches, Path(path) if path else None)
                 self.emit_status("idle", index=0)
             elif command == Command.QUIT:

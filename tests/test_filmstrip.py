@@ -88,3 +88,31 @@ class TestFilmstrip:
             Filmstrip(max_frames=0)
         with pytest.raises(ValueError):
             Filmstrip(max_bytes=0)
+
+
+class TestRetain:
+    def _strip(self) -> Filmstrip:
+        strip = Filmstrip()
+        for index in range(10):
+            strip.put(index, bytes([index]) * 4)
+        return strip
+
+    def test_keeps_only_the_given_half_open_ranges(self) -> None:
+        strip = self._strip()
+        assert strip.retain([(0, 3), (7, 9)]) == 5
+        assert [i for i in range(10) if strip.get(i) is not None] == [0, 1, 2, 7, 8]
+
+    def test_byte_accounting_follows_the_kept_frames(self) -> None:
+        strip = self._strip()
+        strip.retain([(2, 4)])
+        assert strip.byte_size == 8 and strip.frames == 2
+
+    def test_no_ranges_empties_the_cache(self) -> None:
+        strip = self._strip()
+        assert strip.retain([]) == 0 and strip.is_empty
+
+    def test_has_range(self) -> None:
+        strip = self._strip()
+        strip.retain([(0, 4)])
+        assert strip.has_range(0, 4) and not strip.has_range(0, 5)
+        assert strip.has_range(3, 3)  # empty range is trivially present

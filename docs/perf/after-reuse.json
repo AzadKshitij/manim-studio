@@ -1,0 +1,79 @@
+{
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-09T17:07:07",
+  "machine": {
+    "cpu_count": 16,
+    "platform": "Windows-11-10.0.26100-SP0",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "python": "3.13.2"
+  },
+  "reload": {
+    "edit_middle_block": {
+      "crawl_frames": 101,
+      "load_timings": {
+        "check": 0.0084,
+        "commit": 0.0102,
+        "import": 0.0052,
+        "initial_scene": 0.1397,
+        "patch": 0.0045,
+        "signature": 0.0038,
+        "total": 0.3265,
+        "trace": 0.1547
+      },
+      "reload_to_crawl_done_s": 1.185,
+      "reload_to_log_s": 0.33,
+      "reuse": {
+        "blocks": 5,
+        "frames": 35,
+        "reason": "edit at line 74",
+        "total": 15
+      }
+    },
+    "edit_non_play_line": {
+      "crawl_frames": 100,
+      "load_timings": {
+        "check": 0.0063,
+        "commit": 0.008,
+        "import": 0.0042,
+        "initial_scene": 0.1144,
+        "patch": 0.0029,
+        "signature": 0.0039,
+        "total": 0.2403,
+        "trace": 0.1006
+      },
+      "reload_to_crawl_done_s": 1.083,
+      "reload_to_log_s": 0.245,
+      "reuse": {
+        "blocks": 6,
+        "frames": 41,
+        "reason": "edit at line 79",
+        "total": 15
+      }
+    },
+    "retime_last_block": {
+      "crawl_frames": 95,
+      "load_timings": {
+        "check": 0.0068,
+        "commit": 0.0074,
+        "import": 0.0045,
+        "initial_scene": 0.1396,
+        "patch": 0.0041,
+        "signature": 0.0054,
+        "total": 0.2954,
+        "trace": 0.1276
+      },
+      "reload_to_crawl_done_s": 0.8,
+      "reload_to_log_s": 0.334,
+      "reuse": {
+        "blocks": 12,
+        "frames": 76,
+        "reason": "edit at line 113",
+        "total": 15
+      }
+    }
+  }
+}

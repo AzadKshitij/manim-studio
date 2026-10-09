@@ -283,6 +283,7 @@ class TestReloadBenchmark:
                     "reload_to_crawl_done_s": round(time.monotonic() - started, 3),
                     "crawl_frames": int(strip_event.get("frames") or 0),
                     "load_timings": log_event.get("load_timings", {}),
+                    "reuse": log_event.get("reuse", {}),
                 }
                 scene.write_text(text, encoding="utf-8")  # back to baseline for the next edit
                 peer.send(Command.RELOAD)
