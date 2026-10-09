@@ -142,6 +142,11 @@ The timeline is an editing surface, not just a view.
 - Errors: never bare `except:`. User-visible failures become a status line + log entry;
   the editor must stay alive when a scene crashes. Tracebacks from user scenes are
   parsed to `line`/`message` and shown as editor markers.
+- Layout: a plain `QLabel` asks its layout for the full width of its text, so a label
+  whose text comes from the scene, the trace or an error message must be an
+  `editor.elided_label.ElidedLabel`. A 2,000-character animation list once pushed the
+  window's minimum width to ~13,700 px; the window grew past the screen and the preview
+  panel ended up off screen (ADR-free fix: `block_inspector`, `preview_panel`).
 - Follow ManimGL naming conventions (`mobject`, `run_time`, `construct`, ...) in
   scene-facing code and templates.
 

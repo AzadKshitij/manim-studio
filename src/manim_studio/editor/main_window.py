@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from manim_studio import APP_NAME
 from manim_studio.editor import api_cache, scene_files
-from manim_studio.editor.block_inspector import BlockInfo, BlockInspector
+from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
 from manim_studio.editor.code_editor import CodeEditor
 from manim_studio.editor.completion_controller import CompletionController
 from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
@@ -1193,9 +1193,7 @@ class MainWindow(QMainWindow):
             name=block.name,
             duration=block.duration,
             line=self.events.call_line(index),
-            animations=", ".join(
-                f"{c.animation}({c.target}) {c.duration:.2f}s" for c in self.events.clips(index)
-            ),
+            animations=describe_clips(self.events.clips(index)),
             loops=self.patches.iteration_count(index),
             edited=self.patches.block_is_edited(index),
             duration_kind=self.patches.duration_kind(index),

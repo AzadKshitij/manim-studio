@@ -9,7 +9,9 @@ them into timeline edits.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from PySide6.QtCore import Signal, SignalInstance
 from PySide6.QtWidgets import (
@@ -21,12 +23,31 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from manim_studio.editor.elided_label import ElidedLabel
 from manim_studio.editor.glyphs import icon_button
 from manim_studio.theme import current_theme
 
-__all__ = ["BlockInfo", "BlockInspector"]
+__all__ = ["BlockInfo", "BlockInspector", "describe_clips"]
 
 MIN_DURATION = 1.0 / 30.0
+
+
+def describe_clips(clips: Iterable[Any]) -> str:
+    """``"Write(Text) 2.77s"`` for a block's animations, with repeats grouped.
+
+    A grid animating 72 squares at once reads ``Animate(Square) x72 1.00s`` instead of
+    seventy-two identical entries.
+    """
+    groups: dict[tuple[str, str, str], int] = {}
+    for clip in clips:
+        key = (clip.animation, clip.target, f"{clip.duration:.2f}")
+        groups[key] = groups.get(key, 0) + 1
+    parts = []
+    for (animation, target, duration), count in groups.items():
+        repeat = f" ×{count}" if count > 1 else ""  # noqa: RUF001
+        parts.append(f"{animation}({target}){repeat} {duration}s")
+    return ", ".join(parts)
+
 
 #: How the call spells its duration in the source -> the note shown to the user.
 _KIND_NOTES = {
@@ -63,7 +84,7 @@ class BlockInspector(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._info: BlockInfo | None = None
-        self.title = QLabel("", self)
+        self.title = ElidedLabel("", self)
         self.title.setMinimumWidth(120)
 
         self.duration_spin = QDoubleSpinBox(self)
@@ -84,7 +105,9 @@ class BlockInspector(QWidget):
 
         self.note = QLabel("", self)
         self.apply_theme()
-        self.details = QLabel("", self)
+        # The animation list can be thousands of characters (a 72-square grid): it must
+        # never decide how wide the window has to be.
+        self.details = ElidedLabel("", self)
         self.details.setToolTip("Animations, source line and edit state of the selected block")
 
         self.jump_button = icon_button("jump_to_code", "Jump to the block's source line", self)

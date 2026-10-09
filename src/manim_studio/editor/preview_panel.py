@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from manim_studio.editor.elided_label import ElidedLabel
 from manim_studio.stats import TimingStats
 from manim_studio.theme import Theme, current_theme
 from manim_studio.timeline_model import format_duration
@@ -50,7 +51,8 @@ class PreviewPanel(QWidget):
         self._settle_timer.setInterval(self.SETTLE_MS)
         self._settle_timer.timeout.connect(self._settle)
 
-        self._state_label = QLabel("idle")
+        # Error messages land here: elide them rather than widen the window.
+        self._state_label = ElidedLabel("idle")
         self._state_label.setObjectName("previewState")
         self._mode_label = QLabel("embedded")
         self._mode_label.setObjectName("previewMode")
@@ -65,7 +67,7 @@ class PreviewPanel(QWidget):
         header.addStretch(1)
         header.addWidget(self._time_label)
         header.addSpacing(8)
-        header.addWidget(self._state_label)
+        header.addWidget(self._state_label, 1)
 
         self._viewport = QLabel()
         self._viewport.setAlignment(Qt.AlignmentFlag.AlignCenter)

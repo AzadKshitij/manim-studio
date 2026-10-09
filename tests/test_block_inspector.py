@@ -120,3 +120,71 @@ class TestEditing:
         inspector.duration_spin.setValue(0.9)  # typed, not committed
         inspector.show_block(info())  # e.g. a scrub tick refreshes the inspector
         assert inspector.duration_spin.value() == pytest.approx(0.9)
+
+
+class _Clip:
+    def __init__(self, animation: str, target: str, duration: float) -> None:
+        self.animation, self.target, self.duration = animation, target, duration
+
+
+class TestLongTextNeverWidensTheWindow:
+    """A block that animates 72 squares once pushed the window to ~13,700 px, off screen."""
+
+    def test_identical_clips_are_grouped(self) -> None:
+        from manim_studio.editor.block_inspector import describe_clips
+
+        grid = [_Clip("Animate", "Square", 1.0) for _ in range(72)]
+        assert describe_clips(grid) == "Animate(Square) \u00d772 1.00s"
+
+    def test_distinct_clips_keep_their_order(self) -> None:
+        from manim_studio.editor.block_inspector import describe_clips
+
+        clips = [
+            _Clip("Write", "Text", 2.767),
+            _Clip("FadeIn", "Dot", 0.1),
+            _Clip("FadeIn", "Dot", 0.1),
+        ]
+        assert describe_clips(clips) == "Write(Text) 2.77s, FadeIn(Dot) \u00d72 0.10s"
+
+    def test_a_huge_details_text_does_not_raise_the_minimum_width(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+        inspector = BlockInspector()
+        qtbot.addWidget(inspector)
+        inspector.show()
+        baseline = inspector.minimumSizeHint().width()
+        info = BlockInfo(
+            index=15,
+            name="Animate(Square)",
+            duration=1.0,
+            line=127,
+            animations=", ".join("Animate(Square) 1.00s" for _ in range(100)),
+            loops=1,
+            edited=False,
+            duration_kind=None,
+            editable=True,
+        )
+        inspector.show_block(info)
+        qtbot.wait(20)
+        assert inspector.minimumSizeHint().width() <= baseline + 5
+        assert inspector.details.text().startswith("line 127")
+        assert "Animate(Square) 1.00s" in inspector.details.toolTip()  # the whole text is there
+
+    def test_a_very_long_title_is_elided_too(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+        inspector = BlockInspector()
+        qtbot.addWidget(inspector)
+        inspector.show()
+        baseline = inspector.minimumSizeHint().width()
+        inspector.show_block(
+            BlockInfo(
+                index=1,
+                name="X" * 3000,
+                duration=1.0,
+                line=None,
+                animations="",
+                loops=1,
+                edited=False,
+                duration_kind=None,
+                editable=True,
+            )
+        )
+        qtbot.wait(20)
+        assert inspector.minimumSizeHint().width() <= baseline + 5
