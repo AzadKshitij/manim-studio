@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, QSize, Qt
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -39,7 +39,7 @@ from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
 from manim_studio.editor.file_watcher import FileWatcher
-from manim_studio.editor.glyphs import glyph, icon_button
+from manim_studio.editor.glyphs import glyph, icon_button, refresh_glyphs
 from manim_studio.editor.icon import load_icon
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
@@ -81,6 +81,7 @@ class MainWindow(QMainWindow):
         embedded: bool = True,
         preview_size: tuple[int, int] = (1280, 720),
         restore_settings: bool = True,
+        settings: QSettings | None = None,
         auto_preview: bool = True,
         initial_frame: str = "end",
         completion: bool = True,
@@ -96,7 +97,7 @@ class MainWindow(QMainWindow):
         self._auto_reload = True
         self._auto_preview = auto_preview
         self._restore_settings = restore_settings
-        self._settings = QSettings("ManimStudio", "ManimStudio")
+        self._settings = settings or QSettings("ManimStudio", "ManimStudio")
         self._theme_key = "builtin:chalkboard"
         if restore_settings:
             self._restore_theme()
@@ -300,6 +301,7 @@ class MainWindow(QMainWindow):
 
         toolbar = QToolBar("Main", self)
         toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(18, 18))
         self.addToolBar(toolbar)
         toolbar.addWidget(QLabel(" Scene: "))
         self._scene_combo = QComboBox(self)
@@ -459,6 +461,7 @@ class MainWindow(QMainWindow):
         action = QAction(text, self)
         if glyph_name is not None:
             action.setIcon(glyph(glyph_name))
+            action.setProperty("glyph", glyph_name)
         action.setToolTip(text)
         action.triggered.connect(lambda checked=False: slot())
         toolbar.addAction(action)
@@ -1418,8 +1421,13 @@ class MainWindow(QMainWindow):
         self.editor.apply_theme(theme)
         self.preview_panel.apply_theme(theme)
         self.inspector.apply_theme()
+        refresh_glyphs(self)
         self.timeline.update()
-        self._settings.setValue("theme", key)
+        if self._restore_settings:
+            # Only a real session remembers the theme; tests and scripted windows must not
+            # overwrite the user's saved choice.
+            self._settings.setValue("theme", key)
+            self._settings.sync()
         self._set_status(f"Theme: {theme.name}")
 
     def _populate_theme_menu(self) -> None:

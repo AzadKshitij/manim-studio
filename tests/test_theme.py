@@ -59,6 +59,10 @@ class TestBuiltinThemes:
             assert contrast_ratio(c.text, surface) >= 4.5, surface
         assert contrast_ratio(c.muted, c.surface) >= 4.5
         assert contrast_ratio(c.on_accent, c.accent) >= 4.5
+        for surface in (c.bg, c.surface):
+            assert contrast_ratio(c.icon, surface) >= 4.5, "icon"
+            assert contrast_ratio(c.icon_active, surface) >= 3.0, "icon_active"
+            assert contrast_ratio(c.icon_disabled, surface) >= 2.0, "icon_disabled"
         for token in ("keyword", "string", "number", "function", "class_", "builtin"):
             assert contrast_ratio(getattr(theme.syntax, token), c.editor) >= 4.5, token
         assert contrast_ratio(theme.syntax.comment, c.editor) >= 3.0
@@ -110,6 +114,28 @@ class TestThemeFiles:
         assert theme.lanes[1] == CHALKBOARD.lanes[1]
         assert theme.metrics.radius == 12
         assert theme.metrics.density == CHALKBOARD.metrics.density
+
+    def test_icon_colours_round_trip_as_camel_case(self) -> None:
+        data = theme_to_dict(CHALKBOARD)
+        assert data["colors"]["iconActive"] == CHALKBOARD.colors.icon_active
+        assert data["colors"]["iconDisabled"] == CHALKBOARD.colors.icon_disabled
+
+    def test_file_without_icon_colours_gets_readable_ones(self) -> None:
+        light = {
+            "format": THEME_FORMAT,
+            "mode": "light",
+            "colors": {
+                "bg": "#ffffff",
+                "surface": "#f5f5f5",
+                "text": "#111111",
+                "accent": "#0a6f8c",
+            },
+        }
+        theme = theme_from_dict(light)
+        assert contrast_ratio(theme.colors.icon, theme.colors.bg) >= 4.5
+        assert theme.colors.icon_active == "#0a6f8c"
+        given = theme_from_dict({**light, "colors": {**light["colors"], "icon": "#123456"}})
+        assert given.colors.icon == "#123456"
 
     def test_foreign_json_is_rejected(self, tmp_path: Path) -> None:
         path = tmp_path / "other.json"
@@ -201,3 +227,118 @@ class TestWindowThemeSwitch:
         labels = [a.text() for a in window._theme_menu.actions() if a.text()]
         assert "Chalkboard" in labels and "Paper" in labels and "mine" in labels
         assert "Load theme file…" in labels
+
+
+class TestGlyphColours:
+    def test_glyph_uses_theme_icon_colours(self, qtbot) -> None:
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QIcon
+
+        from manim_studio.editor.glyphs import glyph
+
+        icon = glyph("play")
+        size = QSize(18, 18)
+
+        def centre(mode: QIcon.Mode) -> str:
+            return icon.pixmap(size, mode).toImage().pixelColor(9, 9).name()
+
+        assert centre(QIcon.Mode.Normal) == CHALKBOARD.colors.icon
+        assert centre(QIcon.Mode.Active) == CHALKBOARD.colors.icon_active
+        assert centre(QIcon.Mode.Disabled) == CHALKBOARD.colors.icon_disabled
+
+    def test_refresh_glyphs_recolours_buttons(self, qtbot) -> None:
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QIcon
+
+        from manim_studio.editor.glyphs import icon_button, refresh_glyphs
+        from manim_studio.theme import PAPER, current_theme, set_current_theme
+
+        before = current_theme()
+        try:
+            from PySide6.QtWidgets import QWidget
+
+            host = QWidget()
+            qtbot.addWidget(host)
+            button = icon_button("play", "Play", host)
+            set_current_theme(PAPER)
+            refresh_glyphs(host)
+            pixmap = button.icon().pixmap(QSize(18, 18), QIcon.Mode.Normal)
+            assert pixmap.toImage().pixelColor(9, 9).name() == PAPER.colors.icon
+        finally:
+            set_current_theme(before)
+
+
+class TestThemePersistence:
+    @pytest.fixture(autouse=True)
+    def _restore_theme(self, qtbot):
+        from manim_studio.theme import current_theme, set_current_theme
+
+        before = current_theme()
+        yield
+        set_current_theme(before)
+
+    @staticmethod
+    def _settings(tmp_path: Path):
+        from PySide6.QtCore import QSettings
+
+        return QSettings(str(tmp_path / "prefs.ini"), QSettings.Format.IniFormat)
+
+    def test_choice_is_saved_and_restored(self, qtbot, tmp_path: Path) -> None:
+        from manim_studio.editor.main_window import MainWindow
+        from manim_studio.theme import PAPER, current_theme, set_current_theme
+
+        settings = self._settings(tmp_path)
+        first = MainWindow(settings=settings, auto_preview=False, completion=False)
+        qtbot.addWidget(first)
+        first.set_theme(PAPER, "builtin:paper")
+        assert self._settings(tmp_path).value("theme") == "builtin:paper"
+
+        set_current_theme(CHALKBOARD)  # a fresh process starts on the default
+        second = MainWindow(settings=self._settings(tmp_path), auto_preview=False, completion=False)
+        qtbot.addWidget(second)
+        assert current_theme() == PAPER
+        assert second._theme_key == "builtin:paper"
+
+    def test_theme_file_choice_is_restored(self, qtbot, tmp_path: Path) -> None:
+        from manim_studio.editor.main_window import MainWindow
+        from manim_studio.theme import current_theme, set_current_theme
+
+        path = tmp_path / "mine.json"
+        save_theme(replace_name(CHALKBOARD, "Mine"), path)
+        settings = self._settings(tmp_path)
+        settings.setValue("theme", f"file:{path}")
+        settings.sync()
+        set_current_theme(CHALKBOARD)
+        window = MainWindow(settings=self._settings(tmp_path), auto_preview=False, completion=False)
+        qtbot.addWidget(window)
+        assert current_theme().name == "Mine"
+
+    def test_unreadable_saved_theme_falls_back(self, qtbot, tmp_path: Path) -> None:
+        from manim_studio.editor.main_window import MainWindow
+        from manim_studio.theme import current_theme, set_current_theme
+
+        settings = self._settings(tmp_path)
+        settings.setValue("theme", f"file:{tmp_path / 'gone.json'}")
+        settings.sync()
+        set_current_theme(CHALKBOARD)
+        window = MainWindow(settings=self._settings(tmp_path), auto_preview=False, completion=False)
+        qtbot.addWidget(window)
+        assert current_theme() == CHALKBOARD
+
+    def test_scripted_window_does_not_touch_saved_choice(self, qtbot, tmp_path: Path) -> None:
+        from manim_studio.editor.main_window import MainWindow
+        from manim_studio.theme import PAPER
+
+        settings = self._settings(tmp_path)
+        window = MainWindow(
+            settings=settings, restore_settings=False, auto_preview=False, completion=False
+        )
+        qtbot.addWidget(window)
+        window.set_theme(PAPER, "builtin:paper")
+        assert self._settings(tmp_path).value("theme") is None
+
+
+def replace_name(theme, name):
+    from dataclasses import replace
+
+    return replace(theme, name=name)

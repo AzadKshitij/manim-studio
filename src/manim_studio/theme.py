@@ -142,6 +142,9 @@ class ThemeColors:
     ok: str
     warn: str
     err: str
+    icon: str
+    icon_active: str
+    icon_disabled: str
 
 
 @dataclass(frozen=True)
@@ -239,6 +242,9 @@ CHALKBOARD = Theme(
         ok="#83c167",
         warn="#f0a93c",
         err="#fc6255",
+        icon="#c3cbd6",
+        icon_active="#58c4dd",
+        icon_disabled="#566073",
     ),
     syntax=ThemeSyntax(
         keyword="#f2907a",
@@ -272,6 +278,9 @@ PAPER = Theme(
         ok="#2f7d32",
         warn="#a86400",
         err="#c62f25",
+        icon="#3a4454",
+        icon_active="#0a6f8c",
+        icon_disabled="#9aa3b2",
     ),
     syntax=ThemeSyntax(
         keyword="#c2410c",
@@ -305,6 +314,9 @@ NIGHT_VIOLET = Theme(
         ok="#7dd3a0",
         warn="#f5b14c",
         err="#ff7a8a",
+        icon="#c4bfd9",
+        icon_active="#a78bfa",
+        icon_disabled="#5f5a7d",
     ),
     syntax=ThemeSyntax(
         keyword="#ff8fb1",
@@ -330,7 +342,12 @@ BUILTIN_THEMES: dict[str, Theme] = {
 # ----------------------------------------------------------------------
 
 # Theme files use camelCase keys (shared with the design-system page).
-_COLOR_KEYS = {"border_strong": "borderStrong", "on_accent": "onAccent"}
+_COLOR_KEYS = {
+    "border_strong": "borderStrong",
+    "on_accent": "onAccent",
+    "icon_active": "iconActive",
+    "icon_disabled": "iconDisabled",
+}
 _SYNTAX_KEYS = {"class_": "class"}
 _METRIC_KEYS = {
     "control_height": "controlHeight",
@@ -384,6 +401,23 @@ def theme_from_dict(data: object, *, base: Theme = CHALKBOARD) -> Theme:
         return replace(current, **updates)
 
     colors = merge(base.colors, data.get("colors"), _COLOR_KEYS)
+    given_colors = data.get("colors")
+    given_colors = given_colors if isinstance(given_colors, dict) else {}
+    # Files written before icon colours existed: derive them from the file's own colours
+    # (the base theme's icons could be the wrong polarity for a light/dark file).
+    icon_defaults = {
+        "icon": mix(colors.text, colors.bg, 0.2),
+        "icon_active": colors.accent,
+        "icon_disabled": mix(colors.text, colors.bg, 0.6),
+    }
+    colors = replace(
+        colors,
+        **{
+            attr: value
+            for attr, value in icon_defaults.items()
+            if normalize_hex(given_colors.get(_COLOR_KEYS.get(attr, attr))) is None
+        },
+    )
     syntax = merge(base.syntax, data.get("syntax"), _SYNTAX_KEYS)
     lanes = list(base.lanes)
     given_lanes = data.get("lanes")

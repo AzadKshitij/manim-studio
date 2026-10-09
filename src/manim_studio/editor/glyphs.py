@@ -9,12 +9,14 @@ an icon alone is not a label.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtCore import QByteArray, QObject, QSize, Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QApplication, QToolButton, QWidget
+from PySide6.QtWidgets import QToolButton, QWidget
 
-__all__ = ["GLYPH_NAMES", "glyph", "icon_button"]
+from manim_studio.theme import current_theme
+
+__all__ = ["GLYPH_NAMES", "glyph", "icon_button", "refresh_glyphs"]
 
 # Stroked shapes use the default stroke; ``F`` marks shapes that are filled instead.
 _STROKE = 'fill="none" stroke="{c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
@@ -83,23 +85,43 @@ def _render(name: str, color: QColor, size: int) -> QPixmap:
 
 
 def glyph(name: str, color: QColor | None = None) -> QIcon:
-    """A themed icon for ``name`` (normal and dimmed disabled pixmaps, 1x and 2x)."""
+    """A themed icon for ``name`` (normal, hover and disabled pixmaps, 1x and 2x).
+
+    Colours come from the current theme's ``icon``, ``icon_active`` and
+    ``icon_disabled``; an explicit ``color`` overrides them (disabled is dimmed).
+    """
     if name not in _GLYPHS:
         raise KeyError(f"unknown glyph {name!r}; available: {GLYPH_NAMES}")
     if color is None:
-        app = QApplication.instance()
-        color = (
-            app.palette().color(QPalette.ColorRole.ButtonText)  # type: ignore[attr-defined]
-            if app is not None
-            else QColor(0x33, 0x33, 0x33)
+        colors = current_theme().colors
+        normal, active, disabled = (
+            QColor(colors.icon),
+            QColor(colors.icon_active),
+            QColor(colors.icon_disabled),
         )
-    disabled = QColor(color)
-    disabled.setAlphaF(0.35)
+    else:
+        normal = active = color
+        disabled = QColor(color)
+        disabled.setAlphaF(0.35)
     icon = QIcon()
     for size in (_ICON_PX, _ICON_PX * 2):
-        icon.addPixmap(_render(name, color, size), QIcon.Mode.Normal)
+        icon.addPixmap(_render(name, normal, size), QIcon.Mode.Normal)
+        icon.addPixmap(_render(name, active, size), QIcon.Mode.Active)
+        icon.addPixmap(_render(name, active, size), QIcon.Mode.Selected)
         icon.addPixmap(_render(name, disabled, size), QIcon.Mode.Disabled)
     return icon
+
+
+def refresh_glyphs(root: QObject) -> None:
+    """Re-render every glyph-tagged button and action under ``root`` (after a theme change)."""
+    targets: list[QToolButton | QAction] = [
+        *root.findChildren(QToolButton),
+        *root.findChildren(QAction),
+    ]
+    for target in targets:
+        name = target.property("glyph")
+        if isinstance(name, str) and name in _GLYPHS:
+            target.setIcon(glyph(name))
 
 
 def icon_button(

@@ -56,7 +56,6 @@ def build_stylesheet(theme: Theme) -> str:
     m = theme.metrics
     radius = m.radius
     small = round(radius * 0.66)
-    large = round(radius * 1.6)
     pad = round(12 * m.density)
     gap = round(8 * m.density)
     control = m.control_height - 2  # QSS min-height excludes the 1px border
@@ -70,7 +69,7 @@ QMenuBar::item {{ background: transparent; padding: 4px {gap}px; border-radius: 
 QMenuBar::item:selected {{ background: {c.raised}; color: {c.text}; }}
 QMenu {{
     background: {c.surface}; color: {c.text}; border: 1px solid {c.border_strong};
-    border-radius: {large}px; padding: 4px;
+    padding: 4px;
 }}
 QMenu::item {{ padding: 5px {pad * 2}px 5px {pad}px; border-radius: {small}px; }}
 QMenu::item:selected {{ background: {d.accent_soft}; color: {c.text}; }}
@@ -78,12 +77,13 @@ QMenu::item:disabled {{ color: {c.faint}; }}
 QMenu::separator {{ height: 1px; background: {c.border}; margin: 4px {gap}px; }}
 QToolBar {{
     background: {c.surface}; border: none; border-bottom: 1px solid {c.border};
-    spacing: {gap}px; padding: 4px {pad}px;
+    spacing: {gap // 2}px; padding: 0px;
 }}
+QToolBar QLabel {{ padding: 0 {gap // 2}px; }}
 QToolBar::separator {{ background: {c.border}; width: 1px; margin: 4px 2px; }}
 QToolButton {{
     background: transparent; color: {c.text}; border: 1px solid transparent;
-    border-radius: {radius}px; padding: 3px {gap}px;
+    border-radius: {radius}px; padding: 3px {gap // 2}px;
 }}
 QToolButton:hover {{ background: {c.raised}; }}
 QToolButton:pressed {{ background: {d.pressed}; }}

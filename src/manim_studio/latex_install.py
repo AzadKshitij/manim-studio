@@ -23,7 +23,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from manim_studio.latex import MANIM_TEX_PACKAGES, bin_dir, install_dir, runtime_env
+from manim_studio.latex import (
+    MANIM_TEX_PACKAGES,
+    bin_dir,
+    download_cache_dir,
+    install_dir,
+    runtime_env,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -35,6 +41,7 @@ __all__ = [
     "InstallProgress",
     "ProgressCallback",
     "TinytexSource",
+    "clear_download_cache",
     "install_latex",
     "installed_marker",
     "is_installed",
@@ -172,6 +179,7 @@ def install_latex(
     packages: tuple[str, ...] = MANIM_TEX_PACKAGES,
     skip_tlmgr: bool = False,
     kind: str | None = None,
+    use_cache: bool = True,
 ) -> Path:
     """Download + unbundle TinyTeX and install manimgl's TeX packages.
 
@@ -188,20 +196,27 @@ def install_latex(
 
     with tempfile.TemporaryDirectory(prefix="manim-studio-latex-") as tmp:
         bundle = Path(tmp) / source.filename
-        _emit(on_progress, InstallProgress(stage="download"))
-        fetch = fetcher or download_file
-        try:
-            fetch(source.url, bundle, on_progress, cancel)
-        except InstallError:
-            raise
-        except Exception as exc:
-            raise InstallError(f"download failed: {exc}") from exc
-        if fetcher is None:
-            # Pinned release bundle: refuse anything that fails verification.
+        # Only the real network path is cached; tests inject a fetcher.
+        cache = download_cache_dir(target) if fetcher is None and use_cache else None
+        if cache is not None and _restore_from_cache(cache, source, bundle):
+            _emit(on_progress, InstallProgress(stage="cached"))
+        else:
+            _emit(on_progress, InstallProgress(stage="download"))
+            fetch = fetcher or download_file
             try:
-                verify_sha256(bundle, source.sha256)
-            except InstallError as exc:
-                raise InstallError(f"{exc} (re-download from {source.url} to retry)") from exc
+                fetch(source.url, bundle, on_progress, cancel)
+            except InstallError:
+                raise
+            except Exception as exc:
+                raise InstallError(f"download failed: {exc}") from exc
+            if fetcher is None:
+                # Pinned release bundle: refuse anything that fails verification.
+                try:
+                    verify_sha256(bundle, source.sha256)
+                except InstallError as exc:
+                    raise InstallError(f"{exc} (re-download from {source.url} to retry)") from exc
+                if cache is not None:
+                    _save_to_cache(cache, source, bundle)
         _check_cancelled(cancel)
         _emit(on_progress, InstallProgress(stage="extract"))
         # Fresh tree: drop any stale/partial previous install first.
@@ -226,6 +241,48 @@ def install_latex(
     _emit(on_progress, InstallProgress(stage="done"))
     log.info("LaTeX installed to %s", root)
     return root
+
+
+def _restore_from_cache(cache: Path, source: TinytexSource, dest: Path) -> bool:
+    """Copy a verified cached bundle to ``dest``; drop a corrupt entry."""
+    cached = cache / source.filename
+    try:
+        if not cached.is_file():
+            return False
+        verify_sha256(cached, source.sha256)
+        shutil.copyfile(cached, dest)
+    except InstallError:
+        log.warning("cached %s is corrupt; re-downloading", cached.name)
+        cached.unlink(missing_ok=True)
+        return False
+    except OSError as exc:
+        log.warning("cannot use download cache: %s", exc)
+        return False
+    log.info("using cached %s", cached)
+    return True
+
+
+def _save_to_cache(cache: Path, source: TinytexSource, bundle: Path) -> None:
+    """Store a verified bundle atomically and prune other versions; never raises."""
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        partial = cache / f"{source.filename}.part"
+        shutil.copyfile(bundle, partial)
+        partial.replace(cache / source.filename)
+        for stale in cache.iterdir():
+            if stale.name != source.filename and stale.name.startswith("TinyTeX-"):
+                stale.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("cannot write download cache: %s", exc)
+
+
+def clear_download_cache(target: str | Path | None = None) -> bool:
+    """Delete cached TinyTeX bundles.  Returns True when something was removed."""
+    cache = download_cache_dir(target)
+    if not cache.exists():
+        return False
+    shutil.rmtree(cache, ignore_errors=True)
+    return True
 
 
 def download_file(

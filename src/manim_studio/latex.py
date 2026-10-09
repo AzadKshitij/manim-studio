@@ -29,11 +29,13 @@ __all__ = [
     "LatexStatus",
     "apply_runtime_path",
     "bin_dir",
+    "download_cache_dir",
     "install_dir",
     "is_latex_error",
     "is_miktex",
     "latex_hint_for",
     "latex_status",
+    "normalize_temp_dir",
     "probe_compile",
     "runtime_env",
 ]
@@ -289,14 +291,14 @@ def probe_compile(timeout: float = 300.0) -> LatexProbe:
                     status.latex_path or "latex",
                     "-interaction=batchmode",
                     "-halt-on-error",
-                    f"-output-directory={tmp}",
-                    str(tex_path),
+                    tex_path.name,
                 ],
                 capture_output=True,
                 text=True,
                 stdin=subprocess.DEVNULL,
                 timeout=timeout,
                 env=runtime_env(),
+                cwd=tmp,
             )
         except subprocess.TimeoutExpired:
             return LatexProbe(
@@ -323,9 +325,11 @@ def probe_compile(timeout: float = 300.0) -> LatexProbe:
             )
         stderr = (process.stderr or "").strip()
         if process.returncode != 0:
-            log_text = _read_text(tmp_path / "working.log")
+            # TeX writes texput.log (not working.log) when it dies before opening the file.
+            log_text = _read_text(tmp_path / "working.log") or _read_text(tmp_path / "texput.log")
             errors = "\n".join(line for line in log_text.splitlines() if line.startswith("!"))
-            detail = "\n".join(part for part in (stderr, errors) if part).strip()
+            stdout = "" if errors else (process.stdout or "").strip()[-1500:]
+            detail = "\n".join(part for part in (stderr, errors, stdout) if part).strip()
             if "security risk: running with elevated privileges" in stderr:
                 detail = (
                     f"{detail}\n\nNote: MiKTeX reports elevated privileges. "
@@ -394,11 +398,57 @@ def _read_text(path: Path) -> str:
         return ""
 
 
+def _long_path(path: str) -> str:
+    """Expand a Windows 8.3 short path (``C:\\Users\\LONGNA~1``); input on failure."""
+    try:
+        import ctypes
+
+        get_long = ctypes.windll.kernel32.GetLongPathNameW  # type: ignore[attr-defined,unused-ignore]
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = get_long(path, buffer, len(buffer))
+    except (AttributeError, OSError, ImportError):
+        return path
+    return buffer.value if 0 < length < len(buffer) else path
+
+
+def normalize_temp_dir() -> str:
+    """Make the process temp dir free of ``~`` (Windows 8.3 short names).
+
+    ``TEMP`` is often ``C:\\Users\\LONGNA~1\\...`` for users with long names.
+    TeX treats ``~`` on the command line as an active character and aborts with
+    ``Emergency stop`` before opening ``working.tex``, which manimgl cannot
+    explain.  Expanding to the long path fixes both manimgl and our probe.
+    Idempotent; a no-op off Windows or when there is no ``~``.
+    """
+    current = tempfile.gettempdir()
+    if sys.platform != "win32" or "~" not in current:
+        return current
+    expanded = _long_path(current)
+    if expanded != current:
+        tempfile.tempdir = expanded
+        os.environ["TEMP"] = expanded
+        os.environ["TMP"] = expanded
+    return expanded
+
+
+def download_cache_dir(target: str | Path | None = None) -> Path:
+    """Directory caching downloaded TinyTeX bundles.
+
+    A sibling of the install dir (never inside it: reinstalling wipes the tree),
+    so it follows ``MANIM_STUDIO_LATEX_DIR`` and test overrides.
+    """
+    return install_dir(target).parent / "downloads"
+
+
 def runtime_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Environment with the bundled LaTeX ``bin/`` prepended to ``PATH``."""
     import copy
 
-    env = copy.deepcopy(base) if base is not None else dict(os.environ)
+    if base is None:
+        normalize_temp_dir()
+        env = dict(os.environ)
+    else:
+        env = copy.deepcopy(base)
     directory = str(bin_dir())
     path = env.get("PATH", "")
     if directory and directory not in path.split(os.pathsep):
@@ -412,6 +462,7 @@ def apply_runtime_path() -> bool:
     Idempotent; returns True when a bundled install directory exists and was
     applied.  Safe to call on every CLI/preview/export entry point.
     """
+    normalize_temp_dir()
     directory = bin_dir()
     if not directory.is_dir():
         return False

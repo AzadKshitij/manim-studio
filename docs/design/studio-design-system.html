@@ -76,7 +76,7 @@ pre.json{margin:0;background:var(--bg);border:1px solid var(--line);border-radiu
 .btn:hover,.btn.is-hover{background:var(--t-hover)}
 .btn:active{background:var(--t-press)}
 .btn:focus-visible,.btn.is-focus,.inp:focus-visible,.inp.is-focus{outline:2px solid var(--t-ring);outline-offset:1px}
-.btn:disabled,.btn.is-disabled{opacity:.45;cursor:not-allowed}
+.btn:disabled,.btn.is-disabled{cursor:not-allowed}
 .btn.pri{background:var(--t-accent);border-color:transparent;color:var(--t-on-accent);font-weight:600}
 .btn.pri:hover,.btn.pri.is-hover{background:var(--t-accent-hover)}
 .btn.ghost{background:transparent;border-color:transparent}
@@ -85,7 +85,12 @@ pre.json{margin:0;background:var(--bg);border:1px solid var(--line);border-radiu
 .btn.dng:hover,.btn.dng.is-hover{background:var(--t-err-soft)}
 .btn.sm{height:var(--t-hs);min-width:0}.btn.lg{height:var(--t-hl)}
 .btn.ico{min-width:0;width:var(--t-h);padding:0}.btn.ico.sm{width:var(--t-hs)}
-.btn svg,.ico svg{width:16px;height:16px;flex:none}
+.btn svg,.ico svg{width:16px;height:16px;flex:none;color:var(--t-icon)}
+.btn:hover svg,.btn.is-hover svg{color:var(--t-icon-active)}
+.btn:disabled svg,.btn.is-disabled svg{color:var(--t-icon-disabled)}
+.btn:disabled,.btn.is-disabled{opacity:1}
+.btn:disabled,.btn.is-disabled{color:var(--t-faint)}
+.btn.pri svg,.btn.pri:hover svg{color:var(--t-on-accent)}
 .inp{font:inherit;height:var(--t-h);padding:0 calc(var(--t-s)*8px);border-radius:var(--t-r);border:1px solid var(--t-border2);background:var(--t-editor);color:var(--t-text);min-width:0;width:100%}
 .inp:focus{border-color:var(--t-accent);outline:2px solid var(--t-ring);outline-offset:0}
 .inp[readonly]{color:var(--t-muted);background:transparent}
@@ -100,7 +105,7 @@ select.inp{padding-right:4px}
 .menubar{display:flex;align-items:center;gap:2px;padding:0 calc(var(--t-s)*8px);height:var(--t-hs);background:var(--t-bg)}
 .menubar span{padding:0 calc(var(--t-s)*8px);height:calc(var(--t-hs) - 6px);display:flex;align-items:center;border-radius:var(--t-rs);color:var(--t-muted)}
 .menubar span:hover{background:var(--t-raised);color:var(--t-text)}
-.toolbar{display:flex;align-items:center;gap:calc(var(--t-s)*8px);padding:calc(var(--t-s)*8px) calc(var(--t-s)*12px);background:var(--t-surface);border-block:1px solid var(--t-border)}
+.toolbar{display:flex;align-items:center;gap:calc(var(--t-s)*4px);padding:calc(var(--t-s)*2px) calc(var(--t-s)*8px);background:var(--t-surface);border-block:1px solid var(--t-border)}
 .toolbar .sep{width:1px;align-self:stretch;margin-block:4px;background:var(--t-border)}
 .toolbar .grow{flex:1}
 .toolbar .inp{width:170px}
@@ -192,7 +197,7 @@ select.inp{padding-right:4px}
           <div class="toolbar">
             <button class="btn pri" id="bRun"><svg><use href="#i-play"/></svg>Run</button>
             <button class="btn"><svg><use href="#i-reload"/></svg>Reload</button>
-            <button class="btn ghost"><svg><use href="#i-stop"/></svg>Stop</button>
+            <button class="btn ghost" disabled><svg><use href="#i-stop"/></svg>Stop</button>
             <span class="sep"></span>
             <select class="inp" aria-label="Scene"><option>CircleToSquare</option><option>FeatureShowcase</option></select>
             <span class="grow"></span>
@@ -291,7 +296,7 @@ array([0., 0., 0.])
             <thead><tr><th>Element</th><th>Size</th><th>Rule</th></tr></thead>
             <tbody>
               <tr><td>Menu bar</td><td class="mono">24 px</td><td>Text only, 8 px side padding per item.</td></tr>
-              <tr><td>Toolbar</td><td class="mono">44 px</td><td>Medium controls, 8 px gap, 12 px side padding, 1 px separators between groups.</td></tr>
+              <tr><td>Toolbar</td><td class="mono">32 px</td><td>Icon buttons with 18 px glyphs, 4 px gap, 8 px side padding, 1 px separators between groups. No vertical padding.</td></tr>
               <tr><td>Panel tab strip</td><td class="mono">32 px</td><td>Active tab has a 2 px accent underline and the editor background.</td></tr>
               <tr><td>Timeline lane</td><td class="mono">24 px, 4 px gap</td><td>Block text 11 px semibold. The label column is 92 px.</td></tr>
               <tr><td>Inspector</td><td class="mono">250 px wide</td><td>12 px padding, 72 px label column, 8 px row gap.</td></tr>
@@ -299,7 +304,7 @@ array([0., 0., 0.])
               <tr><td>Splitter</td><td class="mono">1 px line, 8 px hit area</td><td>Uses the border colour. Accent on hover and drag.</td></tr>
               <tr><td>Dialog</td><td class="mono">24 px padding</td><td>16 px between groups, footer buttons right-aligned, primary last.</td></tr>
               <tr><td>Focus ring</td><td class="mono">2 px, accent 55%</td><td>1 px offset on every focusable control, never removed.</td></tr>
-              <tr><td>Popups and menus</td><td class="mono">large radius</td><td>Only surfaces that float get a shadow: <span class="mono">0 8px 24px rgba(0,0,0,.4)</span>.</td></tr>
+              <tr><td>Popups and menus</td><td class="mono">square frame</td><td>Menus keep square outer corners, because Qt popup windows are rectangular and cannot clip a rounded frame (the OS shadow shows square corners behind it). Only surfaces that float get a shadow: <span class="mono">0 8px 24px rgba(0,0,0,.4)</span>.</td></tr>
             </tbody></table></div>
         </div>
 
@@ -311,6 +316,7 @@ array([0., 0., 0.])
               <tr><td class="mono">colors.bg · surface · raised</td><td><code>QPalette.Window</code>, panel and dock stylesheets, <code>QPalette.Button</code></td></tr>
               <tr><td class="mono">colors.editor</td><td><code>QPalette.Base</code> and Scintilla paper (<code>default_bg</code>, gutter uses <code>surface</code>)</td></tr>
               <tr><td class="mono">colors.text · muted · faint</td><td><code>WindowText</code>/<code>Text</code>, secondary labels, disabled text and line numbers</td></tr>
+              <tr><td class="mono">colors.icon · iconActive · iconDisabled</td><td><code>glyphs.glyph()</code> normal, hover/selected and disabled pixmaps</td></tr>
               <tr><td class="mono">colors.accent · onAccent</td><td><code>Link</code>, primary button, focus ring, selection base; <code>HighlightedText</code></td></tr>
               <tr><td class="mono">colors.playhead · lanes[0..5]</td><td><code>TimelineWidget.paintEvent</code> colours that are hard-coded today</td></tr>
               <tr><td class="mono">colors.ok · warn · err</td><td>Preview state pill, error marker and squiggle, status line</td></tr>
@@ -392,22 +398,22 @@ function inkOn(h){return ratio(h,"#0b0d10")>=ratio(h,"#ffffff")?"#0b0d10":"#ffff
 function T(name,mode,colors,syntax,lanes,metrics){return {format:"manim-studio-theme",version:1,name:name,mode:mode,colors:colors,syntax:syntax,lanes:lanes,metrics:metrics}}
 var BUILTIN={
 chalkboard:T("Chalkboard","dark",
- {bg:"#0f1217",surface:"#161a21",raised:"#1f242d",editor:"#12151b",preview:"#080a0d",border:"#262c36",borderStrong:"#3a4352",text:"#e4e8ee",muted:"#9aa4b2",faint:"#6b7586",accent:"#58c4dd",onAccent:"#07232b",playhead:"#ffd866",ok:"#83c167",warn:"#f0a93c",err:"#fc6255"},
+ {bg:"#0f1217",surface:"#161a21",raised:"#1f242d",editor:"#12151b",preview:"#080a0d",border:"#262c36",borderStrong:"#3a4352",text:"#e4e8ee",muted:"#9aa4b2",faint:"#6b7586",accent:"#58c4dd",onAccent:"#07232b",playhead:"#ffd866",ok:"#83c167",warn:"#f0a93c",err:"#fc6255",icon:"#c3cbd6",iconActive:"#58c4dd",iconDisabled:"#566073"},
  {keyword:"#f2907a",string:"#a8d98c",number:"#ffd866",comment:"#6f7b8d",function:"#58c4dd",class:"#8fb8ff",builtin:"#c9a6f5"},
  ["#58c4dd","#83c167","#ffd866","#fc6255","#c59df0","#ff9f68"],
  {radius:6,controlHeight:28,density:1,fontSize:13,editorFontSize:14}),
 paper:T("Paper","light",
- {bg:"#e8ebf0",surface:"#f5f6f8",raised:"#ffffff",editor:"#ffffff",preview:"#14171c",border:"#d3d8e0",borderStrong:"#b4bcc8",text:"#1b1f27",muted:"#505b6b",faint:"#7c8696",accent:"#0a6f8c",onAccent:"#ffffff",playhead:"#b87a00",ok:"#2f7d32",warn:"#a86400",err:"#c62f25"},
+ {bg:"#e8ebf0",surface:"#f5f6f8",raised:"#ffffff",editor:"#ffffff",preview:"#14171c",border:"#d3d8e0",borderStrong:"#b4bcc8",text:"#1b1f27",muted:"#505b6b",faint:"#7c8696",accent:"#0a6f8c",onAccent:"#ffffff",playhead:"#b87a00",ok:"#2f7d32",warn:"#a86400",err:"#c62f25",icon:"#3a4454",iconActive:"#0a6f8c",iconDisabled:"#9aa3b2"},
  {keyword:"#c2410c",string:"#2f7d32",number:"#8a5a00",comment:"#6b7686",function:"#0a6f8c",class:"#1f5fbf",builtin:"#7c3aed"},
  ["#0a6f8c","#3f8f3a","#c79200","#d4483b","#7c5cc4","#d97a2b"],
  {radius:6,controlHeight:28,density:1,fontSize:13,editorFontSize:14}),
 violet:T("Night Violet","dark",
- {bg:"#110f1a",surface:"#181526",raised:"#221e34",editor:"#141120",preview:"#09080f",border:"#2b2640",borderStrong:"#413a5e",text:"#e8e5f3",muted:"#a29dbb",faint:"#7a7596",accent:"#a78bfa",onAccent:"#1a0f3a",playhead:"#ffc857",ok:"#7dd3a0",warn:"#f5b14c",err:"#ff7a8a"},
+ {bg:"#110f1a",surface:"#181526",raised:"#221e34",editor:"#141120",preview:"#09080f",border:"#2b2640",borderStrong:"#413a5e",text:"#e8e5f3",muted:"#a29dbb",faint:"#7a7596",accent:"#a78bfa",onAccent:"#1a0f3a",playhead:"#ffc857",ok:"#7dd3a0",warn:"#f5b14c",err:"#ff7a8a",icon:"#c4bfd9",iconActive:"#a78bfa",iconDisabled:"#5f5a7d"},
  {keyword:"#ff8fb1",string:"#9be3b5",number:"#ffc857",comment:"#7f7a9e",function:"#a78bfa",class:"#7cc4ff",builtin:"#f5a9e1"},
  ["#a78bfa","#7cc4ff","#7dd3a0","#ffc857","#ff8fb1","#f5a9e1"],
  {radius:8,controlHeight:28,density:1,fontSize:13,editorFontSize:13}),
 classic:T("Classic (current app)","dark",
- {bg:"#1e1e1e",surface:"#252526",raised:"#2d2d30",editor:"#1e1e1e",preview:"#101010",border:"#3c3c3c",borderStrong:"#555555",text:"#d4d4d4",muted:"#a0a0a0",faint:"#858585",accent:"#5fe3c8",onAccent:"#101010",playhead:"#5fe3c8",ok:"#8fd48f",warn:"#ffd37f",err:"#ff8080"},
+ {bg:"#1e1e1e",surface:"#252526",raised:"#2d2d30",editor:"#1e1e1e",preview:"#101010",border:"#3c3c3c",borderStrong:"#555555",text:"#d4d4d4",muted:"#a0a0a0",faint:"#858585",accent:"#5fe3c8",onAccent:"#101010",playhead:"#5fe3c8",ok:"#8fd48f",warn:"#ffd37f",err:"#ff8080",icon:"#c8c8c8",iconActive:"#5fe3c8",iconDisabled:"#6a6a6a"},
  {keyword:"#f92672",string:"#e6db74",number:"#ae81ff",comment:"#8a8670",function:"#a6e22e",class:"#a6e22e",builtin:"#66d9ec"},
  ["#7fc6ff","#8fd48f","#ffd37f","#ff8080","#c9a6f5","#ffb454"],
  {radius:2,controlHeight:22,density:.8,fontSize:12,editorFontSize:12})
@@ -420,6 +426,7 @@ var FIELDS=[
  ["Surfaces",[["colors.bg","Window"],["colors.surface","Panels and docks"],["colors.raised","Controls"],["colors.editor","Code editor and inputs"],["colors.preview","Preview well"]]],
  ["Borders and text",[["colors.border","Border"],["colors.borderStrong","Border strong"],["colors.text","Text"],["colors.muted","Text muted"],["colors.faint","Text faint"]]],
  ["Accent",[["colors.accent","Accent"],["colors.onAccent","Text on accent"]]],
+ ["Icons",[["colors.icon","Icon"],["colors.iconActive","Icon hover and selected"],["colors.iconDisabled","Icon disabled"]]],
  ["Status",[["colors.ok","Success"],["colors.warn","Warning"],["colors.err","Error"]]],
  ["Timeline",[["colors.playhead","Playhead"],["lanes.0","Lane 1"],["lanes.1","Lane 2"],["lanes.2","Lane 3"],["lanes.3","Lane 4"],["lanes.4","Lane 5"],["lanes.5","Lane 6"]]],
  ["Syntax",[["syntax.keyword","Keyword"],["syntax.string","String"],["syntax.number","Number"],["syntax.comment","Comment"],["syntax.function","Function"],["syntax.class","Class"],["syntax.builtin","Builtin"]]]
@@ -458,7 +465,7 @@ function derive(t){
 function apply(){
   var t=state.cur,c=t.colors,s=t.syntax,m=t.metrics,d=derive(t),r=document.documentElement.style;
   var v={bg:c.bg,surface:c.surface,raised:c.raised,editor:c.editor,preview:c.preview,border:c.border,border2:c.borderStrong,text:c.text,muted:c.muted,faint:c.faint,
-    accent:c.accent,"on-accent":c.onAccent,playhead:c.playhead,ok:c.ok,warn:c.warn,err:c.err,
+    accent:c.accent,"on-accent":c.onAccent,playhead:c.playhead,icon:c.icon,"icon-active":c.iconActive,"icon-disabled":c.iconDisabled,ok:c.ok,warn:c.warn,err:c.err,
     hover:d.hover,press:d.press,"accent-hover":d.accentHover,"accent-soft":d.accentSoft,selection:d.selection,caret:d.caret,ring:d.ring,
     "ok-soft":d.okSoft,"warn-soft":d.warnSoft,"err-soft":d.errSoft,"err-line":d.errLine,
     "s-kw":s.keyword,"s-str":s.string,"s-num":s.number,"s-com":s.comment,"s-fn":s.function,"s-cls":s.class,"s-bi":s.builtin,
@@ -667,6 +674,9 @@ var ROLES=[
  ["colors.faint","faint","Line numbers, ruler ticks, disabled hints."],
  ["colors.accent","accent","Run button, focus ring, current tab, selected state."],
  ["colors.onAccent","onAccent","Text and icons placed on the accent."],
+ ["colors.icon","icon","Toolbar and timeline icons at rest."],
+ ["colors.iconActive","iconActive","Icons on hover and when selected."],
+ ["colors.iconDisabled","iconDisabled","Icons that cannot be used right now. Still visible."],
  ["colors.playhead","playhead","Timeline playhead only."],
  ["colors.ok","ok","Idle and success states."],
  ["colors.warn","warn","Seeking, unsaved changes, pending patches."],
@@ -679,7 +689,7 @@ function renderRules(){
   var c=t.colors,s=t.syntax;
   var pairs=[["Text on window",c.text,c.bg,4.5],["Text on panels",c.text,c.surface,4.5],["Text on editor",c.text,c.editor,4.5],["Muted text on panels",c.muted,c.surface,4.5],["Faint text on panels",c.faint,c.surface,3],
    ["Text on controls",c.text,c.raised,4.5],["On-accent text on accent",c.onAccent,c.accent,4.5],["Accent on panels (focus, icons)",c.accent,c.surface,3],["Accent on editor",c.accent,c.editor,3],["Playhead on editor",c.playhead,c.editor,3],
-   ["Error on editor",c.err,c.editor,3],["Border strong on panels",c.borderStrong,c.surface,1.5]].concat(
+   ["Error on editor",c.err,c.editor,3],["Icon on panels",c.icon,c.surface,4.5],["Icon hover on panels",c.iconActive,c.surface,3],["Icon disabled on panels",c.iconDisabled,c.surface,2],["Border strong on panels",c.borderStrong,c.surface,1.5]].concat(
    ["keyword","string","number","function","class","builtin"].map(function(k){return ["Syntax "+k+" on editor",s[k],c.editor,4.5]})).concat([["Syntax comment on editor",s.comment,c.editor,3]]);
   $("#contrast").innerHTML=pairs.map(function(p){var r=ratio(p[1],p[2]);var ok=r>=p[3];return "<tr><td>"+p[0]+"</td><td class='mono'>"+r.toFixed(2)+":1</td><td class='mono'>"+p[3]+":1</td><td class='"+(ok?"pass":"fail")+"'>"+(ok?"Pass":"Fail")+"</td></tr>"}).join("");
   var states=[["pri","Primary"],["","Secondary"],["ghost","Ghost"],["dng","Danger"]],cols=[["","Default"],["is-hover","Hover"],["is-focus","Focus"],["is-disabled","Disabled"]];

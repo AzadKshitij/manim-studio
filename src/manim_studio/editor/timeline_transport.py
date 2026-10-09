@@ -149,7 +149,9 @@ class TimelineTransport(QWidget):
     def set_playing(self, playing: bool) -> None:
         """Flip the play/pause button to match the host's state."""
         self._playing = bool(playing)
-        self._play_button.setIcon(glyph("pause" if self._playing else "play"))
+        name = "pause" if self._playing else "play"
+        self._play_button.setIcon(glyph(name))
+        self._play_button.setProperty("glyph", name)
         text = "Pause  (Space)" if self._playing else "Play  (Space)"
         self._play_button.setToolTip(text)
         self._play_button.setAccessibleName(text.split("  (")[0])

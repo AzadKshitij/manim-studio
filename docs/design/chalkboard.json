@@ -19,7 +19,10 @@
     "playhead": "#ffd866",
     "ok": "#83c167",
     "warn": "#f0a93c",
-    "err": "#fc6255"
+    "err": "#fc6255",
+    "icon": "#c3cbd6",
+    "iconActive": "#58c4dd",
+    "iconDisabled": "#566073"
   },
   "syntax": {
     "keyword": "#f2907a",

@@ -45,6 +45,11 @@ def patch_manimgl_latex_compat() -> bool:
     """
     from manimlib.utils import tex_file_writing
 
+    from manim_studio.latex import normalize_temp_dir
+
+    # manimgl compiles in tempfile.TemporaryDirectory(); a '~' (8.3 short name)
+    # in that path makes TeX abort with "Emergency stop".
+    normalize_temp_dir()
     if getattr(tex_file_writing, "_manim_studio_latex_compat", False):
         return False
     real_subprocess = tex_file_writing.subprocess
