@@ -25,6 +25,7 @@ module must stay free of Qt, manimlib and moderngl imports.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -33,7 +34,13 @@ if TYPE_CHECKING:
 
     from manim_studio.timeline_model import TimelineBlock
 
-__all__ = ["ConstructMap", "ReusePlan", "RunSnapshot", "plan_reuse"]
+__all__ = [
+    "ConstructMap",
+    "ReusePlan",
+    "RunSnapshot",
+    "plan_reuse",
+    "source_is_time_dependent",
+]
 
 _LOOPS = (ast.For, ast.AsyncFor, ast.While)
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -49,6 +56,9 @@ class RunSnapshot:
     call_lines: tuple[int | None, ...]  #: per block, the line of its call in ``text``
     sites: tuple[Any, ...]  #: per block call-site identity (compared with ``==``)
     signature: Any = None  #: render size/fps and user-module fingerprint; compared with ``==``
+    #: Nothing in the run can make a later frame depend on how long earlier blocks took
+    #: (no updaters, no ``scene.time``, no user modules).  Defaults to the safe answer.
+    time_independent: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,10 +67,17 @@ class ReusePlan:
 
     blocks: frozenset[int]
     reason: str
+    #: ``(block index, frame delta)`` for reused blocks whose frames moved in time
+    #: (a timing-only edit pushed them along the timeline); absent means no move.
+    shifts: tuple[tuple[int, int], ...] = ()
 
     @property
     def reused(self) -> int:
         return len(self.blocks)
+
+    def shift_of(self, index: int) -> int:
+        """How many frames block ``index``'s cached frames moved (``0`` if they did not)."""
+        return dict(self.shifts).get(index, 0)
 
 
 NO_REUSE = ReusePlan(frozenset(), "nothing cached")
@@ -152,15 +169,85 @@ def _same_block(old: RunSnapshot, new: RunSnapshot, index: int) -> bool:
     )
 
 
-def plan_reuse(old: RunSnapshot | None, new: RunSnapshot, cached: Collection[int]) -> ReusePlan:
+#: Anything that lets a frame depend on elapsed time rather than on code order alone.
+_TIME_DEPENDENT = re.compile(
+    r"add_updater|always_redraw|\balways\b|f_always|clear_updaters|\.time\b|get_time|\bdt\b"
+)
+
+
+def source_is_time_dependent(text: str) -> bool:
+    """True when the scene source mentions updaters or the scene clock.
+
+    Animations are pure functions of their alpha, so without updaters a block looks the
+    same however long the blocks before it lasted.  This is a conservative text check:
+    a false positive only costs a re-render, a false negative would show a wrong frame.
+    """
+    return _TIME_DEPENDENT.search(text) is not None
+
+
+def _plan_timing_reuse(
+    old: RunSnapshot, new: RunSnapshot, cached: Collection[int], fps: int
+) -> ReusePlan | None:
+    """Reuse for an edit that only changed block durations (shifting later blocks).
+
+    Applies when both runs are time-independent and block ``i`` is the same call in the
+    same place with the same name; a block whose own duration changed is re-rendered,
+    every other cached block keeps its frames, moved by however far it was pushed.
+    ``None`` means the runs differ in more than timing.
+    """
+    if not (old.time_independent and new.time_independent):
+        return None
+    if len(old.blocks) != len(new.blocks):
+        return None
+    for index, (a, b) in enumerate(zip(old.blocks, new.blocks, strict=True)):
+        if (a.name, old.sites[index], old.call_lines[index]) != (
+            b.name,
+            new.sites[index],
+            new.call_lines[index],
+        ):
+            return None
+    reusable: set[int] = set()
+    shifts: list[tuple[int, int]] = []
+    for index in cached:
+        if index >= len(old.blocks):
+            continue
+        a, b = old.blocks[index], new.blocks[index]
+        if a.duration <= 0 or abs(a.duration - b.duration) > 1e-9:
+            continue
+        old_start = round(a.start * fps)
+        new_start = round(b.start * fps)
+        old_len = max(round(a.end * fps), old_start + 1) - old_start
+        new_len = max(round(b.end * fps), new_start + 1) - new_start
+        if old_len != new_len:
+            continue  # rounding gave the block a different number of frames
+        reusable.add(index)
+        if new_start != old_start:
+            shifts.append((index, new_start - old_start))
+    return ReusePlan(frozenset(reusable), "timing-only edit", tuple(sorted(shifts)))
+
+
+def plan_reuse(
+    old: RunSnapshot | None,
+    new: RunSnapshot,
+    cached: Collection[int],
+    *,
+    timing_only: bool = False,
+    fps: int = 30,
+) -> ReusePlan:
     """Blocks of ``old`` whose cached frames are still exact for ``new``.
 
-    ``cached`` holds the indices of blocks the previous crawl completed.
+    ``cached`` holds the indices of blocks the previous crawl completed.  With
+    ``timing_only`` (the caller knows the edit only changed durations, for example
+    timeline retimes) later blocks are reused too, moved to their new frame indices.
     """
     if old is None or not cached:
         return NO_REUSE
     if old.signature != new.signature or old.scene_name != new.scene_name:
         return ReusePlan(frozenset(), "render settings or imported modules changed")
+    if timing_only:
+        plan = _plan_timing_reuse(old, new, cached, fps)
+        if plan is not None:
+            return plan
     old_lines, new_lines = old.text.splitlines(), new.text.splitlines()
     prefix, suffix = _common_affixes(old_lines, new_lines)
 

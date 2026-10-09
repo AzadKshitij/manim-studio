@@ -41,8 +41,21 @@ from manim_studio.ipc import (
     hello_message,
 )
 from manim_studio.patch_runtime import StudioRuntime
-from manim_studio.patches import Patch, PatchedSites, PatchError, apply_patches, parse_patch
-from manim_studio.reuse import NO_REUSE, ReusePlan, RunSnapshot, plan_reuse
+from manim_studio.patches import (
+    Patch,
+    PatchedSites,
+    PatchError,
+    SetDuration,
+    apply_patches,
+    parse_patch,
+)
+from manim_studio.reuse import (
+    NO_REUSE,
+    ReusePlan,
+    RunSnapshot,
+    plan_reuse,
+    source_is_time_dependent,
+)
 from manim_studio.scene_runner import (
     SceneLoadError,
     check_scene_file,
@@ -293,6 +306,10 @@ class SceneHost:
         #: The executed run the current filmstrip belongs to, and which of its blocks the
         #: filmstrip holds before the crawler exists (carried over from the last reload).
         self._run: RunSnapshot | None = None
+        #: The scene file text and the timeline edits the last run was built from: a
+        #: reload that changes nothing but ``SetDuration`` edits is a *timing-only* edit.
+        self._run_base_text: str | None = None
+        self._run_applied: tuple[Patch, ...] = ()
         self._reused_blocks: frozenset[int] = frozenset()
         self._fresh_next = False  # next load must not reuse cached frames
         self._trace_id = 0
@@ -517,7 +534,8 @@ class SceneHost:
         mark = lap("check", mark)
 
         # Timeline edits run as patched in-memory source; the file on disk is untouched.
-        patch_result = apply_patches(scene_path.read_text(encoding="utf-8"), self._patches)
+        base_text = scene_path.read_text(encoding="utf-8")
+        patch_result = apply_patches(base_text, self._patches)
         patched = patch_result.changed
         mark = lap("patch", mark)
         module = load_scene_module(
@@ -572,20 +590,29 @@ class SceneHost:
             call_lines=self.call_lines,
             sites=snapshot.block_sites,
             signature=(tuple(self.config.size), self.config.fps, user_modules),
+            time_independent=not user_modules and not source_is_time_dependent(patch_result.text),
         )
+        timing_only = self._is_timing_only_edit(base_text, patch_result.applied)
         old_cached = self._crawler.cached_blocks if self._crawler else self._reused_blocks
         old_strip = self._filmstrip
-        plan = NO_REUSE if self._fresh_next else plan_reuse(self._run, new_run, old_cached)
+        plan = (
+            NO_REUSE
+            if self._fresh_next
+            else plan_reuse(self._run, new_run, old_cached, timing_only=timing_only, fps=self._fps)
+        )
         self._fresh_next = False
         self._dispose_scrub_engine()
         self._dispose_filmstrip()
         self._filmstrip, self._reused_blocks = self._carry_filmstrip(old_strip, plan, new_run)
         self._run = new_run
+        self._run_base_text = base_text
+        self._run_applied = patch_result.applied
         reuse_report = {
             "blocks": len(self._reused_blocks),
             "total": len(self.blocks),
             "frames": self._filmstrip.frames,
             "reason": plan.reason,
+            "shifted": len(plan.shifts),
         }
         self._crawl_disabled = False
         phases["commit"] = round(time.perf_counter() - mark, 4)
@@ -627,20 +654,36 @@ class SceneHost:
 
         A block owns the frame indices ``[round(start*fps), round(end*fps))``; its last
         boundary frame is re-rendered as the next block's first.  Blocks whose frames
-        were partly evicted from the LRU are dropped from the plan.
+        were partly evicted from the LRU are dropped from the plan.  After a timing-only
+        edit the plan carries a frame shift per block: its frames are found where they
+        were cached (before the shift) and re-keyed to where the block now lives.
         """
         if old is None or not plan.blocks:
             return Filmstrip(), frozenset()
         fps = self._fps
-        ranges: dict[int, tuple[int, int]] = {}
+        moves: dict[int, tuple[int, int, int]] = {}
         for index in plan.blocks:
             block = run.blocks[index]
+            shift = plan.shift_of(index)
             start = round(block.start * fps)
             stop = max(round(block.end * fps), start + 1)
-            if old.has_range(start, stop):
-                ranges[index] = (start, stop)
-        old.retain(ranges.values())
-        return old, frozenset(ranges)
+            # The block spans the same number of frames before and after the shift.
+            if old.has_range(start - shift, stop - shift):
+                moves[index] = (start - shift, stop - shift, shift)
+        old.retain_shifted(moves.values())
+        return old, frozenset(moves)
+
+    def _is_timing_only_edit(self, base_text: str, applied: tuple[Patch, ...]) -> bool:
+        """True when the previous run differs from this one only by ``SetDuration`` edits.
+
+        The scene file must be unchanged and every patch that was added, removed or
+        altered must be a duration edit; then no frame can differ except in the blocks
+        whose duration changed (which the reuse plan re-renders).
+        """
+        if self._run is None or self._run_base_text != base_text:
+            return False
+        changed = set(self._run_applied) ^ set(applied)
+        return bool(changed) and all(isinstance(patch, SetDuration) for patch in changed)
 
     @staticmethod
     def _site_resolver(

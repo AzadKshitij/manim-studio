@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from manim_studio.reuse import ConstructMap, RunSnapshot, plan_reuse
+from manim_studio.reuse import ConstructMap, RunSnapshot, plan_reuse, source_is_time_dependent
 from manim_studio.timeline_model import TimelineBlock
 
 SCENE = """\
@@ -191,3 +191,106 @@ class TestPlanReuse:
         old = _snapshot(SCENE, durations=(1.0, 0.0, 0.5, 0.5, 1.0, 1.0))
         plan = plan_reuse(old, _snapshot(SCENE, durations=(1.0, 0.0, 0.5, 0.5, 1.0, 1.0)), ALL)
         assert 1 not in plan.blocks
+
+
+class TestTimingOnlyReuse:
+    """A retime moves later blocks along the timeline without changing their pixels."""
+
+    @staticmethod
+    def _independent(snapshot: RunSnapshot) -> RunSnapshot:
+        import dataclasses
+
+        return dataclasses.replace(snapshot, time_independent=True)
+
+    def _plan(self, durations: tuple[float, ...], **kwargs):  # type: ignore[no-untyped-def]
+        old = self._independent(_snapshot(SCENE))
+        new = self._independent(_snapshot(SCENE, durations=durations))
+        return plan_reuse(old, new, ALL, timing_only=True, **kwargs)
+
+    def test_later_blocks_are_reused_and_shifted_by_the_whole_frame_delta(self) -> None:
+        # wait 0.5 s -> 1.0 s pushes every later block 15 frames (0.5 s at 30 fps) along.
+        plan = self._plan((1.0, 1.0, 0.5, 0.5, 1.0, 1.0))
+        assert plan.blocks == {0, 2, 3, 4, 5}  # the retimed block 1 is re-rendered
+        assert plan.reason == "timing-only edit"
+        assert plan.shift_of(0) == 0
+        assert [plan.shift_of(i) for i in (2, 3, 4, 5)] == [15, 15, 15, 15]
+
+    def test_without_the_flag_a_retime_still_keeps_only_the_prefix(self) -> None:
+        old = self._independent(_snapshot(SCENE))
+        new = self._independent(_snapshot(SCENE, durations=(1.0, 1.0, 0.5, 0.5, 1.0, 1.0)))
+        assert plan_reuse(old, new, ALL).blocks == {0}
+
+    def test_time_dependent_scenes_fall_back_to_the_prefix_rule(self) -> None:
+        old = _snapshot(SCENE)  # time_independent defaults to False: be safe
+        new = _snapshot(SCENE, durations=(1.0, 1.0, 0.5, 0.5, 1.0, 1.0))
+        plan = plan_reuse(old, new, ALL, timing_only=True)
+        assert plan.blocks == {0} and plan.shifts == ()
+
+    def test_a_structural_change_is_not_a_timing_edit(self) -> None:
+        old = self._independent(_snapshot(SCENE))
+        moved = {**LINES, "fade": 22, "wait2": 23}
+        new = self._independent(
+            _snapshot(SCENE, lines=moved, durations=(1.0, 1.0, 0.5, 0.5, 1.0, 1.0))
+        )
+        plan = plan_reuse(old, new, ALL, timing_only=True)
+        assert plan.shifts == () and plan.reason != "timing-only edit"
+
+    def test_a_different_block_count_is_not_a_timing_edit(self) -> None:
+        import dataclasses
+
+        old = self._independent(_snapshot(SCENE))
+        new = dataclasses.replace(
+            old, blocks=old.blocks[:-1], call_lines=old.call_lines[:-1], sites=old.sites[:-1]
+        )
+        assert plan_reuse(old, new, ALL, timing_only=True).reason != "timing-only edit"
+
+    def test_only_cached_blocks_are_reused(self) -> None:
+        old = self._independent(_snapshot(SCENE))
+        new = self._independent(_snapshot(SCENE, durations=(1.0, 1.0, 0.5, 0.5, 1.0, 1.0)))
+        plan = plan_reuse(old, new, frozenset({2, 5}), timing_only=True)
+        assert plan.blocks == {2, 5}
+
+    def test_a_block_whose_frame_count_changes_with_the_shift_is_dropped(self) -> None:
+        # 0.15 s blocks are 4.5 frames long, so a 0.05 s (1.5 frame) shift changes how many
+        # frames some blocks round to.  Those must be re-rendered, never shown with a hole.
+        old = self._independent(_snapshot(SCENE, durations=(0.15,) * 6))
+        new = self._independent(_snapshot(SCENE, durations=(0.15, 0.2, 0.15, 0.15, 0.15, 0.15)))
+        plan = plan_reuse(old, new, ALL, timing_only=True)
+        assert 1 not in plan.blocks  # retimed
+        assert 0 in plan.blocks  # before the edit
+        assert plan.blocks < ALL - {1}  # and at least one later block lost to rounding
+        for index in plan.blocks:
+            a, b = old.blocks[index], new.blocks[index]
+            old_len = max(round(a.end * 30), round(a.start * 30) + 1) - round(a.start * 30)
+            new_len = max(round(b.end * 30), round(b.start * 30) + 1) - round(b.start * 30)
+            assert old_len == new_len
+            assert plan.shift_of(index) == round(b.start * 30) - round(a.start * 30)
+
+    def test_zero_length_blocks_are_never_reused(self) -> None:
+        old = self._independent(_snapshot(SCENE, durations=(1.0, 0.0, 0.5, 0.5, 1.0, 1.0)))
+        new = self._independent(_snapshot(SCENE, durations=(1.0, 0.0, 0.5, 0.5, 1.0, 2.0)))
+        plan = plan_reuse(old, new, ALL, timing_only=True)
+        assert 1 not in plan.blocks and 5 not in plan.blocks
+
+    def test_changed_render_settings_still_win(self) -> None:
+        old = self._independent(_snapshot(SCENE))
+        new = self._independent(_snapshot(SCENE, signature=("1080p", 30)))
+        assert plan_reuse(old, new, ALL, timing_only=True).blocks == frozenset()
+
+
+class TestTimeDependence:
+    def test_plain_scenes_are_time_independent(self) -> None:
+        assert source_is_time_dependent(SCENE) is False
+
+    def test_updaters_and_the_scene_clock_are_time_dependent(self) -> None:
+        for fragment in (
+            "dot.add_updater(lambda m, dt: m.shift(dt * RIGHT))",
+            "always_redraw(lambda: Dot())",
+            "x = self.time",
+            "f_always(m.set_x, lambda: 1)",
+            "m.clear_updaters()",
+        ):
+            assert source_is_time_dependent(SCENE + "        " + fragment + "\n"), fragment
+
+    def test_words_that_merely_contain_the_tokens_do_not_count(self) -> None:
+        assert source_is_time_dependent("self.runtime = 1\nhandle = 2\n") is False

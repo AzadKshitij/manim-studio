@@ -58,9 +58,12 @@ The frames channel is only opened in `--embedded` mode.
 `import`, `signature`, `trace`, `initial_scene`, `commit`, `total`.
 
 `log.reuse` (v5) reports how much of the filmstrip survived the reload:
-`{"blocks": int, "total": int, "frames": int, "reason": str}` - cached blocks whose frames are
-still exact (see ADR 0009), the block count, the frames kept, and why the rest were dropped
-(`"edit at line N"`, `"edit outside construct()"`, ...). Additive: older editors ignore it.
+`{"blocks": int, "total": int, "frames": int, "reason": str, "shifted": int}` - cached blocks
+whose frames are still exact (see ADR 0009), the block count, the frames kept, and why the rest
+were dropped (`"edit at line N"`, `"edit outside construct()"`, ...). `reason` is
+`"timing-only edit"` when only timeline retimes changed: every block except the retimed ones
+keeps its frames and `shifted` counts the blocks whose frames moved along the timeline.
+Additive: older editors ignore it.
 
 `log.blocks` is the spec `log.json` shape:
 `[{ "name": str, "start": float, "duration": float, "index": int }, ...]`.

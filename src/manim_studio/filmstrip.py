@@ -107,6 +107,27 @@ class Filmstrip:
         self._bytes = sum(len(blob) for blob in kept.values())
         return len(kept)
 
+    def retain_shifted(self, moves: Iterable[tuple[int, int, int]]) -> int:
+        """Keep only the frames in ``(start, stop, delta)`` ranges, re-keyed by ``delta``.
+
+        A retimed block pushes every later block along the timeline without changing a
+        single pixel of it, so its cached frames move to ``index + delta`` instead of
+        being rendered again.  Frames outside every range are dropped; the LRU order of
+        the kept frames is preserved.  Ranges must not map onto each other (they are
+        distinct blocks of one timeline).  Returns how many frames were kept.
+        """
+        spans = sorted(moves)
+        kept: OrderedDict[int, bytes] = OrderedDict()
+        for index, blob in self._frames.items():
+            for start, stop, delta in spans:
+                if start <= index < stop:
+                    if index + delta >= 0:
+                        kept[index + delta] = blob
+                    break
+        self._frames = kept
+        self._bytes = sum(len(blob) for blob in kept.values())
+        return len(kept)
+
     def clear(self) -> None:
         self._frames.clear()
         self._bytes = 0

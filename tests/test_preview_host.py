@@ -596,6 +596,106 @@ class TestHostIntegration:
         assert all(isinstance(site["id"], str) and site["occ"] >= 0 for site in resolved)
         assert log_event["patches"] == {"applied": 0, "orphaned": []}
 
+    def test_a_timing_only_edit_keeps_later_blocks_cached_and_pixel_identical(
+        self, host_session: Any, tmp_path: Path
+    ) -> None:
+        """Retiming one block must not re-render the blocks after it: they just move."""
+        peer = host_session[0]
+        scene_file = tmp_path / "shifty.py"
+        scene_file.write_text(
+            "from manimlib import *\n\n\n"
+            "class Shifty(Scene):\n"
+            "    def construct(self):\n"
+            "        dot = Dot()\n"
+            "        self.add(dot)\n"
+            "        self.play(ShowCreation(Circle()), run_time=0.5)\n"
+            "        self.wait(0.5)\n"
+            "        self.play(dot.animate.shift(RIGHT * 2), run_time=0.5)\n"
+            "        self.wait(0.5)\n",
+            encoding="utf-8",
+        )
+
+        def crawl_done() -> None:
+            peer.wait_event(
+                lambda event: event.get("event") == Event.FILMSTRIP and event.get("done"),
+                timeout=60,
+            )
+
+        def scrub_frame(time_seconds: float) -> tuple[Frame, dict[str, Any]]:
+            _settle_frames(peer)
+            for _ in range(6):
+                _drain_frames(peer)
+                peer.send(Command.SCRUB, time=time_seconds)
+                tick = peer.wait_event(
+                    lambda event: (
+                        event.get("event") == Event.TICK
+                        and event.get("scrubbing") is True
+                        and abs(float(event.get("time", -1.0)) - time_seconds) < 1e-6
+                    )
+                )
+                try:
+                    return peer.wait_frame(timeout=5), tick
+                except TimeoutError:
+                    continue
+            raise TimeoutError(f"no scrub frame arrived for t={time_seconds}")
+
+        peer.drain()
+        try:
+            peer.send(Command.LOAD, path=str(scene_file), scene_name="Shifty", patches=[])
+            base = peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG and event.get("scene_name") == "Shifty"
+                )
+            )
+            crawl_done()
+            assert [b["duration"] for b in base["blocks"]] == pytest.approx([0.5] * 4)
+            wait_site = base["sites"][1]["id"]
+
+            # Retime block 1 (a wait) from 0.5 s to 1.0 s: blocks 2 and 3 move 15 frames.
+            peer.send(
+                Command.SET_PATCHES,
+                patches=[{"op": "set_duration", "site": wait_site, "seconds": 1.0}],
+                time=0.0,
+            )
+            edited = peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG
+                    and event.get("patches", {}).get("applied", 0) > 0
+                ),
+                timeout=60,
+            )
+            assert [b["duration"] for b in edited["blocks"]] == pytest.approx([0.5, 1.0, 0.5, 0.5])
+            reuse = edited["reuse"]
+            assert reuse["reason"] == "timing-only edit"
+            assert reuse["blocks"] == 3  # everything except the retimed block
+            assert reuse["shifted"] == 2
+            assert reuse["frames"] == 3 * 15
+            crawl_done()
+
+            # t=1.75 is inside block 2, which now starts at 1.5 s (it used to start at 1.0 s).
+            shifted, tick = scrub_frame(1.75)
+            assert tick.get("cached") is True
+
+            # The same frame from a cache built from scratch must be pixel-identical.
+            peer.send(Command.RELOAD, fresh=True)
+            fresh_log = peer.wait_event(lambda event: event.get("event") == Event.LOG)
+            assert fresh_log["reuse"]["blocks"] == 0
+            crawl_done()
+            fresh, _tick = scrub_frame(1.75)
+            assert (shifted.width, shifted.height) == (fresh.width, fresh.height)
+            total = sum(abs(a - b) for a, b in zip(shifted.rgba, fresh.rgba, strict=True))
+            assert total / len(fresh.rgba) < 1.0, f"mean abs diff {total / len(fresh.rgba):.3f}/255"
+            errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
+            assert not errors, errors
+        finally:
+            peer.send(Command.LOAD, path=str(SCENE_FILE), scene_name="FeatureShowcase", patches=[])
+            peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG and event.get("scene_name") == "FeatureShowcase"
+                ),
+                timeout=60,
+            )
+
     def test_set_patches_retimes_without_touching_the_file(
         self, host_session: Any, tmp_path: Path
     ) -> None:

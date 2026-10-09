@@ -32,8 +32,21 @@
 ## Consequences
 
 - Retiming or editing the last block re-renders only the tail; an edit early in
-  `construct()` still re-crawls everything after it. Blocks after an edited block are not
-  reused even when pixel-identical (their time shifted); shifting them is future work.
+  `construct()` still re-crawls everything after it.
+- **Timing-only edits shift instead of re-rendering.** When the scene file is unchanged
+  and the only patches that differ between two runs are timeline `SetDuration` edits, a
+  retime pushes later blocks along the timeline without changing a pixel of them, provided
+  nothing can make a frame depend on elapsed time. `reuse.plan_reuse(timing_only=True)`
+  then keeps every cached block except those whose own duration changed, and
+  `Filmstrip.retain_shifted` re-keys their frames by the block's frame delta. Conditions:
+  both runs are *time independent* (no `add_updater`, `always_redraw`, `scene.time`, `dt`
+  in the executed text and no user modules: `reuse.source_is_time_dependent`, a
+  conservative text check), the blocks are the same calls in the same places, and a
+  block has the same number of frames before and after the shift (a fractional-frame
+  shift can round a block to a different length; that block is re-rendered). On a
+  24-block scene a retime keeps 23 blocks and completes the cache in ~0.3 s versus ~0.95 s
+  for a rebuild; `test_a_timing_only_edit_keeps_later_blocks_cached_and_pixel_identical`
+  compares a shifted frame with one from a from-scratch cache.
 - Streamed blocks are stepped frame by frame like real playback, while uncached-prefix
   replays use skip mode, so updater-driven mobjects can differ by sub-pixel amounts
   depending on what was cached; `test_editing_the_last_block_reuses_everything_before_it`
