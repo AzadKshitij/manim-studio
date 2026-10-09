@@ -262,3 +262,62 @@ class TestRenderStill:
 
         with Image.open(target) as image:
             assert image.size == (320, 180)
+
+
+class TestPatchedSourceLoading:
+    """Timeline patches run as in-memory source while ``__file__`` stays the real path."""
+
+    def test_executes_the_given_source_not_the_file(self, tmp_path: Path) -> None:
+        from manim_studio.scene_runner import load_scene_module
+
+        scene = tmp_path / "patched_scene.py"
+        scene.write_text("VALUE = 1\n", encoding="utf-8")
+        module = load_scene_module(scene, source="VALUE = 2\n")
+        assert module.VALUE == 2
+        assert Path(module.__file__).resolve() == scene.resolve()
+
+    def test_tracebacks_keep_the_real_filename(self, tmp_path: Path) -> None:
+        from manim_studio.scene_runner import load_scene_module
+
+        scene = tmp_path / "patched_scene2.py"
+        scene.write_text("def f():\n    return 1\n", encoding="utf-8")
+        module = load_scene_module(scene, source="def f():\n    return 2\n")
+        assert Path(module.f.__code__.co_filename).resolve() == scene.resolve()
+
+    def test_future_flags_do_not_leak_into_user_scenes(self, tmp_path: Path) -> None:
+        from manim_studio.scene_runner import SceneLoadError, load_scene_module
+
+        scene = tmp_path / "patched_scene3.py"
+        scene.write_text("x = 1\n", encoding="utf-8")
+        # scene_runner itself uses ``from __future__ import annotations``.  If that
+        # leaked into the compiled user code this undefined annotation would stay a
+        # lazy string; evaluating it (a NameError) proves the user's code is compiled
+        # with its own flags.
+        with pytest.raises(SceneLoadError, match="NameError"):
+            load_scene_module(scene, source="def f(a: Undefined):\n    return a\n")
+
+    def test_runtime_is_exposed_and_reset_per_construct(self, tmp_path: Path) -> None:
+        from manim_studio.patch_runtime import StudioRuntime
+        from manim_studio.scene_runner import load_scene_module
+
+        scene = tmp_path / "patched_scene4.py"
+        scene.write_text("x = 1\n", encoding="utf-8")
+        source = (
+            "class Thing:\n"
+            "    def construct(self):\n"
+            "        return [__studio__.dur('a', {1: 9.0}, 1.0) for _ in range(2)]\n"
+        )
+        runtime = StudioRuntime()
+        module = load_scene_module(scene, source=source, runtime=runtime)
+        assert module.__studio__ is runtime
+        assert module.Thing().construct() == [1.0, 9.0]
+        # A second run starts counting from zero again.
+        assert module.Thing().construct() == [1.0, 9.0]
+
+    def test_syntax_errors_become_scene_load_errors(self, tmp_path: Path) -> None:
+        from manim_studio.scene_runner import SceneLoadError, load_scene_module
+
+        scene = tmp_path / "patched_scene5.py"
+        scene.write_text("x = 1\n", encoding="utf-8")
+        with pytest.raises(SceneLoadError):
+            load_scene_module(scene, source="def broken(:\n")

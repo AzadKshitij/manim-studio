@@ -9,6 +9,10 @@ starts fast and so ``sys.argv`` can be sanitized first (manimgl parses it at imp
 from __future__ import annotations
 
 import ast
+import functools
+import importlib.machinery
+import importlib.util
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -288,27 +292,110 @@ def manimlib_argv_guard() -> Iterator[None]:
         sys.argv[:] = previous
 
 
-def load_scene_module(path: str | Path, *, is_reload: bool = False) -> Any:
+class _PatchedSourceLoader(importlib.machinery.SourceFileLoader):
+    """Executes in-memory (timeline-patched) source as if it were the file on disk.
+
+    ``co_filename`` stays the real scene path, so tracebacks, call sites and
+    breakpoints keep pointing at the file the user has open.  The bytecode cache is
+    bypassed on purpose: the text differs from what is on disk.
+    """
+
+    def __init__(self, fullname: str, path: str, source: str) -> None:
+        super().__init__(fullname, path)
+        self._patched_source = source
+
+    def get_code(self, fullname: str) -> Any:
+        # dont_inherit: this module uses ``from __future__ import annotations``,
+        # which must not leak into user scenes.
+        return compile(self._patched_source, self.path, "exec", dont_inherit=True)
+
+
+def _reset_runtime_on_construct(module: Any, runtime: Any) -> None:
+    """Make every scene in ``module`` restart the runtime's loop counters per run.
+
+    ``construct`` is replayed many times (trace, scrub, crawler, playback); the
+    per-iteration duration helper numbers iterations from the start of each run.
+    """
+    for value in list(vars(module).values()):
+        if not isinstance(value, type) or value.__module__ != module.__name__:
+            continue
+        original = value.__dict__.get("construct")
+        if original is None:
+            continue
+
+        def construct(self: Any, *args: Any, _original: Any = original, **kwargs: Any) -> Any:
+            runtime.reset()
+            return _original(self, *args, **kwargs)
+
+        functools.update_wrapper(construct, original)
+        value.construct = construct  # type: ignore[attr-defined]
+
+
+def load_scene_module(
+    path: str | Path,
+    *,
+    is_reload: bool = False,
+    source: str | None = None,
+    runtime: Any = None,
+) -> Any:
     """Import a scene module through manimgl's loader.
 
     With ``is_reload=True`` manimgl performs a deep reload of user-defined modules
     the scene imported, which is what makes editor reloads pick up helper-file edits.
+
+    ``source`` runs that text instead of the file's contents (still reporting
+    ``path`` as the file), which is how timeline patches take effect without touching
+    the ``.py``.  ``runtime`` is exposed to the module as ``__studio__`` for
+    per-iteration edits.
     """
     resolved = Path(path).resolve()
     with manimlib_argv_guard():
         from manimlib.module_loader import ModuleLoader
 
         from manim_studio.latex_compat import patch_manimgl_latex_compat
+        from manim_studio.patches import RUNTIME_NAME
 
         patch_manimgl_latex_compat()
         try:
-            module = ModuleLoader.get_module(str(resolved), is_during_reload=is_reload)
+            if source is None:
+                module = ModuleLoader.get_module(str(resolved), is_during_reload=is_reload)
+            else:
+                module = _load_patched_module(
+                    ModuleLoader, resolved, source, runtime, RUNTIME_NAME, is_reload
+                )
         except SceneLoadError:
             raise
         except Exception as exc:  # surface import failures with context
             raise SceneLoadError(f"{type(exc).__name__} while importing {resolved}: {exc}") from exc
     if module is None:
         raise SceneLoadError(f"cannot import {resolved}")
+    return module
+
+
+def _load_patched_module(
+    loader_cls: Any,
+    resolved: Path,
+    source: str,
+    runtime: Any,
+    runtime_name: str,
+    is_reload: bool,
+) -> Any:
+    """Mirror ``ModuleLoader.get_module`` but execute ``source`` instead of the file."""
+    file_name = str(resolved)
+    module_name = file_name.replace(os.sep, ".").replace(".py", "")
+    loader = _PatchedSourceLoader(module_name, file_name, source)
+    spec = importlib.util.spec_from_file_location(module_name, file_name, loader=loader)
+    if spec is None:
+        raise SceneLoadError(f"cannot import {resolved}")
+    module = importlib.util.module_from_spec(spec)
+    if runtime is not None:
+        setattr(module, runtime_name, runtime)
+    if is_reload:
+        imported = loader_cls._exec_module_and_track_imports(spec, module)
+        loader_cls._reload_modules(imported, set())
+    loader.exec_module(module)
+    if runtime is not None:
+        _reset_runtime_on_construct(module, runtime)
     return module
 
 
