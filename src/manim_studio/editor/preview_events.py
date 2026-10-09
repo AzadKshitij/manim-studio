@@ -15,6 +15,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QLabel
 
 from manim_studio.timeline_model import block_for_line, format_duration, parse_call_lines, parse_log
+from manim_studio.tracer import ClipTrace, parse_clips
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,6 +61,7 @@ class PreviewEvents(QObject):
         self._play_from_index: int | None = None
         self._playing = False
         self._call_lines: tuple[int | None, ...] = ()
+        self._clips: tuple[tuple[ClipTrace, ...], ...] = ()
 
         controller.logReceived.connect(self.on_log)
         controller.statusChanged.connect(self.on_status)
@@ -99,6 +101,12 @@ class PreviewEvents(QObject):
             return self._call_lines[index]
         return None
 
+    def clips(self, index: int) -> tuple[ClipTrace, ...]:
+        """The animations of block ``index`` (empty for a wait or unknown block)."""
+        if 0 <= index < len(self._clips):
+            return self._clips[index]
+        return ()
+
     @property
     def call_lines(self) -> tuple[int | None, ...]:
         """Per-block call-site lines (parallel to the timeline blocks)."""
@@ -123,6 +131,8 @@ class PreviewEvents(QObject):
         self._timeline.set_fps(message.get("fps"))
         self._total_duration = timeline_log.total_duration
         self._call_lines = parse_call_lines(message.get("call_sites"))
+        self._clips = parse_clips(message.get("clips"))
+        self._timeline.set_clips(self._clips)
         # A successful trace means the scene now compiles/runs: clear any marker
         # left by the previous failure.
         self._editor.clear_error_marker()

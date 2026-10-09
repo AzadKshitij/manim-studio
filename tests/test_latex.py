@@ -45,17 +45,16 @@ import os
 import sys
 from pathlib import Path
 
-out = None
+out = Path.cwd()
 for arg in sys.argv[1:]:
     if arg.startswith("-output-directory="):
         out = Path(arg.split("=", 1)[1])
-if out is None:
-    sys.exit(3)
 out.mkdir(parents=True, exist_ok=True)
 if os.environ.get("FAKE_LATEX_EXIT", "0") != "0":
     errors = os.environ.get("FAKE_LATEX_LOG", "")
     if errors:
-        (out / "working.log").write_text(errors, encoding="utf-8")
+        log_name = os.environ.get("FAKE_LATEX_LOGNAME", "working.log")
+        (out / log_name).write_text(errors, encoding="utf-8")
     sys.stderr.write(os.environ.get("FAKE_LATEX_STDERR", ""))
     sys.exit(1)
 if os.environ.get("FAKE_LATEX_DVI", "1") == "1":
@@ -155,6 +154,88 @@ def test_install_from_local_archive(tmp_path: Path) -> None:
     assert latex_install.is_installed(target)
     assert latex_install.uninstall_latex(target)
     assert not target.exists()
+
+
+def _fake_source(tmp_path: Path) -> tuple[Path, latex_install.TinytexSource]:
+    """A tiny zip bundle plus a pinned source whose digest matches it."""
+    import hashlib
+
+    staged = tmp_path / "staged" / "TinyTeX"
+    (staged / "bin" / "x86_64-linux").mkdir(parents=True, exist_ok=True)
+    (staged / "tlpkg").mkdir(parents=True, exist_ok=True)
+    archive = tmp_path / "tinytex.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for path in staged.rglob("*"):
+            bundle.write(path, path.relative_to(tmp_path / "staged"))
+    source = latex_install.TinytexSource(
+        filename="TinyTeX-1-test.zip",
+        url="https://example.invalid/TinyTeX-1-test.zip",
+        sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        kind="archive",
+    )
+    return archive, source
+
+
+def test_install_uses_download_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive, source = _fake_source(tmp_path)
+    downloads: list[str] = []
+
+    def fake_download(url: str, dest: Path, *args: object, **kwargs: object) -> None:
+        downloads.append(url)
+        Path(dest).write_bytes(archive.read_bytes())
+
+    monkeypatch.setattr(latex_install, "tinytex_source", lambda: source)
+    monkeypatch.setattr(latex_install, "download_file", fake_download)
+    target = tmp_path / "app" / "latex"
+    stages: list[str] = []
+
+    def run(**extra: bool) -> None:
+        latex_install.install_latex(
+            target,
+            packages=(),
+            skip_tlmgr=True,
+            on_progress=lambda p: stages.append(p.stage),
+            **extra,
+        )
+
+    run()
+    assert len(downloads) == 1
+    assert (tmp_path / "app" / "downloads" / source.filename).is_file()
+
+    # Reinstall wipes the tree but reuses the cached bundle: no second download.
+    stages.clear()
+    run()
+    assert len(downloads) == 1
+    assert "cached" in stages
+    assert (target / "bin").is_dir()
+
+    # A corrupt cache entry is discarded and re-downloaded.
+    (tmp_path / "app" / "downloads" / source.filename).write_bytes(b"junk")
+    run()
+    assert len(downloads) == 2
+
+    # --no-cache bypasses the cache; clear_download_cache empties it.
+    run(use_cache=False)
+    assert len(downloads) == 3
+    assert latex_install.clear_download_cache(target)
+    assert not (tmp_path / "app" / "downloads").exists()
+
+
+def test_cache_write_failure_does_not_break_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive, source = _fake_source(tmp_path)
+    monkeypatch.setattr(latex_install, "tinytex_source", lambda: source)
+    monkeypatch.setattr(
+        latex_install,
+        "download_file",
+        lambda url, dest, *a, **k: Path(dest).write_bytes(archive.read_bytes()),
+    )
+    blocker = tmp_path / "app" / "downloads"
+    blocker.parent.mkdir(parents=True)
+    blocker.write_text("a file, not a directory", encoding="utf-8")
+    root = latex_install.install_latex(tmp_path / "app" / "latex", packages=(), skip_tlmgr=True)
+    assert (root / "bin").is_dir()
 
 
 def test_install_cancelled(tmp_path: Path) -> None:
@@ -424,6 +505,49 @@ def test_probe_reports_latex_log_error(tmp_path: Path, monkeypatch: pytest.Monke
     assert not probe.ok
     assert probe.kind == "latex_error"
     assert "Undefined control sequence" in probe.detail
+
+
+def test_probe_falls_back_to_texput_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # TeX writes texput.log when it dies before opening the input (e.g. '~' in the path).
+    _install_fake_tools(tmp_path / "tools", monkeypatch)
+    monkeypatch.setenv("FAKE_LATEX_EXIT", "1")
+    monkeypatch.setenv("FAKE_LATEX_LOGNAME", "texput.log")
+    monkeypatch.setenv("FAKE_LATEX_LOG", "! Emergency stop.\n")
+    probe = probe_compile(timeout=30)
+    assert not probe.ok
+    assert "Emergency stop" in probe.detail
+
+
+def test_normalize_temp_dir_expands_short_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    import manim_studio.latex as latex_module
+
+    short = str(tmp_path / "LONGNA~1")
+    long = str(tmp_path / "LONGNAME")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(tempfile, "tempdir", short)
+    monkeypatch.setattr(latex_module, "_long_path", lambda path: long)
+    assert latex_module.normalize_temp_dir() == long
+    assert tempfile.gettempdir() == long
+    assert os.environ["TEMP"] == long
+    assert os.environ["TMP"] == long
+    assert latex_module.normalize_temp_dir() == long  # idempotent
+
+
+def test_normalize_temp_dir_noop_without_tilde(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    import manim_studio.latex as latex_module
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(latex_module, "_long_path", lambda path: "SHOULD-NOT-BE-USED")
+    assert latex_module.normalize_temp_dir() == str(tmp_path)
 
 
 def test_probe_notes_elevated_privileges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

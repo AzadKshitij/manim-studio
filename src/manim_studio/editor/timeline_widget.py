@@ -37,9 +37,10 @@ from manim_studio.timeline_model import (
     format_duration,
     snap_time,
 )
+from manim_studio.tracer import ClipTrace
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
 __all__ = ["TimelineWidget"]
 
@@ -55,6 +56,11 @@ MIN_BLOCK_DURATION = 1.0 / 30.0
 #: little larger than the edge-grab window so a pointer can snap onto an edge
 #: before it becomes a resize handle.
 SNAP_PX = 8.0
+#: Per-animation lanes: the block strip keeps a fixed height and each animated
+#: mobject gets a thin row below it (more than ``MAX_LANES`` share the last row).
+BLOCK_ROW_HEIGHT = 30.0
+LANE_HEIGHT = 15.0
+MAX_LANES = 6
 
 
 def block_color(name: str) -> QColor:
@@ -107,6 +113,8 @@ class TimelineWidget(QWidget):
         self._timing_clipboard: float | None = None
         self._iterations: dict[int, int] = {}  # block -> loop iterations sharing its call
         self._edited: frozenset[int] = frozenset()  # blocks whose call has timeline edits
+        self._clips: tuple[tuple[ClipTrace, ...], ...] = ()  # animations per block
+        self._clip_tip = False  # the tooltip currently shows a clip, not a block
         self._context_menu: QMenu | None = None  # kept for tests
         self._looping = False  # mirrors the transport's loop toggle
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
@@ -167,6 +175,44 @@ class TimelineWidget(QWidget):
 
     def is_edited(self, index: int) -> bool:
         return index in self._edited
+
+    def set_clips(self, clips: Sequence[Sequence[ClipTrace]]) -> None:
+        """Set the animations of each block (parallel to the log) and size the lane rows."""
+        self._clips = tuple(tuple(block) for block in clips)
+        self._update_min_height()
+        self.update()
+
+    def lane_count(self) -> int:
+        """Number of lane rows drawn under the block strip (``0`` without clips)."""
+        highest = max((c.lane for block in self._clips for c in block), default=-1)
+        return min(highest + 1, MAX_LANES)
+
+    def _lanes_top(self) -> float:
+        return RULER_HEIGHT + BLOCK_ROW_HEIGHT + 4.0
+
+    def _update_min_height(self) -> None:
+        lanes = self.lane_count()
+        needed = self._lanes_top() + lanes * LANE_HEIGHT + 8.0 + SCROLLBAR_HEIGHT if lanes else 0.0
+        self.setMinimumHeight(int(max(96 + SCROLLBAR_HEIGHT, needed)))
+
+    def clip_at(self, x: float, y: float) -> tuple[TimelineBlock, ClipTrace] | None:
+        """The ``(block, clip)`` under a widget point in the lane area, or ``None``."""
+        lanes = self.lane_count()
+        if not lanes or y < self._lanes_top():
+            return None
+        lane = int((y - self._lanes_top()) // LANE_HEIGHT)
+        if not 0 <= lane < lanes:
+            return None
+        time = self._view.x_to_time(x)
+        for block in self._log.blocks:
+            if block.index >= len(self._clips) or not block.start <= time <= block.end:
+                continue
+            for clip in self._clips[block.index]:
+                if min(clip.lane, lanes - 1) != lane:
+                    continue
+                if block.start + clip.start <= time <= block.start + clip.start + clip.duration:
+                    return block, clip
+        return None
 
     def set_active_block(self, index: int | None) -> None:
         """Highlight the block the editor caret currently sits in (or clear it)."""
@@ -578,6 +624,17 @@ class TimelineWidget(QWidget):
                     )
                 )
             self.update()
+        hit = self.clip_at(event.position().x(), event.position().y())
+        if hit is not None:
+            block_hit, clip = hit
+            self.setToolTip(
+                f"{clip.animation}({clip.target})  ·  {clip.duration:.2f}s\n"
+                f"in block #{block_hit.index} · edits change the whole play() run_time"
+            )
+            self._clip_tip = True
+        elif self._clip_tip:
+            self._clip_tip = False
+            self._hover_index = None  # rebuild the block tooltip on the next move
         if self._mode == "scrub":
             self._request_scrub(event.position().x())
 
@@ -677,7 +734,9 @@ class TimelineWidget(QWidget):
         painter.fillRect(self.rect(), QColor(0x18, 0x18, 0x18))
         self._draw_ruler(painter, width)
         track_top = RULER_HEIGHT
-        track_height = max(24.0, height - RULER_HEIGHT - 10.0)
+        track_height = (
+            BLOCK_ROW_HEIGHT if self.lane_count() else max(24.0, height - RULER_HEIGHT - 10.0)
+        )
         if self._log.is_empty:
             painter.setPen(QColor(0x88, 0x88, 0x88))
             painter.drawText(
@@ -698,9 +757,64 @@ class TimelineWidget(QWidget):
                     current=block.index == current,
                     active=block.index == self._active_index,
                 )
+            self._draw_lanes(painter, display, metrics)
         self._draw_range(painter, width, height)
         self._draw_playhead(painter, height)
         painter.end()
+
+    def _draw_lanes(self, painter: QPainter, display: TimelineLog, metrics: QFontMetrics) -> None:
+        """One thin row per animated mobject, with a bar per animation of each block."""
+        lanes = self.lane_count()
+        if not lanes:
+            return
+        top = self._lanes_top()
+        width = self.width()
+        painter.setPen(Qt.PenStyle.NoPen)
+        for lane in range(lanes):
+            shade = 0x20 if lane % 2 == 0 else 0x1B
+            painter.setBrush(QColor(shade, shade, shade))
+            painter.drawRect(QRectF(0.0, top + lane * LANE_HEIGHT, float(width), LANE_HEIGHT))
+        traced = {block.index: block for block in self._log.blocks}
+        for block in display.blocks:
+            clips = self._clips[block.index] if block.index < len(self._clips) else ()
+            base = traced.get(block.index)
+            # While a block is being stretched the bars scale with it (a preview only).
+            ratio = (
+                block.duration / base.duration if base is not None and base.duration > 0 else 1.0
+            )
+            for clip in clips:
+                lane = min(clip.lane, lanes - 1)
+                left = self._view.time_to_x(block.start + clip.start * ratio)
+                right = self._view.time_to_x(block.start + (clip.start + clip.duration) * ratio)
+                if right < 0 or left > width:
+                    continue
+                rect = QRectF(
+                    left + 1,
+                    top + lane * LANE_HEIGHT + 2,
+                    max(2.0, right - left - 2),
+                    LANE_HEIGHT - 4,
+                )
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(block_color(clip.animation))
+                painter.drawRoundedRect(rect, 3, 3)
+                if block.index == self._active_index or block.index == self._hover_index:
+                    outline = QPen(
+                        QColor(0x5F, 0xE3, 0xC8)
+                        if block.index == self._active_index
+                        else QColor(0xFF, 0xFF, 0xFF)
+                    )
+                    outline.setWidthF(1.2)
+                    painter.setPen(outline)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawRoundedRect(rect, 3, 3)
+                if rect.width() >= MIN_BLOCK_LABEL_WIDTH:
+                    painter.setPen(QColor(0x10, 0x10, 0x10))
+                    label = metrics.elidedText(
+                        clip.animation, Qt.TextElideMode.ElideRight, int(rect.width() - 6)
+                    )
+                    painter.drawText(
+                        rect.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignVCenter, label
+                    )
 
     def _draw_range(self, painter: QPainter, width: int, height: int) -> None:
         """Draw the selected loop/export range as a band with edge markers."""

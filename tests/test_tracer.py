@@ -326,3 +326,84 @@ class TestSiteResolution:
         snapshot, _ = self._trace()
         payload = snapshot.to_dict()
         assert payload["sites"][0]["occ"] == 0 and payload["sites"][1]["occ"] == 1
+
+
+class _ClipScene(FakeScene):
+    """A FakeScene whose ``play`` goes through ``begin_animations`` like manimgl's."""
+
+    def begin_animations(self, animations) -> None:  # type: ignore[no-untyped-def]
+        self.begun = list(animations)
+
+    def play(self, *animations, run_time=None, **kwargs):  # type: ignore[no-untyped-def]
+        if not animations:
+            return "noop"
+        if run_time is not None:
+            for animation in animations:
+                animation.run_time = run_time
+        for animation in animations:
+            animation.get_run_time = lambda a=animation: a.run_time
+        self.begin_animations(list(animations))
+        self.time += max(a.run_time for a in animations)
+        self.num_plays += 1
+        return "played"
+
+
+class TestClipTrace:
+    def test_each_animation_becomes_a_clip_with_its_resolved_run_time(self) -> None:
+        scene = _ClipScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        circle, square = FakeMobject("Circle"), FakeMobject("Square")
+        scene.play(
+            make_animation("FadeIn", 1.0, circle), make_animation("ShowCreation", 2.0, square)
+        )
+        scene.wait(1)
+        scene.play(make_animation("Rotate", 1.0, circle), run_time=0.5)
+        clips = recorder.snapshot().block_clips
+        assert [[c.animation for c in block] for block in clips] == [
+            ["FadeIn", "ShowCreation"],
+            [],
+            ["Rotate"],
+        ]
+        # play(run_time=...) overrides each animation's own duration (manimgl semantics).
+        assert [c.duration for c in clips[0]] == [1.0, 2.0]
+        assert clips[2][0].duration == 0.5
+
+    def test_lanes_follow_the_animated_mobject(self) -> None:
+        scene = _ClipScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        circle, square = FakeMobject("Circle"), FakeMobject("Square")
+        scene.play(make_animation("A", 1.0, circle), make_animation("B", 1.0, square))
+        scene.play(make_animation("C", 1.0, square))
+        scene.play(make_animation("D", 1.0, circle))
+        lanes = [[c.lane for c in block] for block in recorder.snapshot().block_clips]
+        assert lanes == [[0, 1], [1], [0]]
+
+    def test_waits_have_no_clips_and_snapshot_serializes(self) -> None:
+        scene = _ClipScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.wait(1)
+        payload = recorder.snapshot().to_dict()
+        assert payload["clips"] == [[]]
+
+    def test_scenes_without_begin_animations_still_trace(self) -> None:
+        scene = FakeScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.play(make_animation("FadeIn", 1.0))
+        assert recorder.snapshot().block_clips == ((),)
+
+    def test_detach_restores_begin_animations_and_reset_clears_lanes(self) -> None:
+        scene = _ClipScene()
+        original = scene.begin_animations
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.play(make_animation("A", 1.0, FakeMobject("Circle")))
+        recorder.reset()
+        assert recorder.snapshot().block_clips == ()
+        scene.play(make_animation("B", 1.0, FakeMobject("Square")))
+        assert recorder.snapshot().block_clips[0][0].lane == 0
+        recorder.detach()
+        assert scene.begin_animations == original

@@ -61,7 +61,7 @@ from manim_studio.scrub import (
 )
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.timeline_model import TimelineBlock
-from manim_studio.tracer import BlockSite, TraceEvent, TraceRecorder
+from manim_studio.tracer import BlockSite, ClipTrace, TraceEvent, TraceRecorder
 
 __all__ = ["FramePump", "HostConfig", "SceneHost", "TickThrottler", "main", "parse_size"]
 
@@ -273,6 +273,7 @@ class SceneHost:
         self._studio_runtime = StudioRuntime()
         self._patch_report: dict[str, Any] = {"applied": 0, "orphaned": []}
         self.block_sites: tuple[BlockSite | None, ...] = ()
+        self.block_clips: tuple[tuple[ClipTrace, ...], ...] = ()
         self.control: JsonLineWriter | None = None
         self.frame_pump: FramePump | None = None
         self.tick = TickThrottler()
@@ -522,6 +523,7 @@ class SceneHost:
         self.blocks = snapshot.blocks
         self.call_lines = self._scene_call_lines(snapshot.call_sites, scene_path)
         self.block_sites = snapshot.block_sites
+        self.block_clips = snapshot.block_clips
         self._patch_report = {
             "applied": len(patch_result.applied),
             "orphaned": [
@@ -556,6 +558,7 @@ class SceneHost:
             sites=[None if site is None else site.to_dict() for site in self.block_sites],
             patches=self._patch_report,
             cause=cause,
+            clips=[[clip.to_dict() for clip in clips] for clips in self.block_clips],
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()

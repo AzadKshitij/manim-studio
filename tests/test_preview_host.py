@@ -574,6 +574,19 @@ class TestHostIntegration:
             )
         )
 
+    def test_log_event_lists_each_blocks_animations(self, host_session: Any) -> None:
+        _, _, _, _, log_event = host_session
+        clips = log_event["clips"]
+        assert len(clips) == len(log_event["blocks"])
+        first = clips[0]
+        assert [c["animation"] for c in first] == ["ShowCreation"]
+        assert first[0]["target"] == "Circle" and first[0]["lane"] == 0
+        assert first[0]["duration"] == pytest.approx(0.3)
+        assert clips[1] == []  # block 1 is a wait
+        # The multi-animation play() shows up as parallel clips on different lanes.
+        parallel = [block for block in clips if len(block) > 1]
+        assert parallel and len({c["lane"] for c in parallel[0]}) == len(parallel[0])
+
     def test_log_event_tags_blocks_with_call_sites(self, host_session: Any) -> None:
         _, _, _, _, log_event = host_session
         sites = log_event["sites"]

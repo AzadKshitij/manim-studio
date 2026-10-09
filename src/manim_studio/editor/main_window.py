@@ -159,6 +159,13 @@ class MainWindow(QMainWindow):
         self.transport_bar = TimelineTransport(self)
         bottom_layout.addWidget(self.transport_bar)
         bottom_layout.addWidget(self.timeline)
+        self._inspector = QLabel("", self)
+        self._inspector.setContentsMargins(8, 2, 8, 2)
+        self._inspector.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._inspector.setToolTip(
+            "The selected block (the one under the editor caret, else under the playhead)"
+        )
+        bottom_layout.addWidget(self._inspector)
 
         self._scrub_slider = QSlider(Qt.Orientation.Horizontal, self)
         self._scrub_slider.setRange(0, 0)
@@ -402,6 +409,7 @@ class MainWindow(QMainWindow):
         """Mirror the caret in the status bar and highlight its timeline block."""
         self._cursor_label.setText(f"Ln {line}, Col {column}")
         self.timeline.set_active_block(self.events.block_at_line(line))
+        self._refresh_inspector()
 
     def _completion_path(self) -> str | None:
         return str(self._path) if self._path is not None else None
@@ -921,6 +929,7 @@ class MainWindow(QMainWindow):
         position = min(max(float(time), 0.0), limit)
         self.events.play_from_index = self.timeline.log.index_at(position)
         self.timeline.set_playhead(position)
+        self._refresh_inspector()
         self.preview_panel.set_time(position, self.events.total_duration)
         self.controller.scrub(position)
 
@@ -1053,6 +1062,33 @@ class MainWindow(QMainWindow):
             action = self._toolbar_actions.get(text)
             if action is not None:
                 action.setEnabled(state)
+        self._refresh_inspector()
+
+    def inspector_text(self) -> str:
+        """Details of the selected block: caret block, else the one under the playhead."""
+        log = self.timeline.log
+        index = self.timeline.active_block
+        if index is None:
+            index = log.index_at(self.timeline.playhead_time)
+        block = None if index is None else log.block_by_index(index)
+        if block is None:
+            return ""
+        parts = [f"#{block.index} {block.name}", format_duration(block.duration)]
+        line = self.events.call_line(block.index)
+        if line is not None:
+            parts.append(f"line {line}")
+        clips = self.events.clips(block.index)
+        if clips:
+            parts.append(", ".join(f"{c.animation}({c.target}) {c.duration:.2f}s" for c in clips))
+        loops = self.patches.iteration_count(block.index)
+        if loops > 1:
+            parts.append(f"loop \u00d7{loops}")
+        if self.patches.block_is_edited(block.index):
+            parts.append("edited (not in the source)")
+        return "  ·  ".join(parts)
+
+    def _refresh_inspector(self) -> None:
+        self._inspector.setText(self.inspector_text())
 
     def apply_edits_to_source(self) -> None:
         """Write the timeline edits into the scene file (one undoable editor edit)."""

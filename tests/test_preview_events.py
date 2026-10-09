@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from PySide6.QtCore import QObject, Signal
@@ -43,6 +43,9 @@ class _StubTimeline:
     def set_log(self, log: TimelineLog, *, keep_view: bool = False) -> None:
         self.log = log
         self.keep_view = keep_view
+
+    def set_clips(self, clips) -> None:  # type: ignore[no-untyped-def]
+        self.clips = clips
 
     def set_playhead(self, time: float) -> None:
         self.playhead_time = time
@@ -276,3 +279,34 @@ class TestErrorsAndHostState:
         h.events.on_host_state("crashed")
         assert "crashed" in h.label.text()
         assert ("crashed", "host process died — press Reload") in h.panel.statuses
+
+
+class TestClips:
+    CLIPS: ClassVar[list] = [
+        [
+            {
+                "animation": "ShowCreation",
+                "target": "Circle",
+                "lane": 0,
+                "start": 0.0,
+                "duration": 1.0,
+            },
+            {"animation": "FadeIn", "target": "Square", "lane": 1, "start": 0.0, "duration": 1.0},
+        ],
+        [],
+    ]
+
+    def test_clips_are_parsed_exposed_and_forwarded_to_the_timeline(self) -> None:
+        h = _Harness()
+        h.events.on_log({**SAMPLE_LOG, "clips": self.CLIPS})
+        assert [c.animation for c in h.events.clips(0)] == ["ShowCreation", "FadeIn"]
+        assert h.events.clips(1) == ()
+        assert h.events.clips(9) == ()
+        assert [[c.lane for c in block] for block in h.timeline.clips] == [[0, 1], []]
+
+    def test_malformed_clips_are_dropped_not_fatal(self) -> None:
+        h = _Harness()
+        bad = [[{"animation": "X"}, "junk", {**self.CLIPS[0][0], "duration": -1}], "oops"]
+        h.events.on_log({**SAMPLE_LOG, "clips": bad})
+        assert h.events.clips(0) == ()
+        assert h.timeline.log.num_blocks == 2

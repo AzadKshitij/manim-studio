@@ -518,3 +518,58 @@ def _wheel(delta: int, modifiers: Qt.KeyboardModifier = Qt.KeyboardModifier.NoMo
         Qt.ScrollPhase.NoScrollPhase,
         False,
     )
+
+
+class TestLanes:
+    """One lane row per animated mobject, drawn under the block strip."""
+
+    @staticmethod
+    def _clips():  # type: ignore[no-untyped-def]
+        from manim_studio.tracer import ClipTrace
+
+        return [
+            [
+                ClipTrace("ShowCreation", "Circle", 0, 0.0, 1.0),
+                ClipTrace("FadeIn", "Square", 1, 0.0, 1.0),
+            ],
+            [],
+            [ClipTrace("Rotate", "Circle", 0, 0.0, 2.0)],
+        ]
+
+    def test_no_clips_means_no_lanes_and_the_old_height(self, timeline: TimelineWidget) -> None:
+        assert timeline.lane_count() == 0
+        from manim_studio.tracer import ClipTrace
+
+        base = timeline.minimumHeight()
+        timeline.set_clips(self._clips())
+        assert timeline.lane_count() == 2  # two thin rows still fit the base height
+        timeline.set_clips([[ClipTrace("A", "M", lane, 0.0, 1.0) for lane in range(5)]])
+        assert timeline.lane_count() == 5
+        assert timeline.minimumHeight() > base  # room for the lane rows
+        timeline.set_clips([])
+        assert timeline.minimumHeight() == base
+
+    def test_lanes_are_capped(self, timeline: TimelineWidget) -> None:
+        from manim_studio.tracer import ClipTrace
+
+        timeline.set_clips([[ClipTrace("A", "M", lane, 0.0, 1.0) for lane in range(20)]])
+        assert timeline.lane_count() == 6
+
+    def test_clip_at_finds_the_bar_under_a_point(self, timeline: TimelineWidget) -> None:
+        timeline.resize(800, 260)
+        timeline.set_clips(self._clips())
+        view = timeline.view()
+        top = timeline._lanes_top()
+        # block 0 spans 0-1s: lane 0 holds ShowCreation, lane 1 holds FadeIn
+        x = view.time_to_x(0.5)
+        first = timeline.clip_at(x, top + 2)
+        second = timeline.clip_at(x, top + 15 + 2)
+        assert first is not None and first[1].animation == "ShowCreation" and first[0].index == 0
+        assert second is not None and second[1].animation == "FadeIn"
+        assert timeline.clip_at(x, 5) is None  # ruler, not a lane
+        assert timeline.clip_at(view.time_to_x(1.2), top + 2) is None  # the wait block has none
+
+    def test_painting_with_lanes_does_not_raise(self, timeline: TimelineWidget) -> None:
+        timeline.resize(800, 260)
+        timeline.set_clips(self._clips())
+        timeline.grab()  # exercises paintEvent and _draw_lanes

@@ -44,7 +44,7 @@ The frames channel is only opened in `--embedded` mode.
 
 | `event` | Fields | Meaning |
 | --- | --- | --- |
-| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps`, `call_sites[]`, `sites[]`, `patches{}`, `cause` | runtime trace finished; `cause` is `"load"` or `"patches"` (a reload that only applied timeline edits, so the editor keeps zoom and playhead) |
+| `log` | `blocks[]`, `stats{}`, `events[]`, `total_duration`, `trace_seconds`, `scene`, `scene_name`, `trace_id`, `fps`, `call_sites[]`, `sites[]`, `clips[]`, `patches{}`, `cause` | runtime trace finished; `cause` is `"load"` or `"patches"` (a reload that only applied timeline edits, so the editor keeps zoom and playhead) |
 | `status` | `state` (`idle`/`playing`/`seeking`/`error`/`closed`), `index?`, `note?` | lifecycle |
 | `tick` | `time`, `index`, `scrubbing?`, `cached?` | playhead update during playback/scrub (≤20 Hz) |
 | `stopped` | `time`, `index`, `user_stopped` | playback ended |
@@ -67,6 +67,14 @@ naming the call site that produced it (a fingerprint from `site_index`, stable a
 unrelated edits and retiming) and which execution of it this is (0-based loop
 iteration), or `null` for calls outside the scene file. Timeline edits are anchored on
 these ids, never on block indices.
+
+`log.clips` (v4) is a parallel array too: for each block, the animations of its
+`play()` as `{"animation", "target", "lane", "start", "duration"}` (empty for a
+`wait()`). `duration` is the run time manimgl resolved after applying
+`play(run_time=...)`, `lane` numbers the animated mobjects by first appearance
+across the whole trace (the timeline draws one row per lane) and `start` is the
+offset inside the block (always `0.0`: manimgl starts a play's animations together).
+Editing a clip changes the whole play()'s `run_time`.
 
 `log.patches` (v4) reports how the timeline edits fared against the current source:
 `{"applied": int, "orphaned": [{"patch": {...}, "reason": str}]}`. An orphaned edit is
