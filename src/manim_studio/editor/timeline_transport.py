@@ -36,6 +36,7 @@ EDIT_ACTIONS: tuple[tuple[str, str, str], ...] = (
     ("hold", "hold", "Insert a hold (self.wait) at the playhead"),
     ("apply", "apply", "Apply timeline edits to the source code"),
     ("diff", "diff", "Show what applying the timeline edits would change"),
+    ("orphans", "orphans", "Orphaned edits: list them and discard one at a time"),
     ("discard_orphans", "discard_orphans", "Discard orphaned edits (their call no longer exists)"),
     ("discard_all", "discard_all", "Discard all timeline edits"),
 )

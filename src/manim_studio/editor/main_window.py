@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QSlider,
     QSplitter,
     QStatusBar,
@@ -1108,6 +1109,7 @@ class MainWindow(QMainWindow):
         elif action_id == "hold":
             self.insert_hold_at_playhead()
         elif action_id == "apply":
+                "orphans": self.patches.orphan_count > 0,
             self.apply_edits_to_source()
         elif action_id == "diff":
             self.show_edits_diff()
@@ -1130,6 +1132,8 @@ class MainWindow(QMainWindow):
         parts = [f"#{block.index} {block.name}", format_duration(block.duration)]
         line = self.events.call_line(block.index)
         if line is not None:
+        elif action_id == "orphans":
+            self.show_orphan_menu()
             parts.append(f"line {line}")
         clips = self.events.clips(block.index)
         if clips:
@@ -1226,6 +1230,29 @@ class MainWindow(QMainWindow):
 
     def render_preview_video(self) -> None:
         if self._path is None:
+    def orphan_menu(self) -> QMenu:
+        """The orphan tray: every edit whose call is gone, each with its reason."""
+        menu = QMenu(self)
+        for orphan in self.patches.orphans:
+            action = menu.addAction(
+                f"{self.patches.describe(orphan.patch)}  \u2014  {orphan.reason}"
+            )
+            action.triggered.connect(
+                lambda _checked=False, patch=orphan.patch: self.patches.discard_edit(patch)
+            )
+        if self.patches.orphans:
+            menu.addSeparator()
+            menu.addAction("Discard all orphaned edits").triggered.connect(
+                self.discard_orphaned_edits
+            )
+        else:
+            menu.addAction("No orphaned edits").setEnabled(False)
+        return menu
+
+    def show_orphan_menu(self) -> None:
+        button = self.transport_bar.edit_button("orphans")
+        self.orphan_menu().exec(button.mapToGlobal(button.rect().bottomLeft()))
+
             self._set_status("open a scene first")
             return
         self.exports.render_preview_video(

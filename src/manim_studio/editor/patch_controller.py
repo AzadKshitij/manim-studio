@@ -261,6 +261,21 @@ class PatchController(QObject):
         """Discard every timeline edit."""
         return self._commit(self._stack.clear())
 
+    def discard_edit(self, patch: Patch) -> bool:
+        """Drop one specific edit (used by the orphan tray)."""
+        return self._commit(self._stack.discard(patch))
+
+    @staticmethod
+    def describe(patch: Patch) -> str:
+        """A short human description of an edit, e.g. ``wait in Demo.construct -> 2.50 s``."""
+        parts = patch.anchor.site_id.split(":")
+        where = f"{parts[1]} in {parts[0]}" if len(parts) == 4 else patch.anchor.site_id
+        if patch.anchor.occurrence is not None:
+            where += f" (iteration {patch.anchor.occurrence + 1})"
+        if isinstance(patch, SetDuration):
+            return f"{where} \u2192 {patch.seconds:.2f} s"
+        return f"delete {where}"
+
     def discard_orphans(self) -> bool:
         """Drop the edits the host reported as orphaned."""
         orphaned = {orphan.patch for orphan in self._orphans}

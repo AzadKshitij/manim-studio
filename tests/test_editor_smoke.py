@@ -1326,3 +1326,60 @@ class TestInspectorEditing:
             assert stub.patch_sets[-1][0] == []
         finally:
             self._restore(window)
+
+
+@pytest.mark.usefixtures("scene_copy")
+class TestOrphanTray:
+    def _orphaned(self, window: MainWindow) -> tuple[_StubController, SetDuration]:
+        stub = _StubController()
+        window._original_controller = window.controller  # type: ignore[attr-defined]
+        window.controller = stub  # type: ignore[assignment]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        window._on_block_resized(1, 2.0)
+        patch = SetDuration(WAIT_SITE, 2.0)
+        # The host reports that edit as orphaned (its call vanished from the source).
+        report = {
+            "applied": 0,
+            "orphaned": [{"patch": patch.to_dict(), "reason": "the call no longer exists"}],
+        }
+        window._on_trace_log({**EDIT_LOG, "patches": report})
+        return stub, patch
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_the_tray_lists_each_orphan_with_its_reason(self, window: MainWindow) -> None:
+        self._orphaned(window)
+        try:
+            assert window.transport_bar.edit_button("orphans").isEnabled()
+            texts = [a.text() for a in window.orphan_menu().actions() if a.text()]
+            assert texts[0].startswith("wait in S.construct")
+            assert "2.00 s" in texts[0] and "no longer exists" in texts[0]
+            assert texts[-1] == "Discard all orphaned edits"
+        finally:
+            self._restore(window)
+
+    def test_discarding_one_orphan_removes_just_that_edit(self, window: MainWindow) -> None:
+        stub, _patch = self._orphaned(window)
+        try:
+            window._on_block_resized(0, 3.0)  # a live edit that must survive
+            menu = window.orphan_menu()
+            first = next(a for a in menu.actions() if a.text() and "no longer exists" in a.text())
+            first.trigger()
+            remaining = stub.patch_sets[-1][0]
+            assert [p["site"] for p in remaining] == ["S.construct:play:aa:0"]
+        finally:
+            self._restore(window)
+
+    def test_an_empty_tray_says_so(self, window: MainWindow) -> None:
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        actions = [a for a in window.orphan_menu().actions() if a.text()]
+        assert [a.text() for a in actions] == ["No orphaned edits"]
+        assert not actions[0].isEnabled()
+        assert not window.transport_bar.edit_button("orphans").isEnabled()

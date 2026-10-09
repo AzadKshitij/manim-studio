@@ -285,3 +285,30 @@ class TestDurationKind:
         os.utime(scene, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
         assert controller._source_index() is not first
         assert controller.duration_kind(4) == "expr"
+
+
+class TestDescribeAndDiscardEdit:
+    def test_describe(self) -> None:
+        assert (
+            PatchController.describe(SetDuration(Anchor("Demo.construct:wait:abcd:0"), 2.5))
+            == "wait in Demo.construct \u2192 2.50 s"
+        )
+        assert (
+            PatchController.describe(SetDuration(Anchor("D.construct:play:ab:1", 2), 1.0))
+            == "play in D.construct (iteration 3) \u2192 1.00 s"
+        )
+        assert PatchController.describe(Delete(Anchor("D.c:play:ab:0"))) == "delete play in D.c"
+        assert PatchController.describe(Delete(Anchor("opaque"))) == "delete opaque"
+
+    def test_discard_edit_removes_only_that_patch_and_persists(
+        self, controller: PatchController, scene: Path
+    ) -> None:
+        controller.set_block_duration(0, 2.0)
+        controller.set_block_duration(4, 3.0)
+        first, second = controller.patches
+        recorder = Recorder(controller)
+        assert controller.discard_edit(first) is True
+        assert controller.patches == (second,)
+        assert load_sidecar(scene) == (second,)
+        assert len(recorder.payloads) == 1
+        assert controller.discard_edit(first) is False
