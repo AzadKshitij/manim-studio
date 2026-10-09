@@ -176,6 +176,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             gif=args.gif,
             resolution=resolution,
             animation_range=animation_range,
+            use_sidecar=not args.no_sidecar,
         )
     except ExportError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -410,6 +411,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FROM,TO",
         help="render only animation blocks FROM..TO (0-based, inclusive)",
+    )
+    export.add_argument(
+        "--no-sidecar",
+        action="store_true",
+        help="ignore <scene>.studio.json and render the source exactly as written",
     )
     export.add_argument("--json", action="store_true")
     export.set_defaults(func=cmd_export)

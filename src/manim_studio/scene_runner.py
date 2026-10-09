@@ -35,6 +35,7 @@ __all__ = [
     "check_scene_file",
     "discover_scenes",
     "format_scene_error",
+    "load_patched_module",
     "load_scene_class",
     "load_scene_module",
     "render_still",
@@ -360,7 +361,7 @@ def load_scene_module(
             if source is None:
                 module = ModuleLoader.get_module(str(resolved), is_during_reload=is_reload)
             else:
-                module = _load_patched_module(
+                module = load_patched_module(
                     ModuleLoader, resolved, source, runtime, RUNTIME_NAME, is_reload
                 )
         except SceneLoadError:
@@ -372,7 +373,7 @@ def load_scene_module(
     return module
 
 
-def _load_patched_module(
+def load_patched_module(
     loader_cls: Any,
     resolved: Path,
     source: str,

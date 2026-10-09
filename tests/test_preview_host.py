@@ -588,6 +588,83 @@ class TestHostIntegration:
             )
         )
 
+    def test_log_event_tags_blocks_with_call_sites(self, host_session: Any) -> None:
+        _, _, _, _, log_event = host_session
+        sites = log_event["sites"]
+        assert len(sites) == len(log_event["blocks"])
+        resolved = [site for site in sites if site is not None]
+        assert len(resolved) >= 10
+        assert all(isinstance(site["id"], str) and site["occ"] >= 0 for site in resolved)
+        assert log_event["patches"] == {"applied": 0, "orphaned": []}
+
+    def test_set_patches_retimes_without_touching_the_file(
+        self, host_session: Any, tmp_path: Path
+    ) -> None:
+        """A timeline patch changes what runs, reports orphans and leaves the file alone."""
+        peer = host_session[0]
+        scene_file = tmp_path / "patched.py"
+        source = (
+            "from manimlib import Scene\n\n\n"
+            "class Patched(Scene):\n"
+            "    def construct(self):\n"
+            "        self.wait(1)\n"
+            "        for _ in range(2):\n"
+            "            self.wait(0.5)\n"
+        )
+        scene_file.write_text(source, encoding="utf-8")
+        peer.drain()
+        try:
+            peer.send(Command.LOAD, path=str(scene_file), scene_name="Patched", patches=[])
+            base = peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG and event.get("scene_name") == "Patched"
+                )
+            )
+            assert [b["duration"] for b in base["blocks"]] == pytest.approx([1.0, 0.5, 0.5])
+            first = base["sites"][0]["id"]
+            loop = base["sites"][1]["id"]
+            assert base["sites"][2] == {"id": loop, "occ": 1}
+
+            patches = [
+                {"op": "set_duration", "site": first, "seconds": 3.0},
+                {"op": "set_duration", "site": loop, "occurrence": 1, "seconds": 2.0},
+                {"op": "set_duration", "site": loop, "seconds": 0.25},
+                {"op": "set_duration", "site": "Patched.construct:wait:dead000000:0", "seconds": 9},
+            ]
+            peer.send(Command.SET_PATCHES, patches=patches, time=0.0)
+            patched = peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG
+                    and event.get("patches", {}).get("applied", 0) > 0
+                ),
+                timeout=60,
+            )
+            assert [b["duration"] for b in patched["blocks"]] == pytest.approx([3.0, 0.25, 2.0])
+            assert patched["sites"][2] == {"id": loop, "occ": 1}
+            report = patched["patches"]
+            assert report["applied"] == 3
+            assert len(report["orphaned"]) == 1
+            assert "no longer exists" in report["orphaned"][0]["reason"]
+            assert scene_file.read_text(encoding="utf-8") == source
+
+            # A plain reload keeps the patches (the host owns the current set).
+            peer.send(Command.RELOAD)
+            again = peer.wait_event(
+                lambda event: event.get("event") == Event.LOG and event.get("patches") is not None,
+                timeout=60,
+            )
+            assert [b["duration"] for b in again["blocks"]] == pytest.approx([3.0, 0.25, 2.0])
+            errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
+            assert not errors, errors
+        finally:
+            peer.send(Command.LOAD, path=str(SCENE_FILE), scene_name="FeatureShowcase", patches=[])
+            peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG and event.get("scene_name") == "FeatureShowcase"
+                ),
+                timeout=60,
+            )
+
     def test_set_timing_retimes_and_reposes(self, host_session: Any) -> None:
         """Retiming a block returns the shifted timeline and keeps the host usable."""
         peer = host_session[0]

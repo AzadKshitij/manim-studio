@@ -324,3 +324,38 @@ def test_format_seconds() -> None:
     assert format_seconds(1) == "1.0"
     assert format_seconds(0.25) == "0.25"
     assert format_seconds(2.0004) == "2.0"
+
+
+class TestPatchedSites:
+    def test_unchanged_text_resolves_to_the_same_ids(self) -> None:
+        result = apply()
+        sites = result.patched_sites()
+        for site in index_source(SCENE).sites:
+            assert sites.resolve(*site.lookup_key) == site.site_id
+
+    def test_ids_stay_original_after_an_identical_earlier_call_is_deleted(self) -> None:
+        src = (
+            "class S(Scene):\n"
+            "    def construct(self):\n"
+            "        self.wait(1)\n"
+            "        self.wait(2)\n"
+        )
+        first, second = index_source(src).sites
+        result = apply_patches(src, [Delete(Anchor(first.site_id))])
+        patched = index_source(result.text)
+        # In the patched text the survivor is now ordinal 0 ...
+        assert patched.sites[0].site_id == first.site_id
+        # ... but the resolver still reports the original (ordinal 1) id.
+        resolved = result.patched_sites().resolve(*patched.sites[0].lookup_key)
+        assert resolved == second.site_id
+
+    def test_same_line_splices_do_not_confuse_resolution(self) -> None:
+        src = "class S(Scene):\n    def construct(self):\n        self.wait(1); self.wait(2)\n"
+        first, second = index_source(src).sites
+        result = apply_patches(src, [SetDuration(Anchor(first.site_id), 10)])
+        patched = index_source(result.text)
+        sites = result.patched_sites()
+        assert [sites.resolve(*s.lookup_key) for s in patched.sites] == [
+            first.site_id,
+            second.site_id,
+        ]

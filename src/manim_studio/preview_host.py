@@ -27,7 +27,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from manim_studio import ipc
 from manim_studio.filmstrip import Filmstrip
@@ -40,6 +40,8 @@ from manim_studio.ipc import (
     encode_message,
     hello_message,
 )
+from manim_studio.patch_runtime import StudioRuntime
+from manim_studio.patches import Patch, PatchedSites, PatchError, apply_patches, parse_patch
 from manim_studio.scene_runner import (
     SceneLoadError,
     check_scene_file,
@@ -60,9 +62,12 @@ from manim_studio.scrub import (
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.timeline_model import TimelineBlock, TimelineLog
 from manim_studio.timing import TimingOverrides
-from manim_studio.tracer import TraceEvent, TraceRecorder
+from manim_studio.tracer import BlockSite, TraceEvent, TraceRecorder
 
 __all__ = ["FramePump", "HostConfig", "SceneHost", "TickThrottler", "main", "parse_size"]
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 log = logging.getLogger("manim_studio.preview_host")
 
@@ -264,6 +269,11 @@ class SceneHost:
         self._base_blocks: tuple[TimelineBlock, ...] = ()
         self._timing_factors: dict[int, float] = {}
         self.call_lines: tuple[int | None, ...] = ()
+        #: Timeline edits (sidecar patches) the loaded scene runs with.
+        self._patches: tuple[Patch, ...] = ()
+        self._studio_runtime = StudioRuntime()
+        self._patch_report: dict[str, Any] = {"applied": 0, "orphaned": []}
+        self.block_sites: tuple[BlockSite | None, ...] = ()
         self.control: JsonLineWriter | None = None
         self.frame_pump: FramePump | None = None
         self.tick = TickThrottler()
@@ -485,11 +495,21 @@ class SceneHost:
         if not check.ok:
             raise SceneLoadError(f"{scene_path}: {check.error}")
 
-        module = load_scene_module(scene_path, is_reload=self._loaded_once)
+        # Timeline edits run as patched in-memory source; the file on disk is untouched.
+        patch_result = apply_patches(scene_path.read_text(encoding="utf-8"), self._patches)
+        patched = patch_result.changed
+        module = load_scene_module(
+            scene_path,
+            is_reload=self._loaded_once,
+            source=patch_result.text if patched else None,
+            runtime=self._studio_runtime if patched else None,
+        )
         scene_class = select_scene_class(module, self.config.scene_name, path=scene_path)
 
         # ---- staged (failure-prone) phase: live state untouched -----------------
-        snapshot, trace_seconds = self._trace_scene_class(scene_class, scene_path)
+        snapshot, trace_seconds = self._trace_scene_class(
+            scene_class, scene_path, self._site_resolver(scene_path, patch_result.patched_sites())
+        )
         initial_scene = self._build_initial_scene(scene_class)
 
         # ---- commit -------------------------------------------------------------
@@ -500,6 +520,14 @@ class SceneHost:
         self._base_blocks = snapshot.blocks
         self._timing_factors = {}
         self.call_lines = self._scene_call_lines(snapshot.call_sites, scene_path)
+        self.block_sites = snapshot.block_sites
+        self._patch_report = {
+            "applied": len(patch_result.applied),
+            "orphaned": [
+                {"patch": orphan.patch.to_dict(), "reason": orphan.reason}
+                for orphan in patch_result.orphaned
+            ],
+        }
         self.stats = snapshot.stats
         self.events = snapshot.events
         self._fps = int(getattr(initial_scene.camera, "fps", 30)) or 30
@@ -524,6 +552,8 @@ class SceneHost:
             trace_id=self._trace_id,
             fps=self._fps,
             call_sites=list(self.call_lines),
+            sites=[None if site is None else site.to_dict() for site in self.block_sites],
+            patches=self._patch_report,
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()
@@ -532,10 +562,41 @@ class SceneHost:
         self.emit_status("idle", index=0)
         self._refresh_shell_namespace()
 
-    def _trace_scene_class(self, scene_class: type, scene_path: Path) -> tuple[Any, float]:
+    @staticmethod
+    def _site_resolver(
+        scene_path: Path, sites: PatchedSites
+    ) -> Callable[[str, int, int], str | None]:
+        """Tracer hook: ``(file, line, col)`` of a call -> original call-site id.
+
+        Only calls in the scene file resolve; helper modules return ``None``.
+        """
+        try:
+            target = scene_path.resolve()
+        except OSError:  # pragma: no cover - defensive
+            target = scene_path
+        in_scene: dict[str, bool] = {}
+
+        def resolve(filename: str, line: int, col: int) -> str | None:
+            match = in_scene.get(filename)
+            if match is None:
+                try:
+                    match = Path(filename).resolve() == target
+                except OSError:  # pragma: no cover - defensive
+                    match = False
+                in_scene[filename] = match
+            return sites.resolve(line, col) if match else None
+
+        return resolve
+
+    def _trace_scene_class(
+        self,
+        scene_class: type,
+        scene_path: Path,
+        site_resolver: Callable[[str, int, int], str | None] | None = None,
+    ) -> tuple[Any, float]:
         """Run the scene once in skip mode and return (snapshot, wall seconds)."""
         scene = self._make_scene(skip_animations=True, scene_class=scene_class)
-        recorder = TraceRecorder(record_events=True)
+        recorder = TraceRecorder(record_events=True, site_resolver=site_resolver)
         recorder.attach(scene)
         started = time.perf_counter()
         try:
@@ -796,6 +857,37 @@ class SceneHost:
         self._pending_scrub = max(0.0, min(time_seconds, total))
         self._playhead_hint = self._pending_scrub
 
+    # ------------------------------------------------------------------
+    # Timeline patches
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_patches(raw: Any) -> tuple[Patch, ...]:
+        if not isinstance(raw, list):
+            raise PatchError(f"'patches' must be a list, got {type(raw).__name__}")
+        return tuple(parse_patch(item) for item in raw)
+
+    def _load_with_patches(self, patches: tuple[Patch, ...] | None, path: Path | None) -> None:
+        """Load with a new patch set, restoring the old one if the load fails."""
+        previous = self._patches
+        if patches is not None:
+            self._patches = patches
+        try:
+            self.load(path)
+        except BaseException:
+            self._patches = previous
+            raise
+
+    def _cmd_set_patches(self, message: dict[str, Any]) -> None:
+        """Apply a new patch set: reload the patched scene and re-pose the playhead."""
+        patches = self._parse_patches(message.get("patches") or [])
+        self.stop_event.clear()
+        self._load_with_patches(patches, None)
+        total = self.blocks[-1].end if self.blocks else 0.0
+        self._pending_scrub = max(0.0, min(float(message.get("time") or 0.0), total))
+        self._playhead_hint = self._pending_scrub
+        self.emit_status("idle", index=0)
+
     @staticmethod
     def _release_scene(scene: Any) -> None:
         camera = getattr(scene, "camera", None)
@@ -889,13 +981,18 @@ class SceneHost:
                 self.emit(Event.STATS, **self._stats_payload())
             elif command == Command.SET_TIMING:
                 self._cmd_set_timing(message)
+            elif command == Command.SET_PATCHES:
+                self._cmd_set_patches(message)
             elif command in (Command.LOAD, Command.RELOAD):
                 self.stop_event.clear()
                 path = message.get("path")
                 scene_name = message.get("scene_name")
                 if scene_name:
                     self.config.scene_name = str(scene_name)
-                self.load(Path(path) if path else None)
+                # ``patches`` is authoritative when present; absent keeps what we had.
+                raw_patches = message.get("patches")
+                patches = None if raw_patches is None else self._parse_patches(raw_patches)
+                self._load_with_patches(patches, Path(path) if path else None)
                 self.emit_status("idle", index=0)
             elif command == Command.QUIT:
                 self.quit_event.set()

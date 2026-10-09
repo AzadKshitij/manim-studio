@@ -54,6 +54,37 @@ class TestPreviewControllerIntegration:
         finally:
             controller.shutdown()
 
+    def test_set_patches_round_trip(self, qtbot) -> None:
+        controller = PreviewController()
+        try:
+            controller.start(SCENE_FILE, embedded=True, size=(320, 180))
+            with qtbot.waitSignal(controller.logReceived, timeout=90000) as log_blocker:
+                pass
+            base = log_blocker.args[0]
+            first_site = base["sites"][0]["id"]
+            patch = {"op": "set_duration", "site": first_site, "seconds": 4.0}
+            with qtbot.waitSignal(
+                controller.logReceived,
+                timeout=90000,
+                check_params_cb=lambda message: message["patches"]["applied"] == 1,
+            ) as blocker:
+                assert controller.set_patches([patch], 0.0) is True
+            patched = blocker.args[0]
+            assert patched["blocks"][0]["duration"] == pytest.approx(4.0)
+            assert patched["blocks"][1]["start"] == pytest.approx(4.0)
+            # Every reload re-sends the remembered patches, so they survive it.
+            with qtbot.waitSignal(controller.logReceived, timeout=90000) as again:
+                assert controller.reload() is True
+            assert again.args[0]["blocks"][0]["duration"] == pytest.approx(4.0)
+        finally:
+            controller.shutdown()
+
+    def test_patches_are_remembered_even_without_a_host(self) -> None:
+        controller = PreviewController()
+        patch = {"op": "delete", "site": "S.construct:wait:abc:0"}
+        assert controller.set_patches([patch], 1.5) is False
+        assert controller.patches == [patch]
+
     def test_crash_reports_state(self, qtbot, tmp_path: Path) -> None:
         controller = PreviewController()
         try:

@@ -16,6 +16,9 @@ from manim_studio.export import (
     build_export_plan,
     run_export,
 )
+from manim_studio.patches import Anchor, SetDuration
+from manim_studio.sidecar import save_sidecar, sidecar_path
+from manim_studio.site_index import index_source
 
 
 def _scene_file(tmp_path: Path) -> Path:
@@ -142,6 +145,39 @@ class TestBuildExportPlan:
         assert json.loads(config.read_text(encoding="utf-8")) == {"0": 0.5, "1": 2.0}
         assert plan.timing_factors == ((0, 0.5), (1, 2.0))
 
+    def test_sidecar_patches_are_passed_to_the_launcher_by_default(self, tmp_path: Path) -> None:
+        scene = _scene_file(tmp_path)
+        patch = SetDuration(Anchor("DemoScene.construct:wait:abc:0"), 2.5)
+        save_sidecar(scene, [patch])
+        plan = build_export_plan(scene, "DemoScene")
+        argv = list(plan.argv)
+        assert plan.patches == (patch,)
+        config = Path(argv[argv.index("--patch-file") + 1])
+        assert json.loads(config.read_text(encoding="utf-8")) == {
+            "version": 1,
+            "patches": [patch.to_dict()],
+        }
+
+    def test_explicit_patches_win_over_the_sidecar(self, tmp_path: Path) -> None:
+        scene = _scene_file(tmp_path)
+        save_sidecar(scene, [SetDuration(Anchor("a:wait:abc:0"), 1.0)])
+        explicit = SetDuration(Anchor("b:wait:abc:0"), 2.0)
+        plan = build_export_plan(scene, "DemoScene", patches=[explicit])
+        assert plan.patches == (explicit,)
+
+    def test_no_sidecar_means_no_patch_flag(self, tmp_path: Path) -> None:
+        scene = _scene_file(tmp_path)
+        assert "--patch-file" not in build_export_plan(scene).argv
+        save_sidecar(scene, [SetDuration(Anchor("a:wait:abc:0"), 1.0)])
+        plan = build_export_plan(scene, use_sidecar=False)
+        assert "--patch-file" not in plan.argv and plan.patches == ()
+
+    def test_unreadable_sidecar_is_an_export_error(self, tmp_path: Path) -> None:
+        scene = _scene_file(tmp_path)
+        sidecar_path(scene).write_text("not json", encoding="utf-8")
+        with pytest.raises(ExportError, match=r"studio.json"):
+            build_export_plan(scene)
+
     def test_no_timing_factors_means_no_flag(self, tmp_path: Path) -> None:
         plan = build_export_plan(_scene_file(tmp_path))
         assert "--timing-file" not in plan.argv
@@ -266,3 +302,31 @@ class TestRealExport:
         base = render("base.mp4", None)
         retimed = render("retimed.mp4", {0: 4.0})
         assert _video_duration(retimed) > _video_duration(base) + 0.2
+
+    def test_sidecar_patch_is_baked_into_the_render(self, tmp_path: Path) -> None:
+        """A timeline edit in the sidecar changes the export; the .py stays untouched."""
+        if shutil.which("ffprobe") is None:
+            pytest.skip("ffprobe is required to measure the rendered duration")
+        scene = tmp_path / "tiny_scene.py"
+        scene.write_text(self.SCENE_SOURCE, encoding="utf-8")
+        wait_site = index_source(self.SCENE_SOURCE).sites[1]
+
+        def render(name: str, *, use_sidecar: bool) -> Path:
+            plan = build_export_plan(
+                scene,
+                "TinyScene",
+                output=tmp_path / name,
+                quality="preview",
+                fps=24,
+                extra_args=("--resolution", "160x90"),
+                use_sidecar=use_sidecar,
+            )
+            result = run_export(plan, timeout=300)
+            assert result.ok, result.log_tail
+            return plan.output_path
+
+        save_sidecar(scene, [SetDuration(Anchor(wait_site.site_id), 2.0)])
+        base = render("base.mp4", use_sidecar=False)
+        patched = render("patched.mp4", use_sidecar=True)
+        assert _video_duration(patched) > _video_duration(base) + 1.0
+        assert scene.read_text(encoding="utf-8") == self.SCENE_SOURCE

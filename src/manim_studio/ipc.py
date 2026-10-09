@@ -47,7 +47,7 @@ __all__ = [
     "hello_message",
 ]
 
-PROTOCOL_VERSION: Final = 3
+PROTOCOL_VERSION: Final = 4
 
 #: Refuse absurd frames (defensive upper bound: 4096x4096 RGBA).
 MAX_FRAME_PAYLOAD: Final = 4096 * 4096 * 4
@@ -81,6 +81,7 @@ class Command:
     PING: Final = "ping"
     STATS: Final = "stats"
     SET_TIMING: Final = "set_timing"
+    SET_PATCHES: Final = "set_patches"
     QUIT: Final = "quit"
 
 

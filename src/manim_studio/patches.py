@@ -37,6 +37,7 @@ __all__ = [
     "Patch",
     "PatchError",
     "PatchResult",
+    "PatchedSites",
     "SetDuration",
     "apply_patches",
     "format_seconds",
@@ -166,6 +167,26 @@ class Orphan:
 
 
 @dataclass(frozen=True, slots=True)
+class PatchedSites:
+    """Resolves positions in the *patched* text to the ids of the *original* sites.
+
+    Fingerprints carry an ordinal among identical calls, so deleting an earlier
+    identical call would renumber the survivors in the patched text.  Patches (and
+    the editor) always speak in original ids, so the tracer must report those.
+    """
+
+    index: SiteIndex  #: index of the patched text
+    original_ids: tuple[str, ...]  #: parallel to ``index.sites``
+
+    def resolve(self, line: int, byte_col: int) -> str | None:
+        """Original site id for the call at ``(line, byte_col)`` of the patched text."""
+        site = self.index.at(line, byte_col) or self.index.at_line(line)
+        if site is None:
+            return None
+        return self.original_ids[self.index.sites.index(site)]
+
+
+@dataclass(frozen=True, slots=True)
 class PatchResult:
     """Outcome of :func:`apply_patches`."""
 
@@ -177,6 +198,21 @@ class PatchResult:
     @property
     def changed(self) -> bool:
         return bool(self.applied)
+
+    def patched_sites(self) -> PatchedSites:
+        """Map the patched text's call sites back to the original site ids.
+
+        Surviving calls keep their source order, so the n-th remaining original site
+        is the n-th site of the patched text.
+        """
+        if not self.changed:
+            return PatchedSites(self.index, tuple(site.site_id for site in self.index.sites))
+        deleted = {p.anchor.site_id for p in self.applied if isinstance(p, Delete)}
+        survivors = tuple(s.site_id for s in self.index.sites if s.site_id not in deleted)
+        patched = index_source(self.text)
+        if len(patched.sites) != len(survivors):  # pragma: no cover - engine invariant
+            raise PatchError("patched source has a different number of play/wait calls")
+        return PatchedSites(patched, survivors)
 
 
 @dataclass(slots=True)

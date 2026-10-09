@@ -66,6 +66,8 @@ class PreviewController(QObject):
         self.frames_received = 0
         self.scene_path: Path | None = None
         self.scene_name: str | None = None
+        #: Timeline edits (serialized patches) re-sent with every load/reload.
+        self.patches: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -176,7 +178,7 @@ class PreviewController(QObject):
         return self._control.write(data) == len(data)
 
     def reload(self, path: str | Path | None = None) -> bool:
-        payload: dict[str, Any] = {}
+        payload: dict[str, Any] = {"patches": list(self.patches)}
         if path is not None:
             payload["path"] = str(Path(path).resolve())
         return self.send(Command.RELOAD, **payload)
@@ -184,10 +186,22 @@ class PreviewController(QObject):
     def load(self, path: str | Path, scene_name: str | None = None) -> bool:
         if scene_name is not None:
             self.scene_name = scene_name
-        payload: dict[str, Any] = {"path": str(Path(path).resolve())}
+        payload: dict[str, Any] = {
+            "path": str(Path(path).resolve()),
+            "patches": list(self.patches),
+        }
         if scene_name is not None:
             payload["scene_name"] = scene_name
         return self.send(Command.LOAD, **payload)
+
+    def set_patches(self, patches: list[dict[str, Any]], time_seconds: float = 0.0) -> bool:
+        """Run the scene with new timeline edits and re-pose at ``time_seconds``.
+
+        The patch set is remembered and re-sent with every ``load``/``reload``, so a
+        restarted host picks up exactly the edits the editor is showing.
+        """
+        self.patches = list(patches)
+        return self.send(Command.SET_PATCHES, patches=self.patches, time=float(time_seconds))
 
     def play(self, from_index: int = 0, to_index: int | None = None, rate: float = 1.0) -> bool:
         """Play from ``from_index`` (optionally bounded by ``to_index``) at ``rate``."""
