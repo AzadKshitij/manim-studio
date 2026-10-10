@@ -24,7 +24,7 @@ dependencies = [
     "PySide6==6.11.2",
     "pyside6-scintilla==5.6.3.7",
     "manimgl==1.7.2",
-    "moderngl==5.12.0",
+    "moderngl==5.13.0",
     "moderngl-window==3.1.1",
     "IPython>=8.18",
     # Pygments lexers drive the code editor's syntax highlighting and its
@@ -39,7 +39,7 @@ dependencies = [
     "zstandard>=0.23",
     # manimgl 1.7.2 imports pkg_resources at import time. setuptools>=81 no
     # longer ships it, so keep the runtime dependency bounded.
-    "setuptools>=69,<81",
+    "setuptools>=84.0.0,<85",
     # pydub (manimgl dependency) needs audioop, removed from stdlib in 3.13.
     "audioop-lts>=0.2.2; python_version >= '3.13'",
     # Single-pass filmstrip crawl suspends construct() at block boundaries without
