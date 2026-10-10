@@ -17,7 +17,9 @@
    Qt style sheet. Widgets that paint themselves (`TimelineWidget`) or style labels
    (`PreviewPanel`, `BlockInspector`) read `current_theme()` and expose
    `apply_theme()`; `MainWindow.set_theme()` fans a switch out to all of them.
-4. Built-ins: Chalkboard (default), Paper (light), Night Violet. User themes are
+4. Built-ins: Chalkboard (default), Night Violet, Deep Ocean, Ember, Evergreen and
+   Graphite (dark); Paper, Daylight and Sand (light). Every built-in must pass the
+   contrast checks in `tests/test_theme.py`. User themes are
    `*.json` files in `~/.manim-studio/themes` (`MANIM_STUDIO_THEMES` overrides).
    View > Theme lists both and remembers the choice in `QSettings`.
 5. Combo boxes, spin boxes and check boxes stay Fusion-drawn: styling their borders

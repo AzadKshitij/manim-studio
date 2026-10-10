@@ -1,4 +1,11 @@
+<div align="center">
+
+<img src="docs/assets/logo.png" alt="Manim Studio logo" width="120">
+
 # Manim Studio
+
+**A realtime desktop editor for [ManimGL](https://github.com/3b1b/manim) scenes.**<br>
+Write the scene, watch it render live, and retime it on a timeline.
 
 <p>
   <a href="https://github.com/AzadKshitij/manim-studio/actions/workflows/ci.yml"><img src="https://github.com/AzadKshitij/manim-studio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -7,28 +14,63 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platforms: Windows, macOS, Linux">
 </p>
 
-A production-grade, realtime desktop editor for [ManimGL](https://github.com/3b1b/manim)
-scenes — Windows, macOS and Ubuntu 24+.
+<p>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#cli-agent-friendly">CLI</a> ·
+  <a href="#development">Development</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-- **Left:** code editor (Scintilla) with `manimlib` autocomplete, error markers and
-  full undo/redo.
-- **Right:** realtime preview — embedded frame streaming (default) or an external
-  GL window — plus a live IPython shell wired to the running scene.
-- **Bottom:** real timeline built from a runtime trace of `play()`/`wait()` — drag
-  to scrub the live scene smoothly, wheel to pan, Ctrl+wheel to zoom, arrows to
-  step one frame, plus a rendered-video scrub slider. A background filmstrip cache
-  makes scrubbing feel like a video while staying fresh after every edit.
-- **One click:** export MP4 (up to 4K/60) or a still via headless `manimgl -w`.
+<img src="docs/assets/screenshots/editor.png" alt="Manim Studio: code editor on the left, live preview on the right, timeline below" width="900">
 
-Everything is also drivable without the GUI, so AI agents can create, validate,
-trace and export scenes with the CLI.
+</div>
+
+## Features
+
+- **Code editor** (Scintilla): `manimlib` autocomplete, call signatures, error markers
+  that jump to the failing line, and full undo/redo.
+- **Realtime preview:** embedded frame streaming (default) or an external GL window,
+  plus a live IPython shell wired to the running scene.
+- **Timeline from a runtime trace** of `play()`/`wait()`, so loops and branches are
+  correct. Drag to scrub the live scene, wheel to pan, Ctrl+wheel to zoom, arrow keys
+  to step one frame.
+- **Editable timeline:** retime or delete an animation from the timeline or the block
+  inspector. Edits are anchored to the call site, not a block index, and saved in
+  `<scene>.studio.json`, so your `.py` stays untouched until you choose
+  *Timeline > Apply timeline edits to source*. Edits that no longer match a call land
+  in an orphan tray instead of being applied to the wrong animation.
+- **Scrubbing that feels like video:** a background filmstrip cache is filled in a single
+  pass and survives edits that provably cannot affect a block, so it is never stale.
+- **Themes:** the built-in Chalkboard theme and loadable JSON theme files.
+- **One-click export:** MP4 (up to 4K/60), GIF or a still through headless `manimgl -w`.
+  Export honours your timeline edits.
+- **Scriptable:** everything is available from a CLI that AI agents can drive.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/timeline.png" alt="Timeline with per-animation lanes and the block inspector"><br><sub><b>Timeline.</b> Lanes per animation, block inspector, scrub and orphan tray.</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/themes.jpg" alt="Theme picker"><br><sub><b>Themes.</b> Chalkboard and custom JSON themes.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/export.png" alt="Export dialog"><br><sub><b>Export.</b> Quality, fps, resolution and range.</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/editor.png" alt="Editor"><br><sub><b>Editor.</b> Code editor with autocomplete, and error markers.</sub></td>
+  </tr>
+</table>
+
+> The images in `docs/assets/screenshots/` are placeholders. Replace them with real
+> captures using the same file names (PNG, about 1600 px wide for full-window shots).
 
 ## Requirements
 
 - Python 3.13 and [`uv`](https://docs.astral.sh/uv/)
 - A working OpenGL 3.3 context (preview, traces, stills)
 - `ffmpeg` on `PATH` (video export only)
-- Optional: a LaTeX installation for `Tex` mobjects
+- Optional: a LaTeX installation for `Tex` mobjects (`manim-studio latex install`
+  provisions TinyTeX per user)
 
 ## Quick start
 
@@ -41,9 +83,14 @@ uv sync --all-groups
 uv run manim-studio gui scenes/Welcome.py
 ```
 
-In the editor: edit + save to auto-reload the preview (F5 forces a reload), F6
-plays from the playhead, F7 stops, Ctrl+R renders a scrubbable preview video,
-Ctrl+E exports the final video, Ctrl+` opens the live shell.
+| Key | Action |
+| --- | --- |
+| Save | auto-reload the preview |
+| `F5` | force a reload |
+| `F6` / `F7` | play from the playhead / stop |
+| `Ctrl+R` | render a preview video |
+| `Ctrl+E` | export the final video |
+| ``Ctrl+` `` | open the live shell |
 
 ## CLI (agent-friendly)
 
@@ -62,14 +109,19 @@ manim-studio api-index --json        offline scan of the installed manimlib API
 Exit codes: `0` success, `1` user/scene error, `2` usage error. JSON goes to stdout;
 scene output is captured so it can never corrupt structured output.
 
-## Architecture in one paragraph
+## How it works
 
 A Qt shell (`manim_studio.editor`) never imports `manimlib`. A companion process
 (`manim_studio.preview_host`) owns the only OpenGL context, traces scenes at runtime
-and streams frames to the editor over a loopback protocol (`docs/protocol.md`).
-Export shells out to `manimgl -w` for deterministic, non-interactive rendering.
-The pure core (`timeline_model`, `tracer`, `ipc`, `templates`, `api_index`) has no
-GUI/GL dependencies and is exhaustively unit tested.
+and streams frames to the editor over a loopback protocol ([`docs/protocol.md`](docs/protocol.md)).
+Timeline edits are patches applied to the source text, and the preview, scrub and export
+all run the same patched source. Export shells out to `manimgl -w` for deterministic,
+non-interactive rendering. The pure core (`timeline_model`, `site_index`, `patches`,
+`sidecar`, `tracer`, `ipc`, `filmstrip`, `reuse`, `theme`, `templates`, `api_index`) has
+no GUI/GL dependencies and is exhaustively unit tested.
+
+Design decisions live in [`docs/adr/`](docs/adr/); measured preview performance is in
+[`docs/perf/`](docs/perf/README.md).
 
 ## Development
 
@@ -89,40 +141,39 @@ PowerShell helpers in `scripts/` wrap the same commands:
 | `scripts\test.ps1 [-m …]` | pytest (args pass through) |
 | `scripts\check.ps1 [-Fast]` | full pre-commit gate: lint + pytest (`-Fast` skips GL/slow tests) |
 | `scripts\clean.ps1 [-Venv]` | remove `dist/`, `build/`, caches, `__pycache__` (`-Venv` also drops `.venv`) |
-| `scripts\build.ps1 …` | release pipeline: gate → PyInstaller bundle → smoke tests → portable zip → installer (see below) |
+| `scripts\build.ps1 …` | release pipeline: gate → PyInstaller bundle → smoke tests → portable zip → installer |
+
+`AGENTS.md` is the full contract for the codebase, and the skills in `.opencode/skills/`
+cover scene authoring and codebase workflows. `tests/scenes/feature_showcase.py` is the
+canonical scene that exercises every editor, timeline and scene-API feature.
 
 ## Packaging (Windows installer + portable)
 
-`scripts\build.ps1` produces everything under `dist/` (see `docs/adr/0005-frozen-packaging.md`):
+`scripts\build.ps1` produces everything under `dist/` (see
+[`docs/adr/0005-frozen-packaging.md`](docs/adr/0005-frozen-packaging.md)):
 
-- `dist\ManimStudio\` — the application folder: `ManimStudio.exe` (double-click
-  GUI) + `manim-studio.exe` (console CLI for terminals and AI agents).
-- `dist\ManimStudio-<version>-portable.zip` — unzip-and-run anywhere.
-- `dist\ManimStudio-Setup-<version>.exe` — Inno Setup installer (per-user, no
-  admin prompt); skipped with `-SkipInstaller` or when Inno Setup 6 is missing.
+- `dist\ManimStudio\`: the application folder, with `ManimStudio.exe` (double-click GUI)
+  and `manim-studio.exe` (console CLI for terminals and AI agents).
+- `dist\ManimStudio-<version>-portable.zip`: unzip and run anywhere.
+- `dist\ManimStudio-Setup-<version>.exe`: Inno Setup installer (per-user, no admin
+  prompt); skipped with `-SkipInstaller` or when Inno Setup 6 is missing.
 
-The frozen app still needs `ffmpeg` on `PATH` for video export and optionally
-LaTeX (`manim-studio latex install` provisions TinyTeX per user).
-
-See `AGENTS.md` for the full contract, `docs/protocol.md` for the wire protocol,
-`docs/adr/` for decisions, and the skills in `.opencode/skills/` for scene-authoring
-and codebase workflows. `tests/scenes/feature_showcase.py` is the canonical scene
-that exercises every editor, timeline and scene-API feature.
+The frozen app still needs `ffmpeg` on `PATH` for video export, and optionally LaTeX.
 
 ## Contributing
 
 Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md); the
-repository's mandatory contract is [`AGENTS.md`](AGENTS.md). Before any commit,
-run the gate:
+repository's mandatory contract is [`AGENTS.md`](AGENTS.md). Before any commit, run the
+gate:
 
 ```powershell
 uv run ruff format src tests && uv run ruff check src tests && uv run mypy && uv run pytest
 ```
 
-Please also read the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and report
-security issues privately per [`SECURITY.md`](SECURITY.md).
+Please also read the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and report security
+issues privately per [`SECURITY.md`](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE) © 2026 Manim Studio Team. Manim Studio is an independent project
-and is not affiliated with or endorsed by the ManimGL/Manim community.
+[MIT](LICENSE) © 2026 Manim Studio Team. Manim Studio is an independent project and is
+not affiliated with or endorsed by the ManimGL/Manim community.
