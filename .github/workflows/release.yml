@@ -13,10 +13,10 @@ jobs:
     name: build windows artifacts
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: "3.13"
@@ -44,7 +44,7 @@ jobs:
         run: ./scripts/build.ps1 -SkipTests
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/ManimStudio-*-portable.zip
