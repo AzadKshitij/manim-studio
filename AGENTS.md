@@ -42,7 +42,8 @@ explaining why not.
 | `manim_studio/ipc.py` | JSON-line protocol + binary frame framing | stdlib, `frame_codec` |
 | `manim_studio/frame_codec.py` | Frame payload codec (zstd default, zlib/raw fallback) | stdlib (+ `zstandard` imported lazily) |
 | `manim_studio/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
-| `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + filmstrip crawler | `manimlib` lazily |
+| `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + single-pass filmstrip crawler (construct() suspended on a greenlet, same GL thread) | `manimlib`, `greenlet` lazily |
+| `manim_studio/reuse.py` | Which cached filmstrip blocks survive an edit (ADR 0009) | stdlib only |
 | `manim_studio/theme.py` | Colour themes: model, built-ins, JSON theme files, derived colours (ADR 0008) | stdlib only |
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
 | `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
@@ -66,7 +67,7 @@ wire protocol and `docs/adr/` for architectural decisions.
 Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`) must never import Qt,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.
@@ -106,7 +107,8 @@ Protocol details live in `docs/protocol.md`. Any change to the protocol bumps
 - Smoothness: an in-memory **filmstrip cache** (`filmstrip.py`, ADR 0003) is filled
   by a block-granular crawler that renders each frame at O(1) per frame; scrub
   requests are served cache-first and fall back to a replay pose on a miss. The
-  cache is replaced on every load/reload, so cached frames are never stale.
+  cache keeps only blocks an edit provably cannot affect (`reuse.py`, ADR 0009) and
+  drops the rest on every load/reload, so cached frames are never stale.
 
 ## 4b. Timeline edits (ADR 0007)
 
@@ -140,6 +142,11 @@ The timeline is an editing surface, not just a view.
 - Errors: never bare `except:`. User-visible failures become a status line + log entry;
   the editor must stay alive when a scene crashes. Tracebacks from user scenes are
   parsed to `line`/`message` and shown as editor markers.
+- Layout: a plain `QLabel` asks its layout for the full width of its text, so a label
+  whose text comes from the scene, the trace or an error message must be an
+  `editor.elided_label.ElidedLabel`. A 2,000-character animation list once pushed the
+  window's minimum width to ~13,700 px; the window grew past the screen and the preview
+  panel ended up off screen (ADR-free fix: `block_inspector`, `preview_panel`).
 - Follow ManimGL naming conventions (`mobject`, `run_time`, `construct`, ...) in
   scene-facing code and templates.
 

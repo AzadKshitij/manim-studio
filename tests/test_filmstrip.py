@@ -88,3 +88,73 @@ class TestFilmstrip:
             Filmstrip(max_frames=0)
         with pytest.raises(ValueError):
             Filmstrip(max_bytes=0)
+
+
+class TestRetain:
+    def _strip(self) -> Filmstrip:
+        strip = Filmstrip()
+        for index in range(10):
+            strip.put(index, bytes([index]) * 4)
+        return strip
+
+    def test_keeps_only_the_given_half_open_ranges(self) -> None:
+        strip = self._strip()
+        assert strip.retain([(0, 3), (7, 9)]) == 5
+        assert [i for i in range(10) if strip.get(i) is not None] == [0, 1, 2, 7, 8]
+
+    def test_byte_accounting_follows_the_kept_frames(self) -> None:
+        strip = self._strip()
+        strip.retain([(2, 4)])
+        assert strip.byte_size == 8 and strip.frames == 2
+
+    def test_no_ranges_empties_the_cache(self) -> None:
+        strip = self._strip()
+        assert strip.retain([]) == 0 and strip.is_empty
+
+    def test_has_range(self) -> None:
+        strip = self._strip()
+        strip.retain([(0, 4)])
+        assert strip.has_range(0, 4) and not strip.has_range(0, 5)
+        assert strip.has_range(3, 3)  # empty range is trivially present
+
+
+class TestRetainShifted:
+    @staticmethod
+    def _strip() -> Filmstrip:
+        strip = Filmstrip()
+        for index in range(10):
+            strip.put(index, bytes([index]) * 4)
+        return strip
+
+    def test_frames_move_by_the_delta_and_the_rest_is_dropped(self) -> None:
+        strip = self._strip()
+        kept = strip.retain_shifted([(0, 2, 0), (4, 7, 10)])
+        assert kept == 5
+        assert strip.get(0) == bytes([0]) * 4 and strip.get(1) == bytes([1]) * 4
+        assert strip.get(14) == bytes([4]) * 4 and strip.get(16) == bytes([6]) * 4
+        assert strip.get(4) is None and strip.get(2) is None and strip.get(7) is None
+        assert strip.byte_size == 5 * 4
+
+    def test_negative_deltas_move_frames_earlier(self) -> None:
+        strip = self._strip()
+        strip.retain_shifted([(5, 8, -5)])
+        assert [strip.get(i) for i in range(3)] == [bytes([5]) * 4, bytes([6]) * 4, bytes([7]) * 4]
+
+    def test_frames_that_would_land_before_zero_are_dropped(self) -> None:
+        strip = self._strip()
+        assert strip.retain_shifted([(0, 3, -1)]) == 2
+        assert strip.get(0) == bytes([1]) * 4
+
+    def test_no_moves_empties_the_strip(self) -> None:
+        strip = self._strip()
+        assert strip.retain_shifted([]) == 0 and strip.is_empty
+
+    def test_lru_order_is_preserved(self) -> None:
+        strip = Filmstrip(max_frames=4)
+        for index in range(4):
+            strip.put(index, b"x")
+        strip.retain_shifted([(0, 4, 100)])
+        strip.put(1, b"y")  # over budget: the oldest kept entry (100) is evicted first
+        strip.put(500, b"z")  # ... then the next oldest (101)
+        assert strip.get(100) is None and strip.get(101) is None
+        assert strip.get(102) == b"x" and strip.get(103) == b"x"

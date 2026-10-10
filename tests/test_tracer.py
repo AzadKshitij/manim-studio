@@ -407,3 +407,83 @@ class TestClipTrace:
         assert recorder.snapshot().block_clips[0][0].lane == 0
         recorder.detach()
         assert scene.begin_animations == original
+
+
+class _WithUpdaters:
+    def __init__(self, *updaters: object) -> None:
+        self.updaters = list(updaters)
+
+
+def _dt_updater(mob: object, dt: float) -> None:  # takes dt: depends on elapsed time
+    return None
+
+
+def _static_updater(mob: object) -> None:  # an always_redraw-style updater: no dt
+    return None
+
+
+class _OpaqueUpdater:  # a callable object: cannot be inspected
+    def __call__(self, mob: object) -> None:
+        return None
+
+
+class TestTimeBasedUpdaterFlag:
+    """``block_dynamic`` records whether a ``dt`` updater was alive during each block."""
+
+    @staticmethod
+    def _trace(*mobjects: object) -> tuple[bool, ...]:
+        scene = FakeScene()
+        scene.mobjects = list(mobjects)  # type: ignore[assignment]
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.play(make_animation("FadeIn"), run_time=0.5)
+        scene.wait(1.0)
+        return recorder.snapshot().block_dynamic
+
+    def test_scenes_without_updaters_are_not_dynamic(self) -> None:
+        assert self._trace(FakeMobject()) == (False, False)
+
+    def test_a_dt_updater_marks_every_block_it_is_alive_for(self) -> None:
+        assert self._trace(_WithUpdaters(_dt_updater)) == (True, True)
+
+    def test_updaters_without_dt_do_not_count(self) -> None:
+        assert self._trace(_WithUpdaters(_static_updater)) == (False, False)
+
+    def test_an_uninspectable_updater_is_treated_as_time_based(self) -> None:
+        assert self._trace(_WithUpdaters(_OpaqueUpdater())) == (True, True)
+
+    def test_an_updater_added_during_a_block_flags_that_block(self) -> None:
+        scene = FakeScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        original_play = scene.play
+
+        def play_that_adds_an_updater(*args: object, **kwargs: object) -> str:
+            result = original_play(*args, **kwargs)  # type: ignore[arg-type]
+            scene.mobjects.append(_WithUpdaters(_dt_updater))  # type: ignore[arg-type]
+            return result
+
+        # attach() has wrapped scene.play; wrap the wrapper's target after the fact.
+        scene.mobjects = []
+        recorder.detach()
+        scene.play = play_that_adds_an_updater  # type: ignore[method-assign]
+        recorder.attach(scene)
+        scene.play(make_animation("FadeIn"), run_time=0.5)
+        scene.wait(1.0)
+        assert recorder.snapshot().block_dynamic == (True, True)
+
+    def test_an_exotic_scene_is_treated_as_time_based_instead_of_crashing(self) -> None:
+        scene = FakeScene()
+        scene.mobjects = None  # type: ignore[assignment]
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.wait(1.0)
+        assert recorder.snapshot().block_dynamic == (True,)
+
+    def test_reset_clears_the_flags(self) -> None:
+        scene = FakeScene()
+        recorder = TraceRecorder()
+        recorder.attach(scene)
+        scene.wait(1.0)
+        recorder.reset()
+        assert recorder.snapshot().block_dynamic == ()

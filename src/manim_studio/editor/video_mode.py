@@ -33,12 +33,12 @@ class VideoModeController(QObject):
         self,
         *,
         transport: MediaTransport,
-        slider: QSlider,
-        position_label: QLabel,
         preview_panel: PreviewPanel,
         timeline: TimelineWidget,
         stop_playback: Callable[[], object],
         status_line: Callable[[str], None],
+        slider: QSlider | None = None,
+        position_label: QLabel | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -51,8 +51,9 @@ class VideoModeController(QObject):
         self._status_line = status_line
         self._active = False
 
-        slider.sliderMoved.connect(self._on_slider_moved)
-        slider.sliderReleased.connect(self._on_slider_released)
+        if slider is not None:
+            slider.sliderMoved.connect(self._on_slider_moved)
+            slider.sliderReleased.connect(self._on_slider_released)
         transport.frameReady.connect(self._on_frame)
         transport.positionChanged.connect(self._on_position)
         transport.durationChanged.connect(self._on_duration)
@@ -92,11 +93,14 @@ class VideoModeController(QObject):
             return
         self._timeline.set_playhead(seconds)
         self._preview_panel.set_time(seconds, self._transport.duration)
-        if not self._slider.isSliderDown():
-            self._slider.blockSignals(True)
-            self._slider.setValue(int(seconds * 1000))
-            self._slider.blockSignals(False)
+        slider = self._slider
+        if slider is not None and not slider.isSliderDown():
+            slider.blockSignals(True)
+            slider.setValue(int(seconds * 1000))
+            slider.blockSignals(False)
 
     def _on_duration(self, seconds: float) -> None:
-        self._slider.setRange(0, int(seconds * 1000))
-        self._position_label.setText(f"0:00.0 / {format_duration(seconds)}")
+        if self._slider is not None:
+            self._slider.setRange(0, int(seconds * 1000))
+        if self._position_label is not None:
+            self._position_label.setText(f"0:00.0 / {format_duration(seconds)}")

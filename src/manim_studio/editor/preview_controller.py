@@ -181,19 +181,25 @@ class PreviewController(QObject):
         data = ipc.encode_message({"cmd": command, **payload})
         return self._control.write(data) == len(data)
 
-    def reload(self, path: str | Path | None = None) -> bool:
+    def reload(self, path: str | Path | None = None, *, fresh: bool = False) -> bool:
+        """Re-import the scene; ``fresh`` also discards the host's cached frames."""
         payload: dict[str, Any] = {"patches": list(self.patches)}
+        if fresh:
+            payload["fresh"] = True
         if path is not None:
             payload["path"] = str(Path(path).resolve())
         return self.send(Command.RELOAD, **payload)
 
-    def load(self, path: str | Path, scene_name: str | None = None) -> bool:
+    def load(self, path: str | Path, scene_name: str | None = None, *, fresh: bool = False) -> bool:
+        """Load a scene; ``fresh`` also discards the host's cached frames."""
         if scene_name is not None:
             self.scene_name = scene_name
         payload: dict[str, Any] = {
             "path": str(Path(path).resolve()),
             "patches": list(self.patches),
         }
+        if fresh:
+            payload["fresh"] = True
         if scene_name is not None:
             payload["scene_name"] = scene_name
         return self.send(Command.LOAD, **payload)

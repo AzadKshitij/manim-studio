@@ -9,24 +9,44 @@ them into timeline edits.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
-from PySide6.QtCore import Signal, SignalInstance
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
-    QToolButton,
+    QSizePolicy,
     QWidget,
 )
 
-from manim_studio.editor.glyphs import icon_button
+from manim_studio.editor.elided_label import ElidedLabel
 from manim_studio.theme import current_theme
 
-__all__ = ["BlockInfo", "BlockInspector"]
+__all__ = ["BlockInfo", "BlockInspector", "describe_clips"]
 
 MIN_DURATION = 1.0 / 30.0
+
+
+def describe_clips(clips: Iterable[Any]) -> str:
+    """``"Write(Text) 2.77s"`` for a block's animations, with repeats grouped.
+
+    A grid animating 72 squares at once reads ``Animate(Square) x72 1.00s`` instead of
+    seventy-two identical entries.
+    """
+    groups: dict[tuple[str, str, str], int] = {}
+    for clip in clips:
+        key = (clip.animation, clip.target, f"{clip.duration:.2f}")
+        groups[key] = groups.get(key, 0) + 1
+    parts = []
+    for (animation, target, duration), count in groups.items():
+        repeat = f" ×{count}" if count > 1 else ""  # noqa: RUF001
+        parts.append(f"{animation}({target}){repeat} {duration}s")
+    return ", ".join(parts)
+
 
 #: How the call spells its duration in the source -> the note shown to the user.
 _KIND_NOTES = {
@@ -56,14 +76,15 @@ class BlockInspector(QWidget):
 
     #: ``(block index, seconds, this iteration only)``
     durationCommitted = Signal(int, float, bool)
-    jumpRequested = Signal(int)
-    resetRequested = Signal(int)
-    deleteRequested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._info: BlockInfo | None = None
-        self.title = QLabel("", self)
+        self.setObjectName("dockBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(40)
+        self.title = ElidedLabel("", self)
         self.title.setMinimumWidth(120)
 
         self.duration_spin = QDoubleSpinBox(self)
@@ -84,17 +105,10 @@ class BlockInspector(QWidget):
 
         self.note = QLabel("", self)
         self.apply_theme()
-        self.details = QLabel("", self)
+        # The animation list can be thousands of characters (a 72-square grid): it must
+        # never decide how wide the window has to be.
+        self.details = ElidedLabel("", self)
         self.details.setToolTip("Animations, source line and edit state of the selected block")
-
-        self.jump_button = icon_button("jump_to_code", "Jump to the block's source line", self)
-        self.reset_button = icon_button("reset", "Reset this block's timeline edits", self)
-        self.delete_button = icon_button(
-            "delete", "Delete this block's call (a timeline edit)", self
-        )
-        self.jump_button.clicked.connect(lambda: self._emit(self.jumpRequested))
-        self.reset_button.clicked.connect(lambda: self._emit(self.resetRequested))
-        self.delete_button.clicked.connect(lambda: self._emit(self.deleteRequested))
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 2, 8, 2)
@@ -103,9 +117,6 @@ class BlockInspector(QWidget):
             self.title,
             self.duration_spin,
             self.scope,
-            self.jump_button,
-            self.reset_button,
-            self.delete_button,
             self.note,
         ):
             layout.addWidget(widget)
@@ -128,13 +139,8 @@ class BlockInspector(QWidget):
             return  # unchanged: do not clobber a half-typed duration
         self._info = info
         empty = info is None
-        for widget in (self.duration_spin, self.scope, self.jump_button):
-            widget.setEnabled(not empty)
-        editable = bool(info and info.editable)
-        self.duration_spin.setEnabled(editable)
-        self.delete_button.setEnabled(editable)
-        self.reset_button.setEnabled(bool(info and info.edited))
-        self.jump_button.setEnabled(bool(info and info.line is not None))
+        self.scope.setEnabled(not empty)
+        self.duration_spin.setEnabled(bool(info and info.editable))
         if info is None:
             self.title.setText("")
             self.details.setText("")
@@ -161,10 +167,6 @@ class BlockInspector(QWidget):
 
     # ------------------------------------------------------------------
 
-    def _emit(self, signal: SignalInstance) -> None:
-        if self._info is not None:
-            signal.emit(self._info.index)
-
     def _commit(self) -> None:
         info = self._info
         if info is None or not info.editable:
@@ -173,6 +175,3 @@ class BlockInspector(QWidget):
         if abs(value - info.duration) < 1e-4:
             return  # focus left the field without a change
         self.durationCommitted.emit(info.index, value, bool(self.scope.currentData()))
-
-    def buttons(self) -> tuple[QToolButton, ...]:
-        return (self.jump_button, self.reset_button, self.delete_button)

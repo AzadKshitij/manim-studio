@@ -27,7 +27,7 @@ Add a **host-side filmstrip cache**:
    cached index within 3 frames, is sent directly through the frame pump with no
    GL work. Cache misses fall back to the replay pose (ADR 0002) and store the
    rendered frame for the next visit.
-5. Freshness is structural: every successful load/reload replaces the filmstrip and
+5. Freshness is structural (amended by ADR 0009: unchanged blocks are carried over): every successful load/reload replaces the filmstrip and
    drops the crawler, so a cached frame can never belong to an older revision.
    `exec`/live-shell mutations already only affect the display scene, exactly as
    before this change.

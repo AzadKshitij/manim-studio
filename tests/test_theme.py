@@ -342,3 +342,27 @@ def replace_name(theme, name):
     from dataclasses import replace
 
     return replace(theme, name=name)
+
+
+class TestRoundedMenus:
+    def test_menu_gets_translucent_frameless_window(self, qtbot) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication, QMenu
+
+        from manim_studio.editor.styling import apply_theme
+
+        app = QApplication.instance()
+        assert isinstance(app, QApplication)
+        apply_theme(app, CHALKBOARD)
+        menu = QMenu()
+        qtbot.addWidget(menu)
+        menu.addAction("One")
+        menu.ensurePolished()
+        assert menu.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert menu.windowFlags() & Qt.WindowType.NoDropShadowWindowHint
+
+    def test_stylesheet_rounds_menus(self, qtbot) -> None:
+        from manim_studio.editor.styling import build_stylesheet
+
+        radius = round(CHALKBOARD.metrics.radius * 1.6)
+        assert f"border-radius: {radius}px; padding: 4px;" in build_stylesheet(CHALKBOARD)

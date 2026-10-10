@@ -106,3 +106,84 @@ class TestFormatReport:
 
     def test_empty_report(self) -> None:
         assert benchmark.format_report({}) == ""
+
+
+class TestRealtimeFpsStats:
+    def test_steady_30fps_sustains_realtime(self) -> None:
+        stats = benchmark.realtime_fps_stats([i / 30 for i in range(91)], target_fps=30)
+        assert stats["fps"] == 30.0
+        assert stats["interval_max_ms"] == 33.33
+        assert stats["sustains_realtime"] is True
+
+    def test_slow_stream_is_below_realtime(self) -> None:
+        stats = benchmark.realtime_fps_stats([i / 20 for i in range(41)], target_fps=30)
+        assert stats["fps"] == 20.0
+        assert stats["sustains_realtime"] is False
+
+    def test_one_long_hitch_breaks_realtime_even_with_a_good_average(self) -> None:
+        times = [i / 60 for i in range(60)]  # 60 fps for a second...
+        times += [t + 0.5 for t in [1.0 + i / 60 for i in range(60)]]  # ...then a 0.5s stall
+        stats = benchmark.realtime_fps_stats(times, target_fps=30)
+        assert stats["fps"] > 28.5
+        assert stats["interval_max_ms"] > 500
+        assert stats["sustains_realtime"] is False
+
+    def test_p5_fps_reflects_the_worst_intervals(self) -> None:
+        times = [0.0]
+        for i in range(100):
+            times.append(times[-1] + (0.1 if i % 10 == 9 else 0.02))  # 1-in-10 slow frames
+        stats = benchmark.realtime_fps_stats(times, target_fps=30)
+        assert stats["p5_fps"] == 10.0
+
+    def test_unsorted_input_is_handled(self) -> None:
+        shuffled = [0.2, 0.0, 0.1, 0.3]
+        assert benchmark.realtime_fps_stats(shuffled)["frames"] == 4
+
+    def test_too_few_frames_reports_zero(self) -> None:
+        for times in ([], [1.0]):
+            stats = benchmark.realtime_fps_stats(times)
+            assert stats["fps"] == 0.0 and stats["sustains_realtime"] is False
+
+    def test_report_formats_the_realtime_line(self) -> None:
+        stats = benchmark.realtime_fps_stats([i / 30 for i in range(31)])
+        text = benchmark.format_report({"realtime": stats})
+        assert "realtime: 30.0 effective fps of 30" in text and "SUSTAINED" in text
+
+
+class TestEffectiveFps:
+    def test_skipped_static_frames_do_not_lower_effective_fps(self) -> None:
+        # 15 delivered frames over 1s (deduped waits), but the 1s scene played in 1s.
+        stats = benchmark.realtime_fps_stats(
+            [i / 15 for i in range(16)], target_fps=30, scene_seconds=1.0, wall_seconds=1.0
+        )
+        assert stats["fps"] == 15.0
+        assert stats["effective_fps"] == 30.0
+
+    def test_slow_playback_lowers_effective_fps(self) -> None:
+        stats = benchmark.realtime_fps_stats(
+            [i / 30 for i in range(31)], target_fps=30, scene_seconds=1.0, wall_seconds=1.25
+        )
+        assert stats["effective_fps"] == 24.0
+        assert stats["sustains_realtime"] is False
+
+
+class TestSkippedFrames:
+    def _stream_with_static_wait(self) -> list[float]:
+        times = [i / 30 for i in range(10)]  # 10 frames at 30 fps
+        times += [times[-1] + 0.2 + i / 30 for i in range(10)]  # a 0.2 s static wait, then more
+        return times
+
+    def test_gaps_explained_by_skipped_frames_are_not_stalls(self) -> None:
+        stats = benchmark.realtime_fps_stats(
+            self._stream_with_static_wait(), scene_seconds=0.9, wall_seconds=0.9, skipped_frames=5
+        )
+        assert stats["missing_frames"] == 5
+        assert stats["unexplained_missing"] == 0
+        assert stats["sustains_realtime"] is True
+
+    def test_gaps_beyond_the_skipped_frames_are_real_stalls(self) -> None:
+        stats = benchmark.realtime_fps_stats(
+            self._stream_with_static_wait(), scene_seconds=0.9, wall_seconds=0.9, skipped_frames=0
+        )
+        assert stats["unexplained_missing"] == 5
+        assert stats["sustains_realtime"] is False

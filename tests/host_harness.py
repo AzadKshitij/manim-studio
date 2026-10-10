@@ -47,6 +47,8 @@ class HostPeer:
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self.frames: queue.Queue[Frame] = queue.Queue()
         self.seen: list[dict[str, Any]] = []
+        #: ``time.monotonic()`` at which each frame was parsed, for fps statistics.
+        self.frame_times: list[float] = []
         self._threads: list[threading.Thread] = []
 
     def accept_control(self, timeout: float = 60.0) -> dict[str, Any]:
@@ -92,6 +94,7 @@ class HostPeer:
                 if not data:
                     return
                 for frame in parser.feed(data):
+                    self.frame_times.append(time.monotonic())
                     self.frames.put(frame)
         except OSError:
             return
@@ -127,7 +130,7 @@ class HostPeer:
         except queue.Empty:
             raise TimeoutError("no frame received") from None
 
-    def start_host(self, *extra: str) -> subprocess.Popen[bytes]:
+    def start_host(self, *extra: str, scene_file: Path | None = None) -> subprocess.Popen[bytes]:
         # Kept open for the process lifetime so host stderr can be inspected on
         # failure; a context manager would close it before the child starts.
         self.stderr_log = tempfile.TemporaryFile()  # noqa: SIM115
@@ -136,7 +139,7 @@ class HostPeer:
                 sys.executable,
                 "-m",
                 "manim_studio.preview_host",
-                str(SCENE_FILE),
+                str(scene_file or SCENE_FILE),
                 "--port",
                 str(self.port),
                 "--embedded",

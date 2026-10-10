@@ -135,7 +135,7 @@ class TimelineWidget(QWidget):
         self._scrollbar.setEnabled(False)
         self._scrollbar.valueChanged.connect(self._on_scrollbar_value)
         self.setMinimumHeight(96 + SCROLLBAR_HEIGHT)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setToolTip(

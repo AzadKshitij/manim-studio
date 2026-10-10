@@ -133,7 +133,7 @@ def test_loop_button_replays_and_pause_stops_it(live: LiveEditor, qtbot) -> None
 
     # The pause button stays "Pause" while looping...
     assert window._playback_active is True
-    assert window.transport_bar._play_button.text() == "Pause"
+    assert window.transport_bar.playing() is True
 
     # ...and clicking it really pauses, then stays paused (no next cycle).
     _click(qtbot, window.transport_bar._play_button)
@@ -143,7 +143,7 @@ def test_loop_button_replays_and_pause_stops_it(live: LiveEditor, qtbot) -> None
     qtbot.wait(2500)  # give a buggy loop time to replay
     assert live.statuses.count("playing") == playing  # playback did not resume
     assert len(live.stopped) == stopped  # no further loop cycle
-    assert window.transport_bar._play_button.text() == "Play"
+    assert window.transport_bar.playing() is False
 
     # Unchecking Loop leaves it off.
     _click(qtbot, loop_check)

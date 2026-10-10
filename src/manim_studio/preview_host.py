@@ -41,7 +41,21 @@ from manim_studio.ipc import (
     hello_message,
 )
 from manim_studio.patch_runtime import StudioRuntime
-from manim_studio.patches import Patch, PatchedSites, PatchError, apply_patches, parse_patch
+from manim_studio.patches import (
+    Patch,
+    PatchedSites,
+    PatchError,
+    SetDuration,
+    apply_patches,
+    parse_patch,
+)
+from manim_studio.reuse import (
+    NO_REUSE,
+    ReusePlan,
+    RunSnapshot,
+    plan_reuse,
+    source_is_time_dependent,
+)
 from manim_studio.scene_runner import (
     SceneLoadError,
     check_scene_file,
@@ -51,12 +65,14 @@ from manim_studio.scene_runner import (
     manimlib_argv_guard,
     run_construct,
     select_scene_class,
+    user_module_signature,
 )
 from manim_studio.scrub import (
     FilmstripCrawler,
     ScrubEngine,
     ScrubError,
     TimingScaler,
+    block_frame_count,
     read_upright_rgba,
 )
 from manim_studio.stats import TimingStats, process_rss_bytes
@@ -288,6 +304,15 @@ class SceneHost:
         self._crawler: FilmstripCrawler | None = None
         self._crawler_engine: ScrubEngine | None = None
         self._crawl_disabled = False
+        #: The executed run the current filmstrip belongs to, and which of its blocks the
+        #: filmstrip holds before the crawler exists (carried over from the last reload).
+        self._run: RunSnapshot | None = None
+        #: The scene file text and the timeline edits the last run was built from: a
+        #: reload that changes nothing but ``SetDuration`` edits is a *timing-only* edit.
+        self._run_base_text: str | None = None
+        self._run_applied: tuple[Patch, ...] = ()
+        self._reused_blocks: frozenset[int] = frozenset()
+        self._fresh_next = False  # next load must not reuse cached frames
         self._trace_id = 0
         self._fps = 30
         # Where the editor's playhead is; the crawler fills the filmstrip
@@ -495,13 +520,25 @@ class SceneHost:
         if path is not None:
             self.config.scene_path = Path(path)
         scene_path = self.config.scene_path
+        load_started = time.perf_counter()
+        phases: dict[str, float] = {}
+
+        def lap(name: str, since: float) -> float:
+            now = time.perf_counter()
+            phases[name] = round(now - since, 4)
+            return now
+
+        mark = load_started
         check = check_scene_file(scene_path)
         if not check.ok:
             raise SceneLoadError(f"{scene_path}: {check.error}")
+        mark = lap("check", mark)
 
         # Timeline edits run as patched in-memory source; the file on disk is untouched.
-        patch_result = apply_patches(scene_path.read_text(encoding="utf-8"), self._patches)
+        base_text = scene_path.read_text(encoding="utf-8")
+        patch_result = apply_patches(base_text, self._patches)
         patched = patch_result.changed
+        mark = lap("patch", mark)
         module = load_scene_module(
             scene_path,
             is_reload=self._loaded_once,
@@ -509,12 +546,24 @@ class SceneHost:
             runtime=self._studio_runtime if patched else None,
         )
         scene_class = select_scene_class(module, self.config.scene_name, path=scene_path)
+        mark = lap("import", mark)
+        user_modules = user_module_signature(scene_path)
+        mark = lap("signature", mark)
 
         # ---- staged (failure-prone) phase: live state untouched -----------------
-        snapshot, trace_seconds = self._trace_scene_class(
-            scene_class, scene_path, self._site_resolver(scene_path, patch_result.patched_sites())
+        # When the preview opens on the end state, the traced scene *is* that scene: reuse
+        # it instead of running construct() a second time.
+        snapshot, trace_seconds, traced_scene = self._trace_scene_class(
+            scene_class,
+            scene_path,
+            self._site_resolver(scene_path, patch_result.patched_sites()),
+            keep_scene=self.config.initial_frame == "end",
         )
-        initial_scene = self._build_initial_scene(scene_class)
+        mark = lap("trace", mark)
+        initial_scene = (
+            traced_scene if traced_scene is not None else self._build_initial_scene(scene_class)
+        )
+        mark = lap("initial_scene", mark)
 
         # ---- commit -------------------------------------------------------------
         self.module = module
@@ -535,11 +584,43 @@ class SceneHost:
         self.events = snapshot.events
         self._fps = int(getattr(initial_scene.camera, "fps", 30)) or 30
         self._trace_id += 1
+        new_run = RunSnapshot(
+            text=patch_result.text,
+            scene_name=scene_class.__name__,
+            blocks=snapshot.blocks,
+            call_lines=self.call_lines,
+            sites=snapshot.block_sites,
+            dynamic=snapshot.block_dynamic,
+            no_user_modules=not user_modules,
+            signature=(tuple(self.config.size), self.config.fps, user_modules),
+            time_independent=not user_modules and not source_is_time_dependent(patch_result.text),
+        )
+        timing_only = self._is_timing_only_edit(base_text, patch_result.applied)
+        old_cached = self._crawler.cached_blocks if self._crawler else self._reused_blocks
+        old_strip = self._filmstrip
+        plan = (
+            NO_REUSE
+            if self._fresh_next
+            else plan_reuse(self._run, new_run, old_cached, timing_only=timing_only, fps=self._fps)
+        )
+        self._fresh_next = False
         self._dispose_scrub_engine()
         self._dispose_filmstrip()
-        self._filmstrip = Filmstrip()
+        self._filmstrip, self._reused_blocks = self._carry_filmstrip(old_strip, plan, new_run)
+        self._run = new_run
+        self._run_base_text = base_text
+        self._run_applied = patch_result.applied
+        reuse_report = {
+            "blocks": len(self._reused_blocks),
+            "total": len(self.blocks),
+            "frames": self._filmstrip.frames,
+            "reason": plan.reason,
+            "shifted": len(plan.shifts),
+        }
         self._crawl_disabled = False
-        self.log.info("loaded %s (%s)", scene_class.__name__, scene_path)
+        phases["commit"] = round(time.perf_counter() - mark, 4)
+        phases["total"] = round(time.perf_counter() - load_started, 4)
+        self.log.info("loaded %s (%s) %s", scene_class.__name__, scene_path, phases)
 
         total = self.blocks[-1].end if self.blocks else 0.0
         self._playhead_hint = total if self.config.initial_frame == "end" else 0.0
@@ -559,6 +640,8 @@ class SceneHost:
             patches=self._patch_report,
             cause=cause,
             clips=[[clip.to_dict() for clip in clips] for clips in self.block_clips],
+            load_timings=phases,
+            reuse=reuse_report,
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()
@@ -566,6 +649,48 @@ class SceneHost:
         self.push_current_frame()
         self.emit_status("idle", index=0)
         self._refresh_shell_namespace()
+
+    def _carry_filmstrip(
+        self, old: Filmstrip | None, plan: ReusePlan, run: RunSnapshot
+    ) -> tuple[Filmstrip, frozenset[int]]:
+        """Keep the frames of ``plan``'s blocks in the old filmstrip, else start empty.
+
+        A block owns the frame indices ``[round(start*fps), round(end*fps))``; its last
+        boundary frame is re-rendered as the next block's first.  Blocks whose frames
+        were partly evicted from the LRU are dropped from the plan.  After a timing-only
+        edit the plan carries a frame shift per block: its frames are found where they
+        were cached (before the shift) and re-keyed to where the block now lives.
+        """
+        if old is None or not plan.blocks:
+            return Filmstrip(), frozenset()
+        fps = self._fps
+        moves: dict[int, tuple[int, int, int]] = {}
+        last_playing = max((b.index for b in run.blocks if b.duration > 0), default=-1)
+        for index in plan.blocks:
+            block = run.blocks[index]
+            shift = plan.shift_of(index)
+            start = round(block.start * fps)
+            stop = max(round(block.end * fps), start + 1)
+            if index == last_playing:
+                # No later block re-renders its end frame as its own first frame.
+                stop = max(stop, start + block_frame_count(block, fps) + 1)
+            # The block spans the same number of frames before and after the shift.
+            if old.has_range(start - shift, stop - shift):
+                moves[index] = (start - shift, stop - shift, shift)
+        old.retain_shifted(moves.values())
+        return old, frozenset(moves)
+
+    def _is_timing_only_edit(self, base_text: str, applied: tuple[Patch, ...]) -> bool:
+        """True when the previous run differs from this one only by ``SetDuration`` edits.
+
+        The scene file must be unchanged and every patch that was added, removed or
+        altered must be a duration edit; then no frame can differ except in the blocks
+        whose duration changed (which the reuse plan re-renders).
+        """
+        if self._run is None or self._run_base_text != base_text:
+            return False
+        changed = set(self._run_applied) ^ set(applied)
+        return bool(changed) and all(isinstance(patch, SetDuration) for patch in changed)
 
     @staticmethod
     def _site_resolver(
@@ -598,19 +723,29 @@ class SceneHost:
         scene_class: type,
         scene_path: Path,
         site_resolver: Callable[[str, int, int], str | None] | None = None,
-    ) -> tuple[Any, float]:
-        """Run the scene once in skip mode and return (snapshot, wall seconds)."""
+        *,
+        keep_scene: bool = False,
+    ) -> tuple[Any, float, Any | None]:
+        """Run the scene once in skip mode: ``(snapshot, wall seconds, scene or None)``.
+
+        With ``keep_scene`` the finished scene is returned (tracer detached) instead of
+        released, so the caller can show its end state without running ``construct()`` a
+        second time.
+        """
         scene = self._make_scene(skip_animations=True, scene_class=scene_class)
         recorder = TraceRecorder(record_events=True, site_resolver=site_resolver)
         recorder.attach(scene)
         started = time.perf_counter()
+        keep = False
         try:
             run_construct(scene)
             snapshot = recorder.snapshot()
             elapsed = time.perf_counter() - started
+            keep = keep_scene
         finally:
             recorder.detach()
-            self._release_scene(scene)
+            if not keep:
+                self._release_scene(scene)
         total = snapshot.blocks[-1].end if snapshot.blocks else 0.0
         self.log.info(
             "trace: %d blocks, %.3fs, %.2fs wall",
@@ -618,7 +753,7 @@ class SceneHost:
             total,
             elapsed,
         )
-        return snapshot, elapsed
+        return snapshot, elapsed, scene if keep else None
 
     @staticmethod
     def _scene_call_lines(
@@ -739,8 +874,13 @@ class SceneHost:
             on_progress=self._on_crawl_progress,
             timings=self.timings,
             start_time=self._playhead_hint,
+            cached_blocks=self._reused_blocks,
         )
-        self.log.info("filmstrip: crawl started (%d blocks)", len(self.blocks))
+        self.log.info(
+            "filmstrip: crawl started (%d blocks, %d reused)",
+            len(self.blocks),
+            len(self._reused_blocks),
+        )
 
     def _step_crawler(self) -> None:
         """Advance the crawl, never letting user-code errors kill the host."""
@@ -951,6 +1091,7 @@ class SceneHost:
                 # ``patches`` is authoritative when present; absent keeps what we had.
                 raw_patches = message.get("patches")
                 patches = None if raw_patches is None else self._parse_patches(raw_patches)
+                self._fresh_next = bool(message.get("fresh"))
                 self._load_with_patches(patches, Path(path) if path else None)
                 self.emit_status("idle", index=0)
             elif command == Command.QUIT:

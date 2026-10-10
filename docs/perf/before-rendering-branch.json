@@ -1,0 +1,37 @@
+{
+  "frame": {
+    "bytes": 3686400,
+    "height": 720,
+    "width": 1280
+  },
+  "generated_at": "2026-10-09T18:54:24",
+  "machine": {
+    "cpu_count": 16,
+    "platform": "Windows-11-10.0.26100-SP0",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "python": "3.13.2"
+  },
+  "reload": {
+    "edit_middle_block": {
+      "crawl_frames": 107,
+      "load_timings": {},
+      "reload_to_crawl_done_s": 1.138,
+      "reload_to_log_s": 0.123,
+      "reuse": {}
+    },
+    "edit_non_play_line": {
+      "crawl_frames": 107,
+      "load_timings": {},
+      "reload_to_crawl_done_s": 1.36,
+      "reload_to_log_s": 0.134,
+      "reuse": {}
+    },
+    "retime_last_block": {
+      "crawl_frames": 109,
+      "load_timings": {},
+      "reload_to_crawl_done_s": 1.124,
+      "reload_to_log_s": 0.137,
+      "reuse": {}
+    }
+  }
+}

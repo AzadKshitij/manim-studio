@@ -187,3 +187,130 @@ A/B on `feature_showcase` (initial frame = end):
 
 The playhead's region is ready ~13× sooner; the full crawl still takes the same
 time and `crawl_fps` is unchanged within noise.
+
+### R1 — single-pass filmstrip crawl (2026-10-09, branch `rendering`)
+
+`FilmstripCrawler` no longer replays `construct()` once per block. After the
+playhead's block (posed directly, so `time_to_playhead` is unchanged) it streams the
+scene once: `ScrubEngine.stream_frames` suspends `construct()` on a greenlet (same GL
+thread) at every frame of every uncached block. Equivalence is covered by
+`test_streamed_frames_match_replay_poses` (cached frames vs replay poses).
+A/B on `feature_showcase` at 720p, old and new code run back to back on the same
+machine (`tests/test_perf.py -m gl`, `docs/perf/after-single-pass.json`):
+
+| metric | per-block replay (before) | single pass |
+| --- | --- | --- |
+| full crawl (`crawl_seconds`) | 1.06 s | **0.62 s** |
+| crawl throughput | 100.6 fps | **172.9 fps** |
+| `time_to_playhead` | 0.10 s | 0.11 s (unchanged) |
+| reload -> filmstrip rebuilt (3 edit shapes) | 1.30–1.46 s | **0.86–0.93 s** |
+
+Load itself (`load_timings.total`, ~0.12–0.14 s) is unchanged; this change targets the
+crawl only. The showcase is a small, light scene (24 blocks), so the saving is the
+floor: replay cost grows with the Python/mobject work before each block, and the old
+crawler paid it once per block.
+
+### R0 — real-time fps metric (30 fps target) (2026-10-09, branch `rendering`)
+
+`tests/test_perf.py -m gl` now reports a `realtime` block (`docs/perf/baseline-realtime.json`)
+for real-time playback of the showcase at 720p, judged against 30 fps:
+
+- `effective_fps` = 30 × scene seconds / wall seconds — the rate the scene itself plays
+  at. This is the headline: the host skips frames identical to the previous one during
+  static waits, so *delivered* `fps` understates what the viewer sees.
+- `start_latency_ms` (PLAY → first frame), `p5_fps`, frame-interval p50/p95/max.
+- `sustains_realtime`: effective fps ≥ 95% of target **and** no frame gap ≥ 2 frame times.
+
+Baseline on `feature_showcase` (three runs, host at 720p): **28.6 effective fps** (95% of
+30; play ratio 1.07, i.e. ~7% slower than scripted), start latency ~68 ms, steady interval
+p50 ≈ 33.7 ms, 0 unexplained missing frames -> `sustains_realtime` true.
+
+Correction: an earlier revision of this metric reported 27.6 fps and a "~245 ms hitch".
+The two gaps (~240 ms and ~170 ms) are the scene's static `wait` blocks, where the host
+deliberately sends no frame because nothing changed (`frames_deduped`). The metric now
+counts a gap as a stall only for frames beyond the host's own deduped count
+(`unexplained_missing`), and measures wall time from the first frame (start latency is
+reported separately). The remaining ~7% is per-block overhead (pre_play/begin_animations
+plus the construct code between blocks), not a stall.
+
+### R2 — reuse unchanged blocks across reloads (2026-10-09, branch `rendering`)
+
+On reload the filmstrip now keeps the frames of blocks the edit cannot influence
+(`reuse.plan_reuse`, ADR 0009) instead of re-crawling the whole scene. Measured as
+**reload command → filmstrip complete**, `feature_showcase` 720p, old and new code
+alternated back to back on the same (noisy) machine, two rounds each
+(`tests/test_perf.py -m gl -k Reload`, `docs/perf/after-reuse.json`):
+
+| edit | blocks reused | before (single-pass, no reuse) | after |
+| --- | --- | --- | --- |
+| retime the last block | 12 / 15 | 1.41–1.52 s | **0.76 s** (-50%) |
+| edit a middle block | 5 / 15 | 1.41–1.51 s | **1.13 s** (-22%) |
+| edit a non-play line mid-scene | 6 / 15 | 1.47–1.66 s | **1.10 s** (-27%) |
+
+The saving is proportional to how much of the scene sits *before* the edit. The load
+itself (trace + initial scene, ~0.25–0.33 s here) is unchanged, and the not-yet-reused
+tail is still crawled by replaying `construct()` once in skip mode through the cached
+prefix, which is the next target. Absolute times are higher than R1's because the
+machine was busier; only the old/new pairs within one round are comparable.
+
+Pitfall caught by measuring: the first version of the user-module fingerprint resolved
+a path for every loaded module and added ~0.8 s to every load. It now rejects modules
+by string prefix before touching the filesystem (~4 ms), reported as
+`load_timings.signature`.
+
+### R3 — one `construct()` per load (2026-10-09, branch `rendering`)
+
+When the preview opens on the end state (the default), the traced scene *is* the initial
+scene, so the host keeps it instead of running `construct()` a second time. A/B on
+`feature_showcase` 720p, old and new code alternated, three rounds
+(`load_timings.total` from the `log` event; reload command -> `log` event is within 5 ms of it):
+
+| edit | before | after |
+| --- | --- | --- |
+| retime last block | 0.117–0.136 s | **0.067–0.074 s** |
+| edit middle block | 0.122–0.127 s | **0.066–0.069 s** (-44%) |
+| edit non-play line | 0.114–0.137 s | **0.066–0.076 s** |
+
+This is the time before the new frame appears after an edit, so it is the latency the
+user feels (the filmstrip crawl in R1/R2 happens in the background). `initial_frame="start"`
+still runs the second, truncated `construct()`.
+
+### Summary — `rendering` branch vs. the commit it started from (2026-10-09)
+
+Same benchmark (`tests/test_perf.py -m gl`, 720p `feature_showcase`), old code (`4e39d1f`,
+extracted to a scratch directory) and new code alternated over 3 rounds on an otherwise idle
+machine; medians. Raw reports: `before-rendering-branch.json`, `after-rendering-branch.json`.
+
+| metric | before | after | change |
+| --- | --- | --- | --- |
+| edit -> new frame shown (reload -> `log`) | 0.126–0.131 s | **0.069–0.075 s** | **-44%** |
+| retime last block -> filmstrip complete | 1.077 s | **0.284 s** | **-74%** |
+| edit mid-scene block -> filmstrip complete | 1.094 s | **0.477 s** | **-56%** |
+| edit mid-scene non-play line -> filmstrip complete | 1.186 s | **0.476 s** | **-60%** |
+| full crawl (first load) | 0.857 s (≈ 120 fps) | **0.550 s (≈ 200 fps)** | **-36%** |
+| real-time playback | 28.5 effective fps | 28.5 effective fps | unchanged (no regression) |
+
+Real-time playback is ~95% of the 30 fps target with no unexplained stalls; the remaining
+~7% is per-block overhead and was not changed by this work.
+
+### R5 — retimes keep later blocks in scenes with updaters, and for edits typed in the source (2026-10-09)
+
+A timeline retime already kept later blocks (`557c0cf`), but only for `SetDuration` patches
+and only when the source had no updater at all (a text search for `always_redraw`, `dt`,
+`.time`, ...). `scenes/Welcome.py` uses `always_redraw`, and editing a `wait()` typed
+directly into the file was not recognised as a timing edit, so both re-rendered every block.
+Now the decision uses what actually ran (the tracer flags blocks that had a `dt` updater
+alive) and an AST comparison that ignores literal durations (ADR 0009). `Welcome.py`
+(22 blocks, 32.4 s, 972 frames at 320x180), their commit and this change alternated back to
+back, two rounds, reload -> filmstrip complete:
+
+| edit | blocks reused: before -> after | crawl before | crawl after |
+| --- | --- | --- | --- |
+| first `wait` 0.5 -> 0.8 | 1 -> **21** of 22 | 6.14-6.28 s | **0.35-0.37 s** (-94%) |
+| first play `run_time` 2.767 -> 3.0 | 0 -> **21** of 22 | 6.44-6.70 s | **0.50 s** (-92%) |
+| last `wait` 2 -> 2.5 (no change expected) | 21 -> 21 | 0.59-0.60 s | 0.47 s |
+
+Frames moved this way are compared with a from-scratch crawl in
+`test_retiming_the_first_wait_of_welcome_keeps_the_later_blocks` (mean abs diff < 1/255).
+A retimed block with a `dt` updater alive still invalidates everything after it
+(`test_retiming_a_block_with_a_dt_updater_reuses_nothing_after_it`).

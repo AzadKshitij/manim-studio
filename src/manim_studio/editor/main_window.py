@@ -15,31 +15,32 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QSlider,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from manim_studio import APP_NAME
 from manim_studio.editor import api_cache, scene_files
-from manim_studio.editor.block_inspector import BlockInfo, BlockInspector
+from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
 from manim_studio.editor.code_editor import CodeEditor
 from manim_studio.editor.completion_controller import CompletionController
+from manim_studio.editor.editor_pane import EditorPane
 from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
 from manim_studio.editor.file_watcher import FileWatcher
-from manim_studio.editor.glyphs import glyph, icon_button, refresh_glyphs
+from manim_studio.editor.glyphs import glyph, refresh_glyphs
 from manim_studio.editor.icon import load_icon
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
@@ -53,6 +54,7 @@ from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.scene_runner import check_scene_file
+from manim_studio.site_index import block_line_range
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
 from manim_studio.theme import (
@@ -131,8 +133,6 @@ class MainWindow(QMainWindow):
         self._build_status_bar()
         self.video = VideoModeController(
             transport=self.transport,
-            slider=self._scrub_slider,
-            position_label=self._scrub_position,
             preview_panel=self.preview_panel,
             timeline=self.timeline,
             stop_playback=self.controller.stop_playback,
@@ -167,7 +167,8 @@ class MainWindow(QMainWindow):
 
     def _build_layout(self) -> None:
         horizontal = QSplitter(Qt.Orientation.Horizontal, self)
-        horizontal.addWidget(self.editor)
+        self.editor_pane = EditorPane(self.editor, self)
+        horizontal.addWidget(self.editor_pane)
         horizontal.addWidget(self.preview_panel)
         horizontal.setStretchFactor(0, 3)
         horizontal.setStretchFactor(1, 2)
@@ -177,23 +178,11 @@ class MainWindow(QMainWindow):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         self.transport_bar = TimelineTransport(self)
         self._edits_label = self.transport_bar.edits_label
+        bottom_layout.setSpacing(0)
         bottom_layout.addWidget(self.transport_bar)
-        bottom_layout.addWidget(self.timeline)
+        bottom_layout.addWidget(self.timeline, 1)  # the timeline takes the extra height
         self.inspector = BlockInspector(self)
         bottom_layout.addWidget(self.inspector)
-
-        self._scrub_slider = QSlider(Qt.Orientation.Horizontal, self)
-        self._scrub_slider.setRange(0, 0)
-        self._scrub_slider.setEnabled(False)
-        self._scrub_slider.setToolTip("Scrub the rendered preview video")
-        self._scrub_position = QLabel("—", self)
-        scrub_row = QHBoxLayout()
-        scrub_row.setContentsMargins(6, 0, 6, 4)
-        self._render_preview_button = icon_button("render", "Render preview video  (Ctrl+R)", self)
-        scrub_row.addWidget(self._render_preview_button)
-        scrub_row.addWidget(self._scrub_slider, 1)
-        scrub_row.addWidget(self._scrub_position)
-        bottom_layout.addLayout(scrub_row)
 
         vertical = QSplitter(Qt.Orientation.Vertical, self)
         vertical.addWidget(horizontal)
@@ -255,6 +244,9 @@ class MainWindow(QMainWindow):
 
         run_menu = menu_bar.addMenu("&Run")
         self._add_action(run_menu, "Reload preview", self.reload_preview, "F5")
+        self._add_action(
+            run_menu, "Reload preview (discard cache)", self.reload_preview_fresh, "Ctrl+F5"
+        )
         self._add_action(run_menu, "Play from playhead", self.request_play, "F6")
         self._add_action(run_menu, "Stop playback", self.request_stop, "F7")
         run_menu.addSeparator()
@@ -302,18 +294,29 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main", self)
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(18, 18))
+        toolbar.setFloatable(False)
+        # A fixed-height bar: growing the window must never stretch it.
+        toolbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.addToolBar(toolbar)
-        toolbar.addWidget(QLabel(" Scene: "))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        play = self._add_toolbar_action(toolbar, "Play", self.request_play, "play")
+        reload_ = self._add_toolbar_action(toolbar, "Reload", self.reload_preview, "reload")
+        stop = self._add_toolbar_action(toolbar, "Stop", self.request_stop, "stop")
+        self._label_toolbar_button(toolbar, play, primary=True)
+        self._label_toolbar_button(toolbar, reload_)
+        self._label_toolbar_button(toolbar, stop)
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("Scene"))
         self._scene_combo = QComboBox(self)
-        self._scene_combo.setMinimumWidth(140)
+        self._scene_combo.setMinimumWidth(160)
         toolbar.addWidget(self._scene_combo)
         toolbar.addSeparator()
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self._add_toolbar_action(toolbar, "Reload", self.reload_preview, "reload")
-        self._add_toolbar_action(toolbar, "Play", self.request_play, "play")
-        self._add_toolbar_action(toolbar, "Stop", self.request_stop, "stop")
-        toolbar.addSeparator()
         self._add_toolbar_action(toolbar, "Render preview", self.render_preview_video, "render")
+        spacer = QWidget(self)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        export = self._add_toolbar_action(toolbar, "Export…", self.export_dialog, "export")
+        self._label_toolbar_button(toolbar, export)
 
     def _build_shell_dock(self) -> None:
         self.shell = ShellPanel(self)
@@ -386,9 +389,6 @@ class MainWindow(QMainWindow):
         self.transport_bar.editRequested.connect(self._on_transport_edit)
         self.timeline.blockSelected.connect(self._on_block_selected)
         self.inspector.durationCommitted.connect(self._on_inspector_duration)
-        self.inspector.jumpRequested.connect(self._on_block_activated)
-        self.inspector.resetRequested.connect(self._reset_block_timing)
-        self.inspector.deleteRequested.connect(self._delete_block)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
         self.transport_bar.jumpRequested.connect(self._on_transport_jump)
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
@@ -410,7 +410,6 @@ class MainWindow(QMainWindow):
         self.controller.hostLogReceived.connect(self.shell.append)
         self.watcher.file_changed.connect(self._on_file_changed)
         self.watcher.file_missing.connect(lambda path: self._set_status(f"file missing: {path}"))
-        self._render_preview_button.clicked.connect(self.render_preview_video)
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
         self.exports.statusChanged.connect(self._set_status)
         self.exports.outputLine.connect(self.shell.append)
@@ -454,6 +453,19 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut) if isinstance(shortcut, str) else shortcut)
         menu.addAction(action)
         return action
+
+    @staticmethod
+    def _label_toolbar_button(toolbar: QToolBar, action: QAction, *, primary: bool = False) -> None:
+        """Show ``action`` as a bordered button with its text beside the icon."""
+        button = toolbar.widgetForAction(action)
+        if not isinstance(button, QToolButton):
+            return
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setProperty("labeled", True)
+        if primary:
+            button.setProperty("primary", True)
+            action.setProperty("glyphOnAccent", True)
+            action.setIcon(glyph(str(action.property("glyph")), on_accent=True))
 
     def _add_toolbar_action(
         self, toolbar: QToolBar, text: str, slot: Any, glyph_name: str | None = None
@@ -658,7 +670,11 @@ class MainWindow(QMainWindow):
             initial_frame=self._initial_frame,
         )
 
-    def reload_preview(self) -> None:
+    def reload_preview_fresh(self) -> None:
+        """Reload and throw away every cached frame (e.g. after editing an image asset)."""
+        self.reload_preview(fresh=True)
+
+    def reload_preview(self, *, fresh: bool = False) -> None:
         if self._path is None:
             return
         # A reload is an explicit "try again": drop the previous error marker in
@@ -670,7 +686,10 @@ class MainWindow(QMainWindow):
             return
         # Use `load` with an explicit path and scene name (not `reload`) so renaming
         # the scene class or switching scenes in the combo always takes effect.
-        self.controller.load(self._path, self._scene_name())
+        if fresh:
+            self.controller.load(self._path, self._scene_name(), fresh=True)
+        else:
+            self.controller.load(self._path, self._scene_name())
 
     def request_play(self) -> None:
         if not self.controller.is_running:
@@ -1045,6 +1064,8 @@ class MainWindow(QMainWindow):
         if line is not None:
             self.timeline.set_active_block(index)
             self.editor.go_to_line(line)
+            first, last = block_line_range(self.editor.text(), line)
+            self.editor.highlight_lines(first, last)
             self._set_status(f"block {index} → line {line}")
         else:
             self._set_status(f"block {index} has no known source line")
@@ -1109,6 +1130,7 @@ class MainWindow(QMainWindow):
                 "redo": self.patches.can_redo,
                 "delete": editable,
                 "reset": index is not None and self.patches.block_is_edited(index),
+                "jump": index is not None and self.events.call_line(index) is not None,
                 "hold": running and not self.timeline.log.is_empty,
                 "apply": self.patches.edit_count > 0,
                 "diff": self.patches.edit_count > 0,
@@ -1129,6 +1151,8 @@ class MainWindow(QMainWindow):
             self._delete_block(index)
         elif action_id == "reset" and index is not None:
             self._reset_block_timing(index)
+        elif action_id == "jump" and index is not None:
+            self._on_block_activated(index)
         elif action_id == "hold":
             self.insert_hold_at_playhead()
         elif action_id == "apply":
@@ -1183,9 +1207,7 @@ class MainWindow(QMainWindow):
             name=block.name,
             duration=block.duration,
             line=self.events.call_line(index),
-            animations=", ".join(
-                f"{c.animation}({c.target}) {c.duration:.2f}s" for c in self.events.clips(index)
-            ),
+            animations=describe_clips(self.events.clips(index)),
             loops=self.patches.iteration_count(index),
             edited=self.patches.block_is_edited(index),
             duration_kind=self.patches.duration_kind(index),
@@ -1322,7 +1344,6 @@ class MainWindow(QMainWindow):
 
     def _on_preview_video_ready(self, output: Path) -> None:
         self.transport.load(output)
-        self._scrub_slider.setEnabled(True)
         self._set_status(f"preview video ready: {output}")
 
     def _on_preview_video_failed(self, exit_code: int) -> None:
@@ -1495,7 +1516,9 @@ class MainWindow(QMainWindow):
     def _update_title(self) -> None:
         if self._path is None:
             self.setWindowTitle(APP_NAME)
+            self.editor_pane.set_file(None)
             return
+        self.editor_pane.set_file(self._path.name, modified=self.editor.is_modified())
         marker = " •" if self.editor.is_modified() else ""
         self.setWindowTitle(f"{self._path.name}{marker} — {APP_NAME}")
 

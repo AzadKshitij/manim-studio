@@ -10,12 +10,13 @@ preview host, the edit controller and the rendered-video transport from them.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QToolButton,
     QWidget,
 )
@@ -33,6 +34,7 @@ EDIT_ACTIONS: tuple[tuple[str, str, str], ...] = (
     ("redo", "redo", "Redo timeline edit  (Ctrl+Y on the timeline)"),
     ("delete", "delete", "Delete the selected block's call (a timeline edit)"),
     ("reset", "reset", "Reset the selected block's timeline edits"),
+    ("jump", "jump_to_code", "Jump to the selected block's source line"),
     ("hold", "hold", "Insert a hold (self.wait) at the playhead"),
     ("apply", "apply", "Apply timeline edits to the source code"),
     ("diff", "diff", "Show what applying the timeline edits would change"),
@@ -63,6 +65,10 @@ class TimelineTransport(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._playing = False
+        self.setObjectName("dockBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(40)
         self._start_button = icon_button("start", "Jump to the beginning  (Home)", self)
         self._back_button = icon_button("step_back", "Step back one frame  (Left)", self)
         self._play_button = icon_button("play", "Play  (Space)", self)

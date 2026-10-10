@@ -10,9 +10,10 @@ Posing a scene at an arbitrary time is done by replaying it (see ADR 0002):
    updaters by the remaining delta), leaving the scene posed mid-animation;
 3. the caller renders one frame from that pose.
 
-For smooth scrubbing, :class:`FilmstripCrawler` walks the same machinery through
-every block once, rendering each frame at O(1) per frame (like manimgl's own
-playback loop, minus timing sleeps and encoding) and filling a
+For smooth scrubbing, :class:`FilmstripCrawler` streams the scene once (construct()
+suspended at every frame, see :meth:`ScrubEngine.stream_frames`), rendering each frame
+at O(1) per frame (like manimgl's own playback loop, minus timing sleeps and
+encoding) and filling a
 :class:`~manim_studio.filmstrip.Filmstrip` cache that the host serves directly.
 """
 
@@ -21,21 +22,42 @@ from __future__ import annotations
 import math
 import random
 import time as time_module
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from manim_studio.timeline_model import TimelineBlock
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 
     from manim_studio.filmstrip import Filmstrip
     from manim_studio.stats import TimingStats
 
-__all__ = ["FilmstripCrawler", "ScrubEngine", "ScrubError", "TimingScaler", "read_upright_rgba"]
+__all__ = [
+    "FilmstripCrawler",
+    "ScrubEngine",
+    "ScrubError",
+    "TimingScaler",
+    "block_frame_count",
+    "read_upright_rgba",
+]
 
 
 class ScrubError(RuntimeError):
     """Raised when a scene cannot be replayed for scrubbing."""
+
+
+def block_frame_count(block: TimelineBlock, fps: int) -> int:
+    """Frame count manimgl's own loop would produce for ``block`` at ``fps``."""
+    return max(1, math.ceil(block.duration * max(1, int(fps)) - 1e-9))
+
+
+@dataclass(frozen=True)
+class _StreamState:
+    """Settings of one :meth:`ScrubEngine.stream_frames` pass."""
+
+    fps: int
+    wanted: Callable[[TimelineBlock], bool]
 
 
 def read_upright_rgba(camera: Any) -> tuple[bytes, int, int]:
@@ -99,6 +121,7 @@ class ScrubEngine:
         self._play_counter = 0
         self._paused_block: TimelineBlock | None = None
         self._paused_animations: list[Any] | None = None
+        self._stream: _StreamState | None = None
         self._orig_play = scene.play
         self._orig_wait = scene.wait
         self.last_pose_seconds = 0.0
@@ -154,6 +177,54 @@ class ScrubEngine:
             raise ScrubError(f"{type(exc).__name__}: {exc}") from exc
         self.last_pose_seconds = self._clock() - started
         return self.block_at(target)
+
+    def stream_frames(
+        self, fps: int, wanted: Callable[[TimelineBlock], bool]
+    ) -> Iterator[tuple[TimelineBlock, int]]:
+        """Replay the scene **once**, pausing at every frame of every wanted block.
+
+        Yields ``(block, frame)`` with the scene posed exactly at that frame (frame
+        0 is the block's start, ``block_frame_count`` its last); the caller renders
+        it before asking for the next one.  Blocks for which ``wanted`` is false
+        run in skip mode like any replayed prefix.  ``construct()`` is suspended on
+        a greenlet (same OS thread, so GL stays single-threaded) instead of being
+        replayed once per block as :meth:`pose` would require.
+
+        Raises :class:`ScrubError` if the user's construct fails.  Closing the
+        generator early unwinds the suspended ``construct()``.
+        """
+        import greenlet
+        from manimlib.scene.scene import EndScene
+
+        if not self._blocks:
+            return
+        self._reset(float("inf"))  # no target: nothing is intercepted as a partial block
+        self._stream = _StreamState(max(1, int(fps)), wanted)
+        scene = self._scene
+
+        def run() -> None:
+            try:
+                scene.setup()
+                scene.construct()
+            except EndScene:
+                pass
+
+        child = greenlet.greenlet(run)
+        started = self._clock()
+        try:
+            while True:
+                try:
+                    item = child.switch()
+                except Exception as exc:  # reported to the editor
+                    raise ScrubError(f"{type(exc).__name__}: {exc}") from exc
+                if child.dead:
+                    return
+                yield item
+        finally:
+            self._stream = None
+            if not child.dead:
+                child.throw()  # GreenletExit: unwind construct() without running it on
+            self.last_pose_seconds = self._clock() - started
 
     def interpolate_paused(self, local_time: float, dt: float) -> None:
         """Advance the paused play's animations to ``local_time`` inside its block.
@@ -217,6 +288,8 @@ class ScrubEngine:
         if not args:
             # Mirrors TraceRecorder: play() without animations is not a block.
             return self._orig_play(*args, **kwargs)
+        if block is not None and self._streams(block):
+            return self._stream_play(args, kwargs, block)
         if block is not None and block.start <= self._target < block.end:
             return self._partial_play(args, kwargs, block)
         factor = self._factor(block)
@@ -241,6 +314,8 @@ class ScrubEngine:
 
     def _wait(self, *args: Any, **kwargs: Any) -> Any:
         block = self._blocks[self._play_counter] if self._play_counter < len(self._blocks) else None
+        if block is not None and self._streams(block):
+            return self._stream_wait(block)
         if block is not None and block.start <= self._target < block.end:
             return self._partial_wait(block)
         factor = self._factor(block)
@@ -295,6 +370,79 @@ class ScrubEngine:
         self._paused_block = block
         self._paused_animations = None
         raise EndScene()
+
+    def _streams(self, block: TimelineBlock) -> bool:
+        stream = self._stream
+        return stream is not None and block.duration > 0 and stream.wanted(block)
+
+    @staticmethod
+    def _emit(block: TimelineBlock, frame: int) -> None:
+        """Hand control to the consumer; returns when it asks for the next frame."""
+        import greenlet
+
+        parent = greenlet.getcurrent().parent
+        if parent is not None:
+            parent.switch((block, frame))
+
+    def _stream_play(
+        self, args: tuple[Any, ...], kwargs: dict[str, Any], block: TimelineBlock
+    ) -> None:
+        """Play ``block`` frame by frame, yielding each pose to the stream consumer."""
+        scene = self._scene
+        stream = self._stream
+        assert stream is not None
+        animations = list(map(_prepare_animation, args))
+        factor = self._factor(block)
+        for animation in animations:
+            animation.update_rate_info(
+                kwargs.get("run_time"), kwargs.get("rate_func"), kwargs.get("lag_ratio")
+            )
+            if factor != 1.0:
+                animation.run_time = float(animation.run_time) * factor
+        self._play_counter += 1
+        scene.pre_play()
+        scene.begin_animations(animations)
+        for animation in animations:
+            animation.interpolate(0.0)
+        scene.update_mobjects(0)
+        self._emit(block, 0)
+        dt = 1.0 / stream.fps
+        for frame in range(1, block_frame_count(block, stream.fps) + 1):
+            local = min(frame * dt, block.duration)
+            for animation in animations:
+                animation.update_mobjects(dt)
+                animation.interpolate(local / max(float(animation.run_time), 1e-9))
+            scene.update_mobjects(dt)
+            scene.increment_time(dt)
+            self._emit(block, frame)
+        for animation in animations:
+            animation.finish()
+            animation.clean_up_from_scene(scene)
+        scene.update_mobjects(0)
+        self._finish_streamed(block)
+
+    def _stream_wait(self, block: TimelineBlock) -> None:
+        """Advance updaters through ``block`` frame by frame, yielding each pose."""
+        scene = self._scene
+        stream = self._stream
+        assert stream is not None
+        self._play_counter += 1
+        scene.pre_play()
+        scene.update_mobjects(0)
+        self._emit(block, 0)
+        dt = 1.0 / stream.fps
+        for frame in range(1, block_frame_count(block, stream.fps) + 1):
+            scene.update_mobjects(dt)
+            scene.increment_time(dt)
+            self._emit(block, frame)
+        self._finish_streamed(block)
+
+    def _finish_streamed(self, block: TimelineBlock) -> None:
+        # Frame stepping overshoots by up to one frame; land exactly on the block end so
+        # the next block starts where the trace says it does.  ``num_plays`` is what
+        # ``Scene.post_play`` would bump (its preview draw is wasted work here).
+        self._scene.time = block.end
+        self._scene.num_plays += 1
 
     def _sync_time(self) -> None:
         scene = self._scene
@@ -420,13 +568,19 @@ class TimingScaler:
 
 
 class FilmstripCrawler:
-    """Fills a filmstrip by walking every block once, rendering each frame.
+    """Fills a filmstrip in one pass over the scene, rendering each frame.
 
-    Per block the crawler first replays the scene to the block start (fast, skip
-    mode) and then advances frames incrementally — O(1) per frame instead of one
-    replay per frame, which is what makes scrubbing smooth in already-visited
-    regions.  :meth:`step` renders a bounded number of frames per call so the
-    host keeps servicing commands while the cache fills.
+    Two phases, both bounded per :meth:`step` so the host keeps servicing commands:
+
+    1. **Head**: the block under the playhead is posed directly (one replay) so the
+       region the user is looking at is cached first.  Skipped when the playhead is
+       already in the first block.
+    2. **Stream**: one replay of ``construct()`` suspended at every frame of every
+       block not yet cached (:meth:`ScrubEngine.stream_frames`), so the whole scene
+       costs a single replay instead of one per block.
+
+    Rendering is O(1) per frame, like manimgl's own playback loop minus timing
+    sleeps and encoding.
     """
 
     def __init__(
@@ -439,6 +593,7 @@ class FilmstripCrawler:
         frame_budget: int = 6,
         timings: TimingStats | None = None,
         start_time: float = 0.0,
+        cached_blocks: Collection[int] = (),
     ) -> None:
         self._engine = engine
         self._filmstrip = filmstrip
@@ -447,22 +602,26 @@ class FilmstripCrawler:
         self._timings = timings
         self.frame_budget = max(1, int(frame_budget))
         self._blocks = tuple(engine._blocks)
-        # Visit order is playhead-first: the block nearest ``start_time`` renders
-        # first, then its neighbours.  Reordering costs nothing extra because
-        # posing any block replays the scene from the start regardless.
         self._start_time = float(start_time)
-        self._order = sorted(
-            range(len(self._blocks)), key=lambda index: abs(self._blocks[index].start - start_time)
-        )
-        self._position = 0
-        self._done_duration = 0.0
+        #: Indices of blocks whose frames are all cached (carried over from a reload or
+        #: completed by this crawl).
+        self._cached: set[int] = set(cached_blocks)
+        self._head: TimelineBlock | None = self._nearest_head(self._start_time)
+        self._stream: Iterator[tuple[TimelineBlock, int]] | None = None
+        #: Block being rendered and the next frame to render within it.
+        self._cur_block: TimelineBlock | None = None
+        self._done_duration = sum(b.duration for b in self._blocks if b.index in self._cached)
         self._frame = 0
-        self._frames = 0
+        self._frames = filmstrip.frames
         self._done = False
         self._capped = False
         #: Seconds from construction until the playhead's block was cached.
         self._t0 = time_module.perf_counter()
-        self.seconds_to_playhead: float | None = None
+        self.seconds_to_playhead: float | None = (
+            0.0
+            if any(self._is_playhead_block(b) for b in self._blocks if b.index in self._cached)
+            else None
+        )
 
     # ------------------------------------------------------------------
 
@@ -479,76 +638,115 @@ class FilmstripCrawler:
         return self._frames
 
     @property
+    def cached_blocks(self) -> frozenset[int]:
+        """Blocks whose frames are fully cached (reused from before or crawled)."""
+        return frozenset(self._cached)
+
+    @property
     def progress(self) -> float:
         """Monotonic completion estimate in [0, 1] based on block durations."""
         total = self._engine.total_duration
-        if total <= 0 or self._position >= len(self._order):
+        if self._done or total <= 0:
             return 1.0
-        block = self._blocks[self._order[self._position]]
-        done = self._done_duration + min(max(self._frame - 1, 0) / self._fps, block.duration)
-        return min(max(done / total, 0.0), 1.0)
+        partial = 0.0
+        if self._cur_block is not None:
+            partial = min(max(self._frame - 1, 0) / self._fps, self._cur_block.duration)
+        return min(max((self._done_duration + partial) / total, 0.0), 1.0)
 
     def prioritize(self, time: float) -> None:
-        """Re-aim the pending crawl at ``time`` (a new playhead or seek).
+        """Re-aim the not-yet-started head phase at ``time`` (a new playhead or seek).
 
-        The block currently being rendered keeps its slot so its partial frames
-        stay valid; only the queue behind it is re-sorted nearest-first.
+        Once the stream is running it renders blocks in timeline order: it owns the
+        engine's scene, so it cannot be interrupted for a far-away block.  Scrubbing
+        there is still served by the host's own replay pose on a cache miss.
         """
-        if self._done:
+        if self._done or self._stream is not None or self._cur_block is not None:
             return
-        head = self._position + (1 if self._frame > 0 else 0)
-        if head >= len(self._order):
-            return
-        blocks = self._blocks
-        self._order[head:] = sorted(
-            self._order[head:], key=lambda index: abs(blocks[index].start - time)
-        )
+        self._start_time = float(time)
+        self._head = self._nearest_head(self._start_time)
 
     def step(self) -> int:
         """Render up to :attr:`frame_budget` frames; returns the number rendered."""
         rendered = 0
         while rendered < self.frame_budget and not self._done:
-            if self._position >= len(self._order):
+            if self._stream is None and self._head is None and not self._has_pending():
+                self._finish()  # everything was reused: no need to replay the scene at all
+                break
+            if self._head is not None:
+                rendered += self._step_head(self._head)
+                continue
+            if self._stream is None:
+                self._stream = self._engine.stream_frames(self._fps, self._wanted)
+            try:
+                block, frame = next(self._stream)
+            except StopIteration:
                 self._finish()
                 break
-            block = self._blocks[self._order[self._position]]
-            if self._engine.paused_block is not block:
-                self._engine.pose(block.start)
-                self._frame = 0
-                if self._engine.paused_block is not block:
-                    # Zero-length block (or a target the replay skipped): no frames.
-                    self._complete_block(block)
-                    continue
-            frame_count = self._block_frame_count(block)
-            if self._frame == 0:
-                self._render()
-                self._frame = 1
-                rendered += 1
-                continue
-            if self._frame <= frame_count:
-                dt = 1.0 / self._fps
-                local = min(self._frame / self._fps, block.duration)
-                if self._engine.paused_animations is not None:
-                    self._engine.interpolate_paused(local, dt)
-                else:
-                    self._engine.advance_wait(dt)
-                self._render()
-                self._frame += 1
-                rendered += 1
-                continue
-            self._complete_block(block)
+            self._cur_block = block
+            self._frame = frame + 1
+            self._render()
+            rendered += 1
+            if self._done:
+                break
+            if frame >= self._block_frame_count(block):
+                self._complete_block(block)
         return rendered
 
     # ------------------------------------------------------------------
 
+    def _has_pending(self) -> bool:
+        return any(b.duration > 0 and b.index not in self._cached for b in self._blocks)
+
+    def _wanted(self, block: TimelineBlock) -> bool:
+        return block.index not in self._cached
+
+    def _nearest_head(self, time: float) -> TimelineBlock | None:
+        """The uncached block nearest ``time``, unless the stream reaches it first anyway."""
+        pending = [block for block in self._blocks if block.index not in self._cached]
+        if not pending:
+            return None
+        nearest = min(pending, key=lambda block: abs(block.start - time))
+        return None if nearest is pending[0] else nearest
+
+    def _step_head(self, block: TimelineBlock) -> int:
+        """One frame of the head block via a direct pose; returns frames rendered."""
+        engine = self._engine
+        if engine.paused_block is not block:
+            engine.pose(block.start)
+            self._frame = 0
+            self._cur_block = block
+            if engine.paused_block is not block:
+                # Zero-length block (or a target the replay skipped): no frames.
+                self._complete_block(block)
+                return 0
+        if self._frame == 0:
+            self._render()
+            self._frame = 1
+            return 1
+        if self._frame <= self._block_frame_count(block):
+            dt = 1.0 / self._fps
+            local = min(self._frame / self._fps, block.duration)
+            if engine.paused_animations is not None:
+                engine.interpolate_paused(local, dt)
+            else:
+                engine.advance_wait(dt)
+            self._render()
+            self._frame += 1
+            return 1
+        self._complete_block(block)
+        return 0
+
     def _block_frame_count(self, block: TimelineBlock) -> int:
         """Frame count manimgl's own loop would produce for this block."""
-        return max(1, math.ceil(block.duration * self._fps - 1e-9))
+        return block_frame_count(block, self._fps)
 
     def _complete_block(self, block: TimelineBlock) -> None:
+        self._cached.add(block.index)
         self._done_duration += block.duration
-        self._position += 1
+        self._cur_block = None
         self._frame = 0
+        if block is self._head:
+            self._head = None
         if self.seconds_to_playhead is None and self._is_playhead_block(block):
             self.seconds_to_playhead = time_module.perf_counter() - self._t0
 
@@ -563,7 +761,14 @@ class FilmstripCrawler:
     def _finish(self) -> None:
         if not self._done:
             self._done = True
+            self._close_stream()
             self._notify()
+
+    def _close_stream(self) -> None:
+        stream, self._stream = self._stream, None
+        close = getattr(stream, "close", None)
+        if close is not None:
+            close()
 
     def _render(self) -> None:
         from manim_studio.ipc import encode_frame
