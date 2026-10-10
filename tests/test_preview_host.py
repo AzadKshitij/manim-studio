@@ -69,45 +69,6 @@ class TestParseSize:
             parse_size(text)
 
 
-class TestApplyTiming:
-    """Timing overrides rebase the host's blocks without touching the trace."""
-
-    def _host(self) -> SceneHost:
-        host = SceneHost(HostConfig(scene_path=Path("unused.py")))
-        host._base_blocks = (
-            TimelineBlock(0, "ShowCreation", 0.0, 1.0),
-            TimelineBlock(1, "Wait", 1.0, 0.5),
-            TimelineBlock(2, "Transform", 1.5, 2.0),
-        )
-        host.blocks = host._base_blocks
-        return host
-
-    def test_doubling_shifts_later_blocks(self) -> None:
-        host = self._host()
-        host._apply_timing([{"index": 0, "duration": 2.0}])
-        assert [(b.start, b.duration) for b in host.blocks] == [
-            (0.0, 2.0),
-            (2.0, 0.5),
-            (2.5, 2.0),
-        ]
-        assert host._timing_factors == {0: 2.0}
-
-    def test_empty_timings_restore_the_base(self) -> None:
-        host = self._host()
-        host._apply_timing([{"index": 1, "duration": 1.5}])
-        host._apply_timing([])
-        assert host.blocks == host._base_blocks
-        assert host._timing_factors == {}
-
-    def test_unknown_or_invalid_entries_are_ignored(self) -> None:
-        host = self._host()
-        host._apply_timing([{"index": 9, "duration": 1.0}, {"index": -1, "duration": 1.0}])
-        assert host._timing_factors == {}
-        host._apply_timing([{"index": 0, "duration": 0.0}, {"index": 1, "duration": -2.0}])
-        assert host._timing_factors == {}
-        assert host.blocks == host._base_blocks
-
-
 class TestStopRace:
     """A play queued before a STOP must not clear the pause (loop replay race)."""
 
@@ -333,6 +294,20 @@ def _drain_frames(peer: HostPeer) -> None:
             return
 
 
+def _settle_frames(peer: HostPeer, quiet_for: float = 0.7) -> None:
+    """Discard frames until the host has been silent for ``quiet_for`` seconds.
+
+    Playback and reload tests leave frames in flight (the pump encodes the latest
+    frame on its own thread), and those can land *after* a plain drain.  A scrub
+    assertion must not mistake such a stale frame for its own.
+    """
+    while True:
+        try:
+            peer.wait_frame(timeout=quiet_for)
+        except TimeoutError:
+            return
+
+
 def _content_pixels(frame: Frame) -> int:
     """Count pixels that are not the #333333 background (stroke coverage)."""
     count = 0
@@ -492,6 +467,17 @@ class TestHostIntegration:
         """Scrubbing mid-block must render an intermediate state (half-drawn circle)."""
         peer = host_session[0]
         peer.drain()
+        # Scrubs are served from the filmstrip cache (nearest frame within 3 frames,
+        # ADR 0003) while the background crawl is still filling it, so a half-filled
+        # cache would make exact-pose assertions race the crawler.  Start a fresh
+        # crawl, wait for it to finish, then let stale frames from earlier tests land.
+        peer.send(Command.RELOAD)
+        peer.wait_event(lambda event: event.get("event") == Event.LOG)
+        peer.wait_event(
+            lambda event: event.get("event") == Event.FILMSTRIP and event.get("done"),
+            timeout=60,
+        )
+        _settle_frames(peer)
 
         def scrub_to(time_seconds: float) -> Frame:
             # Frames are latest-wins by design, so a scrub frame can be dropped when
@@ -588,34 +574,95 @@ class TestHostIntegration:
             )
         )
 
-    def test_set_timing_retimes_and_reposes(self, host_session: Any) -> None:
-        """Retiming a block returns the shifted timeline and keeps the host usable."""
+    def test_log_event_lists_each_blocks_animations(self, host_session: Any) -> None:
+        _, _, _, _, log_event = host_session
+        clips = log_event["clips"]
+        assert len(clips) == len(log_event["blocks"])
+        first = clips[0]
+        assert [c["animation"] for c in first] == ["ShowCreation"]
+        assert first[0]["target"] == "Circle" and first[0]["lane"] == 0
+        assert first[0]["duration"] == pytest.approx(0.3)
+        assert clips[1] == []  # block 1 is a wait
+        # The multi-animation play() shows up as parallel clips on different lanes.
+        parallel = [block for block in clips if len(block) > 1]
+        assert parallel and len({c["lane"] for c in parallel[0]}) == len(parallel[0])
+
+    def test_log_event_tags_blocks_with_call_sites(self, host_session: Any) -> None:
+        _, _, _, _, log_event = host_session
+        sites = log_event["sites"]
+        assert len(sites) == len(log_event["blocks"])
+        resolved = [site for site in sites if site is not None]
+        assert len(resolved) >= 10
+        assert all(isinstance(site["id"], str) and site["occ"] >= 0 for site in resolved)
+        assert log_event["patches"] == {"applied": 0, "orphaned": []}
+
+    def test_set_patches_retimes_without_touching_the_file(
+        self, host_session: Any, tmp_path: Path
+    ) -> None:
+        """A timeline patch changes what runs, reports orphans and leaves the file alone."""
         peer = host_session[0]
-        peer.drain()
-        peer.send(Command.RELOAD)
-        log = peer.wait_event(
-            lambda event: event.get("event") == Event.LOG and event.get("trace_id") is not None
+        scene_file = tmp_path / "patched.py"
+        source = (
+            "from manimlib import Scene\n\n\n"
+            "class Patched(Scene):\n"
+            "    def construct(self):\n"
+            "        self.wait(1)\n"
+            "        for _ in range(2):\n"
+            "            self.wait(0.5)\n"
         )
-        blocks = log["blocks"]
-        target = blocks[0]["duration"] * 2.0
+        scene_file.write_text(source, encoding="utf-8")
+        peer.drain()
         try:
-            peer.send(Command.SET_TIMING, timings=[{"index": 0, "duration": target}], time=0.0)
-            timing = peer.wait_event(lambda event: event.get("event") == Event.TIMING, timeout=30)
-            assert timing["trace_id"] == log["trace_id"]
-            assert timing["blocks"][0]["duration"] == pytest.approx(target)
-            assert timing["blocks"][1]["start"] == pytest.approx(blocks[0]["start"] + target)
-            # The host must still pose and render after the retime.
-            peer.send(Command.SCRUB, time=min(target / 2, timing["total_duration"]))
-            peer.wait_event(
-                lambda event: event.get("event") == Event.TICK and event.get("scrubbing") is True,
-                timeout=30,
+            peer.send(Command.LOAD, path=str(scene_file), scene_name="Patched", patches=[])
+            base = peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG and event.get("scene_name") == "Patched"
+                )
             )
+            assert [b["duration"] for b in base["blocks"]] == pytest.approx([1.0, 0.5, 0.5])
+            first = base["sites"][0]["id"]
+            loop = base["sites"][1]["id"]
+            assert base["sites"][2] == {"id": loop, "occ": 1}
+
+            patches = [
+                {"op": "set_duration", "site": first, "seconds": 3.0},
+                {"op": "set_duration", "site": loop, "occurrence": 1, "seconds": 2.0},
+                {"op": "set_duration", "site": loop, "seconds": 0.25},
+                {"op": "set_duration", "site": "Patched.construct:wait:dead000000:0", "seconds": 9},
+            ]
+            peer.send(Command.SET_PATCHES, patches=patches, time=0.0)
+            patched = peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG
+                    and event.get("patches", {}).get("applied", 0) > 0
+                ),
+                timeout=60,
+            )
+            assert [b["duration"] for b in patched["blocks"]] == pytest.approx([3.0, 0.25, 2.0])
+            assert patched["sites"][2] == {"id": loop, "occ": 1}
+            report = patched["patches"]
+            assert report["applied"] == 3
+            assert len(report["orphaned"]) == 1
+            assert "no longer exists" in report["orphaned"][0]["reason"]
+            assert scene_file.read_text(encoding="utf-8") == source
+
+            # A plain reload keeps the patches (the host owns the current set).
+            peer.send(Command.RELOAD)
+            again = peer.wait_event(
+                lambda event: event.get("event") == Event.LOG and event.get("patches") is not None,
+                timeout=60,
+            )
+            assert [b["duration"] for b in again["blocks"]] == pytest.approx([3.0, 0.25, 2.0])
             errors = [event for event in peer.drain() if event.get("event") == Event.ERROR]
             assert not errors, errors
         finally:
-            # The host is shared for the module: always restore the base timing.
-            peer.send(Command.SET_TIMING, timings=[], time=0.0)
-            peer.wait_event(lambda event: event.get("event") == Event.TIMING, timeout=30)
+            peer.send(Command.LOAD, path=str(SCENE_FILE), scene_name="FeatureShowcase", patches=[])
+            peer.wait_event(
+                lambda event: (
+                    event.get("event") == Event.LOG and event.get("scene_name") == "FeatureShowcase"
+                ),
+                timeout=60,
+            )
 
 
 @pytest.mark.gl
@@ -836,3 +883,21 @@ class TestHostStatsPayloads:
         assert payload["sent"] == 7
         assert payload["dropped"] == 2
         assert payload["fps"] == 30
+
+
+class TestPatchFileArgument:
+    def test_patch_file_is_parsed_into_the_config_patches(self, tmp_path: Path) -> None:
+        from manim_studio.patches import Anchor, SetDuration
+        from manim_studio.preview_host import _read_patches, build_parser
+        from manim_studio.sidecar import write_patch_file
+
+        patch = SetDuration(Anchor("S.construct:wait:abc:0"), 2.0)
+        path = write_patch_file([patch])
+        args = build_parser().parse_args([str(tmp_path / "scene.py"), "--patch-file", str(path)])
+        assert _read_patches(args.patch_file) == (patch,)
+        assert _read_patches(None) == ()
+
+    def test_unreadable_patch_file_is_ignored(self, tmp_path: Path) -> None:
+        from manim_studio.preview_host import _read_patches
+
+        assert _read_patches(tmp_path / "missing.json") == ()

@@ -176,6 +176,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             gif=args.gif,
             resolution=resolution,
             animation_range=animation_range,
+            use_sidecar=not args.no_sidecar,
         )
     except ExportError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -299,6 +300,9 @@ def cmd_latex(args: argparse.Namespace) -> int:
             if probe.detail:
                 print(probe.detail)
         return 0 if probe.ok else 1
+    if args.clear_cache:
+        cleared = latex_install.clear_download_cache(target)
+        print("cleared download cache" if cleared else "download cache already empty")
     if args.action == "uninstall":
         removed = latex_install.uninstall_latex(target)
         print(f"removed {install_dir(target)}" if removed else "nothing to remove")
@@ -306,7 +310,7 @@ def cmd_latex(args: argparse.Namespace) -> int:
     # install
     try:
         root = latex_install.install_latex(
-            target, on_progress=None if args.json else _latex_progress
+            target, on_progress=None if args.json else _latex_progress, use_cache=not args.no_cache
         )
     except latex_install.InstallError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -411,6 +415,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FROM,TO",
         help="render only animation blocks FROM..TO (0-based, inclusive)",
     )
+    export.add_argument(
+        "--no-sidecar",
+        action="store_true",
+        help="ignore <scene>.studio.json and render the source exactly as written",
+    )
     export.add_argument("--json", action="store_true")
     export.set_defaults(func=cmd_export)
 
@@ -453,6 +462,12 @@ def build_parser() -> argparse.ArgumentParser:
     latex.add_argument("action", choices=("status", "install", "uninstall", "diagnose"))
     latex.add_argument("--dir", type=Path, default=None, help="override install location")
     latex.add_argument("--json", action="store_true")
+    latex.add_argument(
+        "--no-cache", action="store_true", help="install: ignore the cached TinyTeX download"
+    )
+    latex.add_argument(
+        "--clear-cache", action="store_true", help="install/uninstall: delete cached downloads"
+    )
     latex.set_defaults(func=cmd_latex)
 
     return parser

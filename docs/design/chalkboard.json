@@ -1,0 +1,51 @@
+{
+  "format": "manim-studio-theme",
+  "version": 1,
+  "name": "Chalkboard",
+  "mode": "dark",
+  "colors": {
+    "bg": "#0f1217",
+    "surface": "#161a21",
+    "raised": "#1f242d",
+    "editor": "#12151b",
+    "preview": "#080a0d",
+    "border": "#262c36",
+    "borderStrong": "#3a4352",
+    "text": "#e4e8ee",
+    "muted": "#9aa4b2",
+    "faint": "#6b7586",
+    "accent": "#58c4dd",
+    "onAccent": "#07232b",
+    "playhead": "#ffd866",
+    "ok": "#83c167",
+    "warn": "#f0a93c",
+    "err": "#fc6255",
+    "icon": "#c3cbd6",
+    "iconActive": "#58c4dd",
+    "iconDisabled": "#566073"
+  },
+  "syntax": {
+    "keyword": "#f2907a",
+    "string": "#a8d98c",
+    "number": "#ffd866",
+    "comment": "#6f7b8d",
+    "function": "#58c4dd",
+    "class": "#8fb8ff",
+    "builtin": "#c9a6f5"
+  },
+  "lanes": [
+    "#58c4dd",
+    "#83c167",
+    "#ffd866",
+    "#fc6255",
+    "#c59df0",
+    "#ff9f68"
+  ],
+  "metrics": {
+    "radius": 6,
+    "controlHeight": 28,
+    "density": 1.0,
+    "fontSize": 13,
+    "editorFontSize": 14
+  }
+}

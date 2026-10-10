@@ -18,6 +18,8 @@ from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
 
 from manim_studio import ipc, spawn
 from manim_studio.ipc import Channel, Command, Event, FrameParser
+from manim_studio.patches import parse_patch
+from manim_studio.sidecar import write_patch_file
 from manim_studio.stats import TimingStats
 
 __all__ = ["PreviewController"]
@@ -37,7 +39,6 @@ class PreviewController(QObject):
     execResultReceived = Signal(dict)
     filmstripReceived = Signal(dict)
     statsReceived = Signal(dict)
-    timingChanged = Signal(dict)
     frameReceived = Signal(QImage)
     hostLogReceived = Signal(str)
     stateChanged = Signal(str)  # starting | running | stopped | crashed
@@ -66,6 +67,8 @@ class PreviewController(QObject):
         self.frames_received = 0
         self.scene_path: Path | None = None
         self.scene_name: str | None = None
+        #: Timeline edits (serialized patches) re-sent with every load/reload.
+        self.patches: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -115,6 +118,9 @@ class PreviewController(QObject):
             args.append("--embedded")
         if scene_name:
             args += ["--scene-name", scene_name]
+        if self.patches:
+            # The host loads its first scene from argv, so hand it the current edits now.
+            args += ["--patch-file", str(write_patch_file(parse_patch(p) for p in self.patches))]
         if fps is not None:
             args += ["--fps", str(fps)]
         # Frozen builds re-invoke our own exe instead of `python -m` (ADR 0005).
@@ -176,7 +182,7 @@ class PreviewController(QObject):
         return self._control.write(data) == len(data)
 
     def reload(self, path: str | Path | None = None) -> bool:
-        payload: dict[str, Any] = {}
+        payload: dict[str, Any] = {"patches": list(self.patches)}
         if path is not None:
             payload["path"] = str(Path(path).resolve())
         return self.send(Command.RELOAD, **payload)
@@ -184,10 +190,22 @@ class PreviewController(QObject):
     def load(self, path: str | Path, scene_name: str | None = None) -> bool:
         if scene_name is not None:
             self.scene_name = scene_name
-        payload: dict[str, Any] = {"path": str(Path(path).resolve())}
+        payload: dict[str, Any] = {
+            "path": str(Path(path).resolve()),
+            "patches": list(self.patches),
+        }
         if scene_name is not None:
             payload["scene_name"] = scene_name
         return self.send(Command.LOAD, **payload)
+
+    def set_patches(self, patches: list[dict[str, Any]], time_seconds: float = 0.0) -> bool:
+        """Run the scene with new timeline edits and re-pose at ``time_seconds``.
+
+        The patch set is remembered and re-sent with every ``load``/``reload``, so a
+        restarted host picks up exactly the edits the editor is showing.
+        """
+        self.patches = list(patches)
+        return self.send(Command.SET_PATCHES, patches=self.patches, time=float(time_seconds))
 
     def play(self, from_index: int = 0, to_index: int | None = None, rate: float = 1.0) -> bool:
         """Play from ``from_index`` (optionally bounded by ``to_index``) at ``rate``."""
@@ -207,14 +225,6 @@ class PreviewController(QObject):
     def scrub(self, time_seconds: float) -> bool:
         """Pose the scene at an arbitrary time (coalesced host-side)."""
         return self.send(Command.SCRUB, time=float(time_seconds))
-
-    def set_timing(self, timings: list[dict[str, float]], time_seconds: float = 0.0) -> bool:
-        """Apply per-block duration overrides and re-pose at ``time_seconds``.
-
-        The host rebuilds the timeline, invalidates the filmstrip/replay state and
-        answers with an ``Event.TIMING`` carrying the authoritative blocks.
-        """
-        return self.send(Command.SET_TIMING, timings=list(timings), time=float(time_seconds))
 
     def exec_code(self, code: str) -> bool:
         return self.send(Command.EXEC, code=code)
@@ -346,8 +356,6 @@ class PreviewController(QObject):
             self.filmstripReceived.emit(message)
         elif event == Event.STATS:
             self.statsReceived.emit(message)
-        elif event == Event.TIMING:
-            self.timingChanged.emit(message)
         elif event == Event.PONG:
             pass
         else:

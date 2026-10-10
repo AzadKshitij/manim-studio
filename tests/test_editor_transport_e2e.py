@@ -18,6 +18,9 @@ from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 
 from manim_studio.editor.main_window import MainWindow
+from manim_studio.export import build_export_plan
+from manim_studio.patches import SetDuration
+from manim_studio.sidecar import load_sidecar, sidecar_path
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
 
@@ -97,7 +100,7 @@ def test_play_and_pause_buttons(live: LiveEditor, qtbot) -> None:  # type: ignor
     live.wait_status("playing")
     assert window.events.playing is True
     assert window._playback_active is True
-    assert play_button.text() == "Pause"
+    assert window.transport_bar.playing() is True
 
     # Pause: the host stops and the button returns to Play.
     before = len(live.stopped)
@@ -106,7 +109,7 @@ def test_play_and_pause_buttons(live: LiveEditor, qtbot) -> None:  # type: ignor
     live.wait_status("idle")
     assert window.events.playing is False
     assert window._playback_active is False
-    assert play_button.text() == "Play"
+    assert window.transport_bar.playing() is False
     assert live.stopped[-1]["user_stopped"] is True
     assert live.stopped[-1]["time"] < total  # stopped early, not at the end
     assert not live.errors
@@ -291,38 +294,77 @@ def test_timeline_scrollbar_follows_zoom(live: LiveEditor, qtbot) -> None:  # ty
     assert bar.maximum() == 0
 
 
-class _RecordingExports:
-    """Stands in for the ExportController and records the export kwargs."""
-
-    def __init__(self) -> None:
-        self.videos: list[dict] = []
-
-    def export_video(self, path, scene_name, output, **kwargs) -> bool:  # type: ignore[no-untyped-def]
-        self.videos.append(
-            {
-                "path": str(path),
-                "scene_name": scene_name,
-                "output": str(output),
-                **kwargs,
-            }
-        )
-        return True
-
-    def shutdown(self) -> None:
-        pass
+def _wait_for_trace(live: LiveEditor, trigger) -> None:  # type: ignore[no-untyped-def]
+    """Run ``trigger`` and wait (pumping Qt) for the host's next ``log`` event."""
+    spy = QSignalSpy(live.window.controller.logReceived)
+    trigger()
+    live.wait_states(lambda: spy.count() >= 1, timeout=90000)
 
 
-def test_export_video_forwards_the_retiming(live: LiveEditor, qtbot, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """Exporting after a retime hands the per-block factors to the controller."""
+def test_a_retime_is_stored_in_the_sidecar_and_exports_read_it(  # type: ignore[no-untyped-def]
+    live: LiveEditor, qtbot
+) -> None:
+    """The edit lives next to the scene, not in it, and the export plan picks it up."""
+    window = live.window
+    source_before = window._path.read_text(encoding="utf-8")
+    _index, new_duration = _drag_right_edge(live, qtbot, extra_seconds=0.5)
+
+    patches = load_sidecar(window._path)
+    assert len(patches) == 1 and isinstance(patches[0], SetDuration)
+    assert patches[0].seconds == pytest.approx(new_duration, abs=0.05)
+    assert build_export_plan(window._path).patches == patches
+    assert window._path.read_text(encoding="utf-8") == source_before
+    assert window._edits_label.text() == "1 timeline edit"
+
+
+def test_a_retime_survives_a_code_edit(live: LiveEditor, qtbot) -> None:  # type: ignore[no-untyped-def]
+    """Edits are anchored on the call, so adding code above does not lose them."""
     window = live.window
     index, new_duration = _drag_right_edge(live, qtbot, extra_seconds=0.5)
+    live.wait_states(lambda: window.patches.applied_count == 1, timeout=90000)
 
-    recorder = _RecordingExports()
-    window.exports = recorder  # type: ignore[assignment]
-    window.export_video_to(tmp_path / "out.mp4")
+    # Insert statements above every play(): line numbers shift, block indices do not.
+    first_line = window.events.call_line(0)
+    assert first_line is not None
+    window.editor.insert_line_at(first_line, "        padding = 1")
+    window.editor.insert_line_at(first_line, "        another = 2")
+    _wait_for_trace(live, window.save_buffer)
+    live.wait_states(lambda: window.patches.applied_count == 1, timeout=90000)
 
-    assert recorder.videos, "export_video_to never reached the controller"
-    factors = recorder.videos[-1]["timing_factors"]
-    assert index in factors
-    assert factors[index] > 1.0  # the section was stretched, so it renders longer
-    assert new_duration > 0
+    assert window.patches.orphan_count == 0
+    block = window.timeline.log.block_by_index(index)
+    assert block is not None
+    assert block.duration == pytest.approx(new_duration, abs=0.05)
+    assert not live.errors
+
+
+def test_an_edit_whose_call_disappears_is_orphaned_not_misapplied(  # type: ignore[no-untyped-def]
+    live: LiveEditor, qtbot
+) -> None:
+    """Rewriting the retimed call orphans the edit; discarding it removes the sidecar."""
+    window = live.window
+    index, _new_duration = _drag_right_edge(live, qtbot, extra_seconds=0.5)
+    live.wait_states(lambda: window.patches.applied_count == 1, timeout=90000)
+    durations_before = [b.duration for b in window.timeline.log.blocks]
+
+    line = window.events.call_line(index)
+    assert line is not None
+    lines = window.editor.text().split("\n")
+    indent = lines[line - 1][: len(lines[line - 1]) - len(lines[line - 1].lstrip())]
+    lines[line - 1] = f"{indent}self.wait(0.7)  # replaced"
+    window.editor.replace_text("\n".join(lines))
+    _wait_for_trace(live, window.save_buffer)
+    live.wait_states(lambda: window.patches.orphan_count == 1, timeout=90000)
+
+    assert window.patches.applied_count == 0
+    assert "orphaned" in window._edits_label.text()
+    assert "no longer exists" in window.patches.orphans[0].reason
+    # The replaced call keeps its own timing: the stretch was not moved onto it.
+    replaced = window.timeline.log.block_by_index(index)
+    assert replaced is not None and replaced.duration == pytest.approx(0.7, abs=0.05)
+    assert len(window.timeline.log.blocks) == len(durations_before)
+    assert sidecar_path(window._path).exists()  # kept, so it can be re-anchored
+
+    window.discard_orphaned_edits()
+    assert window.patches.edit_count == 0
+    assert not sidecar_path(window._path).exists()

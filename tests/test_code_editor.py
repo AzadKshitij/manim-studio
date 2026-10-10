@@ -9,8 +9,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
 from manim_studio.editor.code_editor import (
-    _DARK,
-    _LIGHT,
     PY_BUILTIN,
     PY_CLASSNAME,
     PY_COMMENT,
@@ -21,7 +19,9 @@ from manim_studio.editor.code_editor import (
     PY_NUMBER,
     PY_STRING,
     CodeEditor,
+    _editor_palette,
 )
+from manim_studio.theme import CHALKBOARD, PAPER
 
 pytestmark = pytest.mark.usefixtures("qtbot")
 
@@ -50,6 +50,8 @@ def editor(qtbot) -> CodeEditor:
 
 # Three multi-line statements, all longer than the sampled x window so the
 # whole region is inside the selection.
+_DARK = _editor_palette(CHALKBOARD)
+_LIGHT = _editor_palette(PAPER)
 _SELECTION_SOURCE = "grid = NumberPlane()\nself.play(grid.animate.shift(LEFT))\nself.wait()\n"
 
 
@@ -279,10 +281,11 @@ class TestHighlighting:
         editor.apply_theme(dark=True)
         editor.setSel(0, editor.textLength())
         colours = set(_region_colours(editor))
-        # Monokai's name/class green and default text still paint inside the
-        # band: the selection foreground is the token colour, not flattened.
-        assert "#a6e22e" in colours
-        assert "#f8f8f2" in colours
+        # Default text and a syntax colour still paint inside the band: the
+        # selection foreground is the token colour, not flattened.
+        syntax = CHALKBOARD.syntax
+        assert CHALKBOARD.colors.text in colours
+        assert colours & {syntax.class_, syntax.builtin, syntax.function, syntax.number}
 
 
 class TestCompletion:

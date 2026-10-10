@@ -313,9 +313,31 @@ class TestContextMenu:
             "Copy timing",
             "Paste timing",
             "Reset retime",
+            "Delete this call",
             "Jump to code",
             "Zoom to block",
         ]
+
+    def test_loop_blocks_offer_a_per_iteration_retime(self, timeline: TimelineWidget) -> None:
+        assert "Retime this iteration only…" not in [
+            a.text() for a in timeline.context_menu(1).actions()
+        ]
+        timeline.set_block_markers({1: 3}, [])
+        iteration = QSignalSpy(timeline.blockIterationEditRequested)
+        self._action(timeline.context_menu(1), "Retime this iteration only…").trigger()
+        assert iteration.at(0)[0] == 1
+
+    def test_delete_signal(self, timeline: TimelineWidget) -> None:
+        deleted = QSignalSpy(timeline.blockDeleteRequested)
+        self._action(timeline.context_menu(2), "Delete this call").trigger()
+        assert deleted.at(0)[0] == 2
+
+    def test_block_markers_are_queryable_and_ignore_trivial_fan_out(
+        self, timeline: TimelineWidget
+    ) -> None:
+        timeline.set_block_markers({0: 1, 1: 4}, [2])
+        assert [timeline.iterations(i) for i in range(3)] == [1, 4, 1]
+        assert timeline.is_edited(2) and not timeline.is_edited(0)
 
     def test_play_and_loop_and_export_signals(self, timeline: TimelineWidget) -> None:
         play = QSignalSpy(timeline.blockPlayRequested)
@@ -496,3 +518,174 @@ def _wheel(delta: int, modifiers: Qt.KeyboardModifier = Qt.KeyboardModifier.NoMo
         Qt.ScrollPhase.NoScrollPhase,
         False,
     )
+
+
+class TestLanes:
+    """One lane row per animated mobject, drawn under the block strip."""
+
+    @staticmethod
+    def _clips():  # type: ignore[no-untyped-def]
+        from manim_studio.tracer import ClipTrace
+
+        return [
+            [
+                ClipTrace("ShowCreation", "Circle", 0, 0.0, 1.0),
+                ClipTrace("FadeIn", "Square", 1, 0.0, 1.0),
+            ],
+            [],
+            [ClipTrace("Rotate", "Circle", 0, 0.0, 2.0)],
+        ]
+
+    def test_no_clips_means_no_lanes_and_the_old_height(self, timeline: TimelineWidget) -> None:
+        assert timeline.lane_count() == 0
+        from manim_studio.tracer import ClipTrace
+
+        base = timeline.minimumHeight()
+        timeline.set_clips(self._clips())
+        assert timeline.lane_count() == 2  # two thin rows still fit the base height
+        timeline.set_clips([[ClipTrace("A", "M", lane, 0.0, 1.0) for lane in range(5)]])
+        assert timeline.lane_count() == 5
+        assert timeline.minimumHeight() > base  # room for the lane rows
+        timeline.set_clips([])
+        assert timeline.minimumHeight() == base
+
+    def test_lanes_are_capped(self, timeline: TimelineWidget) -> None:
+        from manim_studio.tracer import ClipTrace
+
+        timeline.set_clips([[ClipTrace("A", "M", lane, 0.0, 1.0) for lane in range(20)]])
+        assert timeline.lane_count() == 6
+
+    def test_clip_at_finds_the_bar_under_a_point(self, timeline: TimelineWidget) -> None:
+        timeline.resize(800, 260)
+        timeline.set_clips(self._clips())
+        view = timeline.view()
+        top = timeline._lanes_top()
+        # block 0 spans 0-1s: lane 0 holds ShowCreation, lane 1 holds FadeIn
+        x = view.time_to_x(0.5)
+        first = timeline.clip_at(x, top + 2)
+        second = timeline.clip_at(x, top + 15 + 2)
+        assert first is not None and first[1].animation == "ShowCreation" and first[0].index == 0
+        assert second is not None and second[1].animation == "FadeIn"
+        assert timeline.clip_at(x, 5) is None  # ruler, not a lane
+        assert timeline.clip_at(view.time_to_x(1.2), top + 2) is None  # the wait block has none
+
+    def test_painting_with_lanes_does_not_raise(self, timeline: TimelineWidget) -> None:
+        timeline.resize(800, 260)
+        timeline.set_clips(self._clips())
+        timeline.grab()  # exercises paintEvent and _draw_lanes
+
+
+class TestScrollAfterStretch:
+    """Lengthening a section must keep later blocks reachable (scrollbar + drag)."""
+
+    @staticmethod
+    def _stretched(timeline: TimelineWidget, extra: float) -> TimelineLog:
+        first = timeline.log.blocks[0]
+        return timeline.log.scaled_block_duration(first.index, first.duration + extra)
+
+    def test_stretching_keeps_the_zoom_and_enables_the_scrollbar(
+        self, timeline: TimelineWidget
+    ) -> None:
+        span_before = timeline.view().span
+        assert timeline.scrollbar.isEnabled() is False  # everything fits
+        timeline.set_log(self._stretched(timeline, 5.0), keep_view=True)
+        view = timeline.view()
+        assert view.span == pytest.approx(span_before)  # the zoom did not silently change
+        assert view.total == pytest.approx(timeline.log.total_duration)
+        assert timeline.scrollbar.isEnabled() is True
+        assert timeline.scrollbar.maximum() > 0
+
+    def test_the_scrollbar_reaches_the_pushed_out_blocks(self, timeline: TimelineWidget) -> None:
+        timeline.set_log(self._stretched(timeline, 5.0), keep_view=True)
+        last = timeline.log.blocks[-1]
+        assert timeline.view().end < last.end  # off-screen to the right
+        timeline.scrollbar.setValue(timeline.scrollbar.maximum())
+        assert timeline.view().end == pytest.approx(timeline.log.total_duration, abs=1e-3)
+        assert timeline.view().time_to_x(last.end) <= timeline.width() + 1
+
+    def test_shrinking_clamps_the_window(self, timeline: TimelineWidget) -> None:
+        timeline.set_log(self._stretched(timeline, 5.0), keep_view=True)
+        timeline.scrollbar.setValue(timeline.scrollbar.maximum())
+        timeline.set_log(make_log(), keep_view=True)
+        assert timeline.view().end <= timeline.log.total_duration + 1e-6
+        assert timeline.view().start >= 0.0
+
+    def test_dragging_a_block_edge_past_the_end_is_possible_and_scrollable(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        timeline.set_snapping(False)
+        last = timeline.log.blocks[-1]
+        view = timeline.view()
+        edge_x = int(view.time_to_x(last.end))
+        qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(edge_x - 1, 40))
+        assert timeline._mode == "resize"
+        # Far past the right edge of the widget: the old clamp would have capped this.
+        qtbot.mouseMove(timeline, QPoint(timeline.width() + 400, 40))
+        assert timeline._resize_duration is not None
+        assert timeline._resize_duration > last.duration + 1.0
+        assert timeline.scrollbar.maximum() > 0  # the grown timeline is scrollable
+        qtbot.mouseRelease(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(timeline.width() + 400, 40)
+        )
+
+    def test_holding_the_edge_near_the_window_edge_autoscrolls(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        timeline.set_snapping(False)
+        timeline.set_log(self._stretched(timeline, 8.0), keep_view=True)
+        first_end = timeline.log.blocks[0].end
+        view = timeline.view()
+        qtbot.mousePress(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(view.time_to_x(first_end)) - 1, 40)
+        )
+        assert timeline._mode == "resize"
+        qtbot.mouseMove(timeline, QPoint(timeline.width() - 4, 40))
+        start_before = timeline.view().start
+        timeline._autoscroll_tick()
+        assert timeline.view().start > start_before
+        qtbot.mouseRelease(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(timeline.width() - 4, 40)
+        )
+        assert timeline._autoscroll.isActive() is False
+
+
+class TestSelection:
+    def test_clicking_a_block_selects_it_and_emits(self, timeline: TimelineWidget, qtbot) -> None:
+        selected = QSignalSpy(timeline.blockSelected)
+        x = int(timeline.view().time_to_x(2.5))  # inside block 2
+        qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(x, 45))
+        assert timeline.selected_block == 2
+        assert selected.at(0)[0] == 2
+
+    def test_clicking_the_ruler_scrubs_without_selecting(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        x = int(timeline.view().time_to_x(2.5))
+        qtbot.mouseClick(timeline, Qt.MouseButton.LeftButton, pos=QPoint(x, 5))
+        assert timeline.selected_block is None
+
+    def test_dragging_scrubs_and_does_not_change_the_selection(
+        self, timeline: TimelineWidget, qtbot
+    ) -> None:
+        timeline.set_selected_block(1)
+        view = timeline.view()
+        qtbot.mousePress(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(view.time_to_x(0.5)), 45)
+        )
+        qtbot.mouseMove(timeline, QPoint(int(view.time_to_x(3.0)), 45))
+        qtbot.mouseRelease(
+            timeline, Qt.MouseButton.LeftButton, pos=QPoint(int(view.time_to_x(3.0)), 45)
+        )
+        assert timeline.selected_block == 1
+
+    def test_set_selected_block_validates_and_survives_a_retime(
+        self, timeline: TimelineWidget
+    ) -> None:
+        timeline.set_selected_block(99)
+        assert timeline.selected_block is None
+        timeline.set_selected_block(1)
+        first = timeline.log.blocks[0]
+        timeline.set_log(timeline.log.scaled_block_duration(0, first.duration + 1), keep_view=True)
+        assert timeline.selected_block == 1
+        timeline.set_log(make_log())  # a fresh trace forgets the selection
+        assert timeline.selected_block is None

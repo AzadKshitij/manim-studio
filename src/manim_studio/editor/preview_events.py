@@ -15,6 +15,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QLabel
 
 from manim_studio.timeline_model import block_for_line, format_duration, parse_call_lines, parse_log
+from manim_studio.tracer import ClipTrace, parse_clips
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,9 +61,9 @@ class PreviewEvents(QObject):
         self._play_from_index: int | None = None
         self._playing = False
         self._call_lines: tuple[int | None, ...] = ()
+        self._clips: tuple[tuple[ClipTrace, ...], ...] = ()
 
         controller.logReceived.connect(self.on_log)
-        controller.timingChanged.connect(self.on_timing)
         controller.statusChanged.connect(self.on_status)
         controller.tickReceived.connect(self.on_tick)
         controller.stoppedReceived.connect(self.on_stopped)
@@ -100,6 +101,12 @@ class PreviewEvents(QObject):
             return self._call_lines[index]
         return None
 
+    def clips(self, index: int) -> tuple[ClipTrace, ...]:
+        """The animations of block ``index`` (empty for a wait or unknown block)."""
+        if 0 <= index < len(self._clips):
+            return self._clips[index]
+        return ()
+
     @property
     def call_lines(self) -> tuple[int | None, ...]:
         """Per-block call-site lines (parallel to the timeline blocks)."""
@@ -117,39 +124,38 @@ class PreviewEvents(QObject):
         except Exception as exc:
             self._shell.append(f"bad trace payload: {exc}")
             return
-        self._timeline.set_log(timeline_log)
+        # A reload that only applies timeline edits is not a new scene: keep the
+        # user's zoom, playhead and selected block instead of starting over.
+        edited = message.get("cause") == "patches"
+        self._timeline.set_log(timeline_log, keep_view=edited)
         self._timeline.set_fps(message.get("fps"))
         self._total_duration = timeline_log.total_duration
         self._call_lines = parse_call_lines(message.get("call_sites"))
+        self._clips = parse_clips(message.get("clips"))
+        self._timeline.set_clips(self._clips)
         # A successful trace means the scene now compiles/runs: clear any marker
         # left by the previous failure.
         self._editor.clear_error_marker()
         self._preview_panel.set_cache_status("")
-        # The host shows the final frame by default; line the playhead up with it and
-        # forget any previously selected block so Play restarts from the beginning.
-        self._timeline.set_playhead(self._total_duration if self._initial_frame == "end" else 0.0)
-        self._preview_panel.set_time(self._timeline.playhead_time, self._total_duration)
-        self._play_from_index = None
+        if edited:
+            position = min(self._timeline.playhead_time, self._total_duration)
+            self._timeline.set_playhead(position)
+            self._preview_panel.set_time(position, self._total_duration)
+            if self._play_from_index is not None and (
+                self._play_from_index >= timeline_log.num_blocks
+            ):
+                self._play_from_index = None
+        else:
+            # The host shows the final frame by default; line the playhead up with it
+            # and forget any previously selected block so Play restarts from the start.
+            self._timeline.set_playhead(
+                self._total_duration if self._initial_frame == "end" else 0.0
+            )
+            self._preview_panel.set_time(self._timeline.playhead_time, self._total_duration)
+            self._play_from_index = None
         self._status_line(
             f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
         )
-
-    def on_timing(self, message: dict[str, Any]) -> None:
-        """The host confirmed a retime: adopt its authoritative blocks.
-
-        Unlike a fresh trace this keeps the current zoom and playhead (clamped to
-        the new total), so stretching a section does not snap the view around.
-        """
-        try:
-            timeline_log = parse_log(message.get("blocks", []))
-        except Exception as exc:  # malformed payload must not kill the editor
-            self._shell.append(f"bad timing payload: {exc}")
-            return
-        self._timeline.set_log(timeline_log, keep_view=True)
-        self._total_duration = timeline_log.total_duration
-        position = min(self._timeline.playhead_time, self._total_duration)
-        self._timeline.set_playhead(position)
-        self._preview_panel.set_time(position, self._total_duration)
 
     def on_status(self, state: str, message: dict[str, Any]) -> None:
         note = str(message.get("note", ""))

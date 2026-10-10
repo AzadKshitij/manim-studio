@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ from PySide6.QtGui import QImage
 from manim_studio.editor import main_window as main_window_module
 from manim_studio.editor.code_editor import PY_KEYWORD
 from manim_studio.editor.main_window import MainWindow
+from manim_studio.export import build_export_plan
+from manim_studio.patches import Anchor, Delete, SetDuration
+from manim_studio.sidecar import load_sidecar
 from manim_studio.timeline_model import TimelineLog
 
 SCENE_FILE = Path(__file__).parent / "scenes" / "feature_showcase.py"
@@ -30,7 +34,8 @@ class _StubController:
         self.seeks: list[int] = []
         self.plays: list[int] = []
         self.play_args: list[tuple[int | None, float]] = []
-        self.timings: list[tuple[list[dict[str, float]], float]] = []
+        self.patch_sets: list[tuple[list[dict[str, object]], float]] = []
+        self.patches: list[dict[str, object]] = []
         self.stops = 0
         self.is_running = True
 
@@ -59,8 +64,9 @@ class _StubController:
         self.stops += 1
         return True
 
-    def set_timing(self, timings, time_seconds: float = 0.0) -> bool:
-        self.timings.append((list(timings), float(time_seconds)))
+    def set_patches(self, patches, time_seconds: float = 0.0) -> bool:
+        self.patches = list(patches)
+        self.patch_sets.append((list(patches), float(time_seconds)))
         return True
 
     def shutdown(self) -> None:
@@ -77,6 +83,28 @@ SAMPLE_LOG_EVENT = {
     "stats": {"play": 2, "wait": 1},
     "total_duration": 3.5,
 }
+
+#: Same trace as the host reports it for a scene with edit-able call sites.
+EDIT_LOG = {
+    **SAMPLE_LOG_EVENT,
+    "sites": [
+        {"id": "S.construct:play:aa:0", "occ": 0},
+        {"id": "S.construct:wait:bb:0", "occ": 0},
+        {"id": "S.construct:play:cc:0", "occ": 0},
+    ],
+    "patches": {"applied": 0, "orphaned": []},
+}
+WAIT_SITE = Anchor("S.construct:wait:bb:0")
+
+
+@pytest.fixture
+def scene_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A throwaway copy of the showcase, so sidecar files never land in the repo."""
+    copy = tmp_path / "feature_showcase.py"
+    shutil.copy(SCENE_FILE, copy)
+    monkeypatch.setattr(f"{__name__}.SCENE_FILE", copy)
+    return copy
+
 
 #: Same trace with per-block call-site lines, for caret-highlight tests.
 CARET_LOG = {**SAMPLE_LOG_EVENT, "call_sites": [10, 12, 14]}
@@ -622,6 +650,7 @@ class TestPlayFromPlayhead:
             window.controller = original  # type: ignore[assignment]
 
 
+@pytest.mark.usefixtures("scene_copy")
 class TestNumericDuration:
     """Double-clicking a block asks for an exact duration and retimes it."""
 
@@ -631,10 +660,10 @@ class TestNumericDuration:
         window.controller = stub  # type: ignore[assignment]
         window._original_controller = original  # type: ignore[attr-defined]
         window.open_path(SCENE_FILE)
-        window.events.on_log(SAMPLE_LOG_EVENT)
+        window.events.on_log(EDIT_LOG)
         # events.on_log was called directly, bypassing the controller signal that
-        # normally rebuilds the timing stack; do it explicitly.
-        window._on_trace_log(SAMPLE_LOG_EVENT)
+        # tells the edit controller which call each block came from.
+        window._on_trace_log(EDIT_LOG)
         return stub
 
     def _restore(self, window: MainWindow) -> None:
@@ -651,25 +680,32 @@ class TestNumericDuration:
                 type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (2.5, True))}),
             )
             window.timeline.blockDurationEditRequested.emit(1)
+            # Shown at once (projected) and sent to the host as an anchored patch.
             assert window.timeline.log.block_by_index(1).duration == pytest.approx(2.5)
-            assert stub.timings and stub.timings[-1][0] == [{"index": 1, "duration": 2.5}]
+            assert stub.patch_sets[-1][0] == [
+                {"op": "set_duration", "site": WAIT_SITE.site_id, "seconds": 2.5}
+            ]
         finally:
             self._restore(window)
 
-    def test_timing_factors_reflect_the_retime(
-        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    def test_the_edit_is_persisted_and_baked_into_exports(
+        self, window: MainWindow, monkeypatch: pytest.MonkeyPatch, scene_copy: Path
     ) -> None:
         self._stub(window)
         try:
-            assert window._timing_factors() == {}
+            assert load_sidecar(scene_copy) == ()
             monkeypatch.setattr(
                 main_window_module,
                 "QInputDialog",
                 type("_D", (), {"getDouble": staticmethod(lambda *a, **k: (2.5, True))}),
             )
             window.timeline.blockDurationEditRequested.emit(1)
-            # base block 1 is 0.5 s -> 2.5 s is a 5x factor, used to bake exports.
-            assert window._timing_factors() == pytest.approx({1: 5.0})
+            patch = SetDuration(WAIT_SITE, 2.5)
+            assert load_sidecar(scene_copy) == (patch,)
+            # Exports read the sidecar, so the render matches the timeline.
+            assert build_export_plan(scene_copy).patches == (patch,)
+            assert window._edits_label.text() == "1 timeline edit"
+            assert window.timeline.is_edited(1)
         finally:
             self._restore(window)
 
@@ -686,7 +722,7 @@ class TestNumericDuration:
             )
             window.timeline.blockDurationEditRequested.emit(1)
             assert window.timeline.log.block_by_index(1).duration == pytest.approx(before)
-            assert stub.timings == []
+            assert stub.patch_sets == []
         finally:
             self._restore(window)
 
@@ -881,16 +917,13 @@ class TestTransport:
 class _StubExports:
     def __init__(self) -> None:
         self.stills: list[tuple[str, str | None, str, tuple[int, int] | None]] = []
-        self.timing_factors: dict[int, float] | None = None
 
-    def export_still(
-        self, path, scene_name, output, *, animation_range=None, timing_factors=None
-    ) -> bool:
+    def export_still(self, path, scene_name, output, *, animation_range=None) -> bool:
         self.stills.append((str(path), scene_name, str(output), animation_range))
-        self.timing_factors = timing_factors
         return True
 
 
+@pytest.mark.usefixtures("scene_copy")
 class TestBlockContextMenu:
     """The window actions behind the timeline's block context menu."""
 
@@ -900,8 +933,8 @@ class TestBlockContextMenu:
         window.controller = stub  # type: ignore[assignment]
         window._original_controller = original  # type: ignore[attr-defined]
         window.open_path(SCENE_FILE)
-        window.events.on_log(SAMPLE_LOG_EVENT)
-        window._on_trace_log(SAMPLE_LOG_EVENT)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
         return stub
 
     def _restore(self, window: MainWindow) -> None:
@@ -940,13 +973,26 @@ class TestBlockContextMenu:
         finally:
             self._restore(window)
 
-    def test_reset_block_timing_restores_the_base(self, window: MainWindow) -> None:
-        self._stub(window)
+    def test_reset_block_timing_drops_the_edit_and_reruns_the_scene(
+        self, window: MainWindow, scene_copy: Path
+    ) -> None:
+        stub = self._stub(window)
         try:
             window._on_block_resized(1, 2.0)
             assert window.timeline.log.block_by_index(1).duration == pytest.approx(2.0)
             window._reset_block_timing(1)
-            assert window.timeline.log.block_by_index(1).duration == pytest.approx(0.5)
+            # No edits are left, so the host is told to run the untouched scene.
+            assert stub.patch_sets[-1][0] == []
+            assert load_sidecar(scene_copy) == ()
+        finally:
+            self._restore(window)
+
+    def test_delete_block_adds_a_delete_edit(self, window: MainWindow, scene_copy: Path) -> None:
+        stub = self._stub(window)
+        try:
+            window._delete_block(1)
+            assert stub.patch_sets[-1][0] == [{"op": "delete", "site": WAIT_SITE.site_id}]
+            assert load_sidecar(scene_copy) == (Delete(WAIT_SITE),)
         finally:
             self._restore(window)
 
@@ -1120,3 +1166,220 @@ class TestEditing:
     def test_host_state_label(self, window: MainWindow) -> None:
         window.events.on_host_state("crashed")
         assert "crashed" in window._host_state_label.text()
+
+
+@pytest.mark.usefixtures("scene_copy")
+class TestTimelineToolbar:
+    """The icon buttons next to the transport drive the timeline operations."""
+
+    def _stub(self, window: MainWindow) -> _StubController:
+        original = window.controller
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window._original_controller = original  # type: ignore[attr-defined]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        return stub
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def _press(self, window: MainWindow, action_id: str) -> None:
+        button = window.transport_bar.edit_button(action_id)
+        assert button.isEnabled(), f"{action_id} should be enabled"
+        button.click()
+
+    def test_buttons_are_disabled_until_there_is_something_to_do(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            bar = window.transport_bar
+            assert not bar.edit_button("undo").isEnabled()
+            assert not bar.edit_button("apply").isEnabled()
+            assert not bar.edit_button("reset").isEnabled()
+            assert bar.edit_button("hold").isEnabled()  # a trace exists and the host runs
+            assert bar.edit_button("delete").isEnabled()  # the playhead block has a call site
+        finally:
+            self._restore(window)
+
+    def test_delete_acts_on_the_selected_block(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            self._press(window, "delete")
+            assert stub.patch_sets[-1][0] == [{"op": "delete", "site": WAIT_SITE.site_id}]
+            assert window.transport_bar.edit_button("undo").isEnabled()
+            assert window.transport_bar.edit_button("discard_all").isEnabled()
+        finally:
+            self._restore(window)
+
+    def test_undo_redo_and_reset_buttons(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            window._on_block_resized(1, 2.0)
+            window._refresh_edits_ui()
+            self._press(window, "reset")
+            assert stub.patch_sets[-1][0] == []
+            self._press(window, "undo")
+            assert stub.patch_sets[-1][0][0]["seconds"] == 2.0
+            self._press(window, "redo")
+            assert stub.patch_sets[-1][0] == []
+        finally:
+            self._restore(window)
+
+    def test_the_summary_chip_lives_in_the_timeline_toolbar(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            assert window._edits_label is window.transport_bar.edits_label
+            window._on_block_resized(1, 2.0)
+            assert window.transport_bar.edits_label.text() == "1 timeline edit"
+            assert not window.transport_bar.edits_label.isHidden()
+        finally:
+            self._restore(window)
+
+    def test_discard_all_button_clears_the_edits(
+        self, window: MainWindow, scene_copy: Path
+    ) -> None:
+        stub = self._stub(window)
+        try:
+            window._on_block_resized(1, 2.0)
+            self._press(window, "discard_all")
+            assert stub.patch_sets[-1][0] == []
+            assert window.patches.edit_count == 0
+            assert window.transport_bar.edits_label.isHidden()
+        finally:
+            self._restore(window)
+
+    def test_clicking_a_block_selects_it_for_the_toolbar(self, window: MainWindow, qtbot) -> None:
+        self._stub(window)
+        try:
+            window.timeline.resize(900, 140)
+            x = int(window.timeline.view().time_to_x(2.5))  # inside block 2
+            from PySide6.QtCore import QPoint, Qt
+
+            qtbot.mouseClick(window.timeline, Qt.MouseButton.LeftButton, pos=QPoint(x, 50))
+            assert window.selected_block_index() == 2
+            assert window.inspector_text().startswith("#2 ")
+        finally:
+            self._restore(window)
+
+    def test_render_and_toolbar_buttons_are_icon_only(self, window: MainWindow) -> None:
+        assert window._render_preview_button.text() == ""
+        assert "Render preview video" in window._render_preview_button.toolTip()
+        for name in ("Reload", "Play", "Stop", "Render preview"):
+            action = window._toolbar_actions[name]
+            assert not action.icon().isNull()
+            assert action.toolTip() == name
+
+
+@pytest.mark.usefixtures("scene_copy")
+class TestInspectorEditing:
+    def _stub(self, window: MainWindow) -> _StubController:
+        stub = _StubController()
+        window._original_controller = window.controller  # type: ignore[attr-defined]
+        window.controller = stub  # type: ignore[assignment]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        return stub
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_typing_a_duration_in_the_inspector_retimes_the_selected_block(
+        self, window: MainWindow
+    ) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            window._refresh_inspector()
+            assert window.inspector.title.text().startswith("#1")
+            window.inspector.duration_spin.setValue(3.0)
+            window.inspector.duration_spin.editingFinished.emit()
+            assert stub.patch_sets[-1][0] == [
+                {"op": "set_duration", "site": WAIT_SITE.site_id, "seconds": 3.0}
+            ]
+            assert window.timeline.log.block_by_index(1).duration == pytest.approx(3.0)
+        finally:
+            self._restore(window)
+
+    def test_the_inspector_knows_the_block_is_editable(self, window: MainWindow) -> None:
+        self._stub(window)
+        try:
+            window.timeline.set_selected_block(0)
+            window._refresh_inspector()
+            assert window.inspector.info is not None
+            assert window.inspector.info.editable is True
+        finally:
+            self._restore(window)
+
+    def test_inspector_buttons_reach_the_window_actions(self, window: MainWindow) -> None:
+        stub = self._stub(window)
+        try:
+            window.timeline.set_selected_block(1)
+            window._refresh_inspector()
+            window.inspector.delete_button.click()
+            assert stub.patch_sets[-1][0] == [{"op": "delete", "site": WAIT_SITE.site_id}]
+            window._refresh_inspector()
+            window.inspector.reset_button.click()
+            assert stub.patch_sets[-1][0] == []
+        finally:
+            self._restore(window)
+
+
+@pytest.mark.usefixtures("scene_copy")
+class TestOrphanTray:
+    def _orphaned(self, window: MainWindow) -> tuple[_StubController, SetDuration]:
+        stub = _StubController()
+        window._original_controller = window.controller  # type: ignore[attr-defined]
+        window.controller = stub  # type: ignore[assignment]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        window._on_block_resized(1, 2.0)
+        patch = SetDuration(WAIT_SITE, 2.0)
+        # The host reports that edit as orphaned (its call vanished from the source).
+        report = {
+            "applied": 0,
+            "orphaned": [{"patch": patch.to_dict(), "reason": "the call no longer exists"}],
+        }
+        window._on_trace_log({**EDIT_LOG, "patches": report})
+        return stub, patch
+
+    def _restore(self, window: MainWindow) -> None:
+        window.controller = window._original_controller  # type: ignore[attr-defined]
+
+    def test_the_tray_lists_each_orphan_with_its_reason(self, window: MainWindow) -> None:
+        self._orphaned(window)
+        try:
+            assert window.transport_bar.edit_button("orphans").isEnabled()
+            texts = [a.text() for a in window.orphan_menu().actions() if a.text()]
+            assert texts[0].startswith("wait in S.construct")
+            assert "2.00 s" in texts[0] and "no longer exists" in texts[0]
+            assert texts[-1] == "Discard all orphaned edits"
+        finally:
+            self._restore(window)
+
+    def test_discarding_one_orphan_removes_just_that_edit(self, window: MainWindow) -> None:
+        stub, _patch = self._orphaned(window)
+        try:
+            window._on_block_resized(0, 3.0)  # a live edit that must survive
+            menu = window.orphan_menu()
+            first = next(a for a in menu.actions() if a.text() and "no longer exists" in a.text())
+            first.trigger()
+            remaining = stub.patch_sets[-1][0]
+            assert [p["site"] for p in remaining] == ["S.construct:play:aa:0"]
+        finally:
+            self._restore(window)
+
+    def test_an_empty_tray_says_so(self, window: MainWindow) -> None:
+        stub = _StubController()
+        window.controller = stub  # type: ignore[assignment]
+        window.open_path(SCENE_FILE)
+        window.events.on_log(EDIT_LOG)
+        window._on_trace_log(EDIT_LOG)
+        actions = [a for a in window.orphan_menu().actions() if a.text()]
+        assert [a.text() for a in actions] == ["No orphaned edits"]
+        assert not actions[0].isEnabled()
+        assert not window.transport_bar.edit_button("orphans").isEnabled()

@@ -79,3 +79,77 @@ class TestZoomButtons:
             "out",
             "in",
         ]
+
+
+class TestIconButtons:
+    BUTTONS = (
+        "_start_button",
+        "_back_button",
+        "_play_button",
+        "_forward_button",
+        "_end_button",
+        "_loop_check",
+        "_fit_button",
+        "_selection_button",
+        "_zoom_out_button",
+        "_zoom_in_button",
+    )
+
+    @pytest.mark.parametrize("name", BUTTONS)
+    def test_buttons_are_icon_only_with_a_tooltip(
+        self, transport: TimelineTransport, name: str
+    ) -> None:
+        button = getattr(transport, name)
+        assert button.text() == ""
+        assert not button.icon().isNull()
+        assert len(button.toolTip()) > 6
+
+    def test_play_button_swaps_icon_and_tooltip(self, transport: TimelineTransport) -> None:
+        assert transport.playing() is False
+        assert transport._play_button.toolTip().startswith("Play")
+        transport.set_playing(True)
+        assert transport.playing() is True
+        assert transport._play_button.toolTip().startswith("Pause")
+        assert transport._play_button.accessibleName() == "Pause"
+        transport.set_playing(False)
+        assert transport._play_button.toolTip().startswith("Play")
+
+
+class TestEditOperations:
+    def test_operations_start_disabled_and_follow_set_edit_state(
+        self, transport: TimelineTransport
+    ) -> None:
+        from manim_studio.editor.timeline_transport import EDIT_ACTIONS
+
+        ids = [action_id for action_id, _glyph, _tip in EDIT_ACTIONS]
+        assert all(not transport.edit_button(i).isEnabled() for i in ids)
+        transport.set_edit_state({"undo": True, "apply": True})
+        assert transport.edit_button("undo").isEnabled()
+        assert transport.edit_button("apply").isEnabled()
+        assert not transport.edit_button("delete").isEnabled()
+        transport.set_edit_state({})
+        assert all(not transport.edit_button(i).isEnabled() for i in ids)
+
+    def test_clicking_an_enabled_operation_emits_its_id(
+        self, transport: TimelineTransport, qtbot
+    ) -> None:
+        spy = QSignalSpy(transport.editRequested)
+        transport.set_edit_state({"delete": True, "hold": True})
+        qtbot.mouseClick(transport.edit_button("delete"), Qt.MouseButton.LeftButton)
+        qtbot.mouseClick(transport.edit_button("hold"), Qt.MouseButton.LeftButton)
+        assert [spy.at(i)[0] for i in range(spy.count())] == ["delete", "hold"]
+
+    def test_disabled_operations_do_not_emit(self, transport: TimelineTransport, qtbot) -> None:
+        spy = QSignalSpy(transport.editRequested)
+        qtbot.mouseClick(transport.edit_button("apply"), Qt.MouseButton.LeftButton)
+        assert spy.count() == 0
+
+    def test_the_summary_chip_shows_only_when_there_is_text(
+        self, transport: TimelineTransport
+    ) -> None:
+        assert transport.edits_label.isHidden()
+        transport.set_edits_summary("2 timeline edits")
+        assert not transport.edits_label.isHidden()
+        assert transport.edits_label.text() == "2 timeline edits"
+        transport.set_edits_summary("")
+        assert transport.edits_label.isHidden()

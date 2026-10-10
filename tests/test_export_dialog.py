@@ -92,35 +92,6 @@ class TestTimingFactors:
 
         return builder
 
-    def test_timing_factors_are_forwarded(self, qtbot, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-        captured: dict = {}
-        dlg = ExportDialog(
-            scene_path=_scene_file(tmp_path),
-            scene_names=("DemoScene",),
-            current_scene="DemoScene",
-            block_count=6,
-            settings=None,
-            timing_factors={1: 2.0, 3: 0.5},
-            plan_builder=self._capturing_builder(tmp_path, captured),
-        )
-        qtbot.addWidget(dlg)
-        dlg._refresh()
-        assert captured["timing_factors"] == {1: 2.0, 3: 0.5}
-
-    def test_absent_timing_factors_pass_none(self, qtbot, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-        captured: dict = {}
-        dlg = ExportDialog(
-            scene_path=_scene_file(tmp_path),
-            scene_names=("DemoScene",),
-            current_scene="DemoScene",
-            block_count=6,
-            settings=None,
-            plan_builder=self._capturing_builder(tmp_path, captured),
-        )
-        qtbot.addWidget(dlg)
-        dlg._refresh()
-        assert captured["timing_factors"] is None
-
 
 class TestDefaults:
     def test_defaults(self, dialog: ExportDialog, tmp_path: Path) -> None:

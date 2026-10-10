@@ -27,7 +27,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from manim_studio import ipc
 from manim_studio.filmstrip import Filmstrip
@@ -40,6 +40,8 @@ from manim_studio.ipc import (
     encode_message,
     hello_message,
 )
+from manim_studio.patch_runtime import StudioRuntime
+from manim_studio.patches import Patch, PatchedSites, PatchError, apply_patches, parse_patch
 from manim_studio.scene_runner import (
     SceneLoadError,
     check_scene_file,
@@ -58,11 +60,13 @@ from manim_studio.scrub import (
     read_upright_rgba,
 )
 from manim_studio.stats import TimingStats, process_rss_bytes
-from manim_studio.timeline_model import TimelineBlock, TimelineLog
-from manim_studio.timing import TimingOverrides
-from manim_studio.tracer import TraceEvent, TraceRecorder
+from manim_studio.timeline_model import TimelineBlock
+from manim_studio.tracer import BlockSite, ClipTrace, TraceEvent, TraceRecorder
 
 __all__ = ["FramePump", "HostConfig", "SceneHost", "TickThrottler", "main", "parse_size"]
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 log = logging.getLogger("manim_studio.preview_host")
 
@@ -239,6 +243,8 @@ class HostConfig:
     initial_frame: str = "end"
     fps: int | None = None
     fail_fast: bool = False
+    #: Timeline edits the very first load runs with (the editor re-sends later ones).
+    patches: tuple[Patch, ...] = ()
 
 
 class SceneHost:
@@ -261,9 +267,13 @@ class SceneHost:
         self.stats: dict[str, int] = {}
         self.events: tuple[TraceEvent, ...] = ()
         self.control_sock: socket.socket | None = None
-        self._base_blocks: tuple[TimelineBlock, ...] = ()
-        self._timing_factors: dict[int, float] = {}
         self.call_lines: tuple[int | None, ...] = ()
+        #: Timeline edits (sidecar patches) the loaded scene runs with.
+        self._patches: tuple[Patch, ...] = config.patches
+        self._studio_runtime = StudioRuntime()
+        self._patch_report: dict[str, Any] = {"applied": 0, "orphaned": []}
+        self.block_sites: tuple[BlockSite | None, ...] = ()
+        self.block_clips: tuple[tuple[ClipTrace, ...], ...] = ()
         self.control: JsonLineWriter | None = None
         self.frame_pump: FramePump | None = None
         self.tick = TickThrottler()
@@ -469,8 +479,12 @@ class SceneHost:
         with contextlib.suppress(Exception):
             screen.use()
 
-    def load(self, path: str | Path | None = None) -> None:
+    def load(self, path: str | Path | None = None, *, cause: str = "load") -> None:
         """(Re)load the scene atomically: import, trace, build, then commit.
+
+        ``cause`` is echoed in the ``log`` event (``"patches"`` for a reload that
+        only applies timeline edits) so the editor can keep the user's zoom and
+        playhead instead of treating it as a fresh scene.
 
         Nothing in the live host changes until the user's scene has been imported,
         traced and successfully constructed.  A broken edit therefore leaves the
@@ -485,11 +499,21 @@ class SceneHost:
         if not check.ok:
             raise SceneLoadError(f"{scene_path}: {check.error}")
 
-        module = load_scene_module(scene_path, is_reload=self._loaded_once)
+        # Timeline edits run as patched in-memory source; the file on disk is untouched.
+        patch_result = apply_patches(scene_path.read_text(encoding="utf-8"), self._patches)
+        patched = patch_result.changed
+        module = load_scene_module(
+            scene_path,
+            is_reload=self._loaded_once,
+            source=patch_result.text if patched else None,
+            runtime=self._studio_runtime if patched else None,
+        )
         scene_class = select_scene_class(module, self.config.scene_name, path=scene_path)
 
         # ---- staged (failure-prone) phase: live state untouched -----------------
-        snapshot, trace_seconds = self._trace_scene_class(scene_class, scene_path)
+        snapshot, trace_seconds = self._trace_scene_class(
+            scene_class, scene_path, self._site_resolver(scene_path, patch_result.patched_sites())
+        )
         initial_scene = self._build_initial_scene(scene_class)
 
         # ---- commit -------------------------------------------------------------
@@ -497,9 +521,16 @@ class SceneHost:
         self.scene_class = scene_class
         self._loaded_once = True
         self.blocks = snapshot.blocks
-        self._base_blocks = snapshot.blocks
-        self._timing_factors = {}
         self.call_lines = self._scene_call_lines(snapshot.call_sites, scene_path)
+        self.block_sites = snapshot.block_sites
+        self.block_clips = snapshot.block_clips
+        self._patch_report = {
+            "applied": len(patch_result.applied),
+            "orphaned": [
+                {"patch": orphan.patch.to_dict(), "reason": orphan.reason}
+                for orphan in patch_result.orphaned
+            ],
+        }
         self.stats = snapshot.stats
         self.events = snapshot.events
         self._fps = int(getattr(initial_scene.camera, "fps", 30)) or 30
@@ -524,6 +555,10 @@ class SceneHost:
             trace_id=self._trace_id,
             fps=self._fps,
             call_sites=list(self.call_lines),
+            sites=[None if site is None else site.to_dict() for site in self.block_sites],
+            patches=self._patch_report,
+            cause=cause,
+            clips=[[clip.to_dict() for clip in clips] for clips in self.block_clips],
         )
         self._activate_scene(initial_scene)
         self.stop_event.clear()
@@ -532,10 +567,41 @@ class SceneHost:
         self.emit_status("idle", index=0)
         self._refresh_shell_namespace()
 
-    def _trace_scene_class(self, scene_class: type, scene_path: Path) -> tuple[Any, float]:
+    @staticmethod
+    def _site_resolver(
+        scene_path: Path, sites: PatchedSites
+    ) -> Callable[[str, int, int], str | None]:
+        """Tracer hook: ``(file, line, col)`` of a call -> original call-site id.
+
+        Only calls in the scene file resolve; helper modules return ``None``.
+        """
+        try:
+            target = scene_path.resolve()
+        except OSError:  # pragma: no cover - defensive
+            target = scene_path
+        in_scene: dict[str, bool] = {}
+
+        def resolve(filename: str, line: int, col: int) -> str | None:
+            match = in_scene.get(filename)
+            if match is None:
+                try:
+                    match = Path(filename).resolve() == target
+                except OSError:  # pragma: no cover - defensive
+                    match = False
+                in_scene[filename] = match
+            return sites.resolve(line, col) if match else None
+
+        return resolve
+
+    def _trace_scene_class(
+        self,
+        scene_class: type,
+        scene_path: Path,
+        site_resolver: Callable[[str, int, int], str | None] | None = None,
+    ) -> tuple[Any, float]:
         """Run the scene once in skip mode and return (snapshot, wall seconds)."""
         scene = self._make_scene(skip_animations=True, scene_class=scene_class)
-        recorder = TraceRecorder(record_events=True)
+        recorder = TraceRecorder(record_events=True, site_resolver=site_resolver)
         recorder.attach(scene)
         started = time.perf_counter()
         try:
@@ -664,7 +730,7 @@ class SceneHost:
             return
         scene = self._make_scene(skip_animations=True)
         scene.camera.use_window_fbo(False)
-        engine = ScrubEngine(scene, self.blocks, factors=self._timing_factors)
+        engine = ScrubEngine(scene, self.blocks)
         self._crawler_engine = engine
         self._crawler = FilmstripCrawler(
             engine,
@@ -751,50 +817,37 @@ class SceneHost:
         return self.blocks[0] if time_seconds < self.blocks[0].start else self.blocks[-1]
 
     # ------------------------------------------------------------------
-    # Timing overrides
+    # Timeline patches
     # ------------------------------------------------------------------
 
-    def _apply_timing(self, timings: list[dict[str, Any]]) -> None:
-        """Rebuild ``self.blocks`` from the base trace plus per-block durations.
+    @staticmethod
+    def _parse_patches(raw: Any) -> tuple[Patch, ...]:
+        if not isinstance(raw, list):
+            raise PatchError(f"'patches' must be a list, got {type(raw).__name__}")
+        return tuple(parse_patch(item) for item in raw)
 
-        Only durations the editor actually changed are honoured; a factor of 1
-        (or a block with no override) leaves the base timing alone.
-        """
-        overrides = TimingOverrides(TimelineLog(self._base_blocks))
-        for item in timings:
-            index = int(item.get("index", -1))
-            duration = float(item.get("duration", 0.0))
-            if not 0 <= index < len(self._base_blocks) or duration <= 0:
-                continue
-            overrides.set_duration(index, duration)
-        self._timing_factors = {
-            index: duration / self._base_blocks[index].duration
-            for index, duration in overrides.durations.items()
-            if self._base_blocks[index].duration > 0
-        }
-        self.blocks = overrides.log().blocks
+    def _load_with_patches(
+        self, patches: tuple[Patch, ...] | None, path: Path | None, *, cause: str = "load"
+    ) -> None:
+        """Load with a new patch set, restoring the old one if the load fails."""
+        previous = self._patches
+        if patches is not None:
+            self._patches = patches
+        try:
+            self.load(path, cause=cause)
+        except BaseException:
+            self._patches = previous
+            raise
 
-    def _cmd_set_timing(self, message: dict[str, Any]) -> None:
-        """Retime the timeline: rebuild replay state and re-pose at the playhead."""
-        if not self._base_blocks:
-            return
-        self._apply_timing(list(message.get("timings") or []))
-        # Everything derived from the timeline is now stale: replay, crawl, cache.
-        self._dispose_scrub_engine()
-        self._dispose_filmstrip()
-        self._filmstrip = Filmstrip()
-        self._crawl_disabled = False
+    def _cmd_set_patches(self, message: dict[str, Any]) -> None:
+        """Apply a new patch set: reload the patched scene and re-pose the playhead."""
+        patches = self._parse_patches(message.get("patches") or [])
+        self.stop_event.clear()
+        self._load_with_patches(patches, None, cause="patches")
         total = self.blocks[-1].end if self.blocks else 0.0
-        self.emit(
-            Event.TIMING,
-            trace_id=self._trace_id,
-            blocks=[block.to_dict() for block in self.blocks],
-            total_duration=total,
-            timings=list(message.get("timings") or []),
-        )
-        time_seconds = float(message.get("time") or 0.0)
-        self._pending_scrub = max(0.0, min(time_seconds, total))
+        self._pending_scrub = max(0.0, min(float(message.get("time") or 0.0), total))
         self._playhead_hint = self._pending_scrub
+        self.emit_status("idle", index=0)
 
     @staticmethod
     def _release_scene(scene: Any) -> None:
@@ -887,15 +940,18 @@ class SceneHost:
                 self.emit(Event.PONG, t=time.time())
             elif command == Command.STATS:
                 self.emit(Event.STATS, **self._stats_payload())
-            elif command == Command.SET_TIMING:
-                self._cmd_set_timing(message)
+            elif command == Command.SET_PATCHES:
+                self._cmd_set_patches(message)
             elif command in (Command.LOAD, Command.RELOAD):
                 self.stop_event.clear()
                 path = message.get("path")
                 scene_name = message.get("scene_name")
                 if scene_name:
                     self.config.scene_name = str(scene_name)
-                self.load(Path(path) if path else None)
+                # ``patches`` is authoritative when present; absent keeps what we had.
+                raw_patches = message.get("patches")
+                patches = None if raw_patches is None else self._parse_patches(raw_patches)
+                self._load_with_patches(patches, Path(path) if path else None)
                 self.emit_status("idle", index=0)
             elif command == Command.QUIT:
                 self.quit_event.set()
@@ -935,8 +991,8 @@ class SceneHost:
         self.stop_event.clear()
         scene = self._make_scene(skip_animations=False, start=start, end=end)
         self._activate_scene(scene)
-        if self._timing_factors or rate != 1.0:
-            TimingScaler(scene, self._timing_factors, speed=rate)
+        if rate != 1.0:
+            TimingScaler(scene, {}, speed=rate)
         self.emit_status("playing", index=start)
         self.tick.reset()
         error: BaseException | None = None
@@ -1027,7 +1083,7 @@ class SceneHost:
             scene = self._make_scene(skip_animations=True)
             if self.config.embedded:
                 scene.camera.use_window_fbo(False)
-            self._scrub_engine = ScrubEngine(scene, self.blocks, factors=self._timing_factors)
+            self._scrub_engine = ScrubEngine(scene, self.blocks)
         engine = self._scrub_engine
         try:
             block = engine.pose(time_seconds)
@@ -1273,8 +1329,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit when startup fails instead of waiting for a reload",
     )
+    parser.add_argument(
+        "--patch-file",
+        type=Path,
+        default=None,
+        help="sidecar-format JSON of timeline edits to run the scene with",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
+
+
+def _read_patches(path: Path | None) -> tuple[Patch, ...]:
+    """Patches from ``--patch-file``; an unreadable file is logged and ignored."""
+    if path is None:
+        return ()
+    from manim_studio.sidecar import SidecarError, read_patch_file
+
+    try:
+        return read_patch_file(path)
+    except SidecarError as exc:
+        log.error("ignoring --patch-file: %s", exc)
+        return ()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1294,6 +1369,7 @@ def main(argv: list[str] | None = None) -> int:
         initial_frame=args.initial_frame,
         fps=args.fps,
         fail_fast=args.fail_fast,
+        patches=_read_patches(args.patch_file),
     )
     # manimgl parses sys.argv at import time; hide our arguments from it.
     from manim_studio.scene_runner import manimlib_argv_guard
