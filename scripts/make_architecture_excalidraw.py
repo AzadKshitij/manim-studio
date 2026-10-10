@@ -414,7 +414,7 @@ def build() -> dict[str, Any]:
 
 
 def main() -> int:
-    OUT.write_text(json.dumps(build(), indent=2) + "\n", encoding="utf-8")
+    OUT.write_text(json.dumps(build(), indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"wrote {OUT.relative_to(OUT.parent.parent)}")
     return 0
 
