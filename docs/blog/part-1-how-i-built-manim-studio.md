@@ -42,24 +42,24 @@ non-negotiables:
 
 - **Realtime preview.** A persistent OpenGL context, updated at 60 fps — *no ffmpeg encode
   per edit*.
-- **Production-grade, no hacks.** Fully tested. If a decision had to bend, it got written
-  down. That turned into an [`AGENTS.md`](https://github.com/AzadKshitij/manim-studio/blob/main/AGENTS.md)
-  contract and nine architecture decision records.
+- **Production-grade, no hacks.** Fully tested. Whenever a design decision changed course, I
+  wrote down why — that habit became an
+  [`AGENTS.md`](https://github.com/AzadKshitij/manim-studio/blob/main/AGENTS.md) contract
+  and nine architecture decision records.
 - **Drivable by an agent.** I wanted to be able to say "build me a CircleToSquare scene"
   and have a CLI do it. Everything in the GUI is also a command.
 
-The shape of the app is almost boringly simple:
+The shape of the app is almost boringly simple: a code editor on the left, the running
+scene on the right, the timeline below. Everything else exists to keep those three in
+sync.
 
 > 🖼️ **[Screenshot placeholder — landing view]**
 > *The editor: code on the left, live preview on the right, timeline below.*
 > Suggested file: `docs/assets/screenshots/editor.png`.
 
-Left is a code editor. Right is the running scene. Bottom is the timeline. Everything else
-is in service of keeping those three in sync.
-
 ## What it actually does
 
-Concretely, here's the app in one screen:
+Concretely, this is what's in the box:
 
 - **A real code editor.** Scintilla, not a textbox: `manimlib` autocomplete and call
   signatures, error markers that jump to the failing line, syntax highlighting, full
@@ -118,8 +118,8 @@ If the whole thing has to justify itself in three sentences:
    Edits show a new frame in about **70 ms** — down from ~126 ms before the performance
    pass, and a different universe from a full render.
 2. **Scrubbing that feels like video.** Drag the playhead and the scene follows, correctly,
-   even with `always_redraw` and updaters. Under the hood it's replaying the scene 10–50 ms
-   per step and caching frames so revisits are free.
+   even with `always_redraw` and updaters. Under the hood it's replaying the scene — 5–50 ms
+   per step — and caching frames so revisits are free.
 3. **An editable timeline that survives the round trip.** Retime or delete an animation
    from the timeline; the edit is anchored to the *code*, survives unrelated edits, and is
    baked into the exported video — so what you see is what ships.
@@ -127,7 +127,7 @@ If the whole thing has to justify itself in three sentences:
 Those three are the whole reason the project exists. Everything in Part 2 is how they were
 built.
 
-## One more thing worth mentioning
+## Becoming Manim Studio
 
 The product didn't start out called Manim Studio — it began as "Manim Editor" and was
 renamed to **Manim Studio** on the way to the first public release: import package

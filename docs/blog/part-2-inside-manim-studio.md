@@ -17,7 +17,8 @@ scenes. Code editor on the left, live preview on the right, scrubbable timeline 
 whole design answers one question: **how do you show a running Manim scene, at any point in
 time, without re-rendering a video?**
 
-Here's how.
+Here's how — and, along the way, why the obvious version of several of these ideas doesn't
+work.
 
 ## The bet that shaped everything: a companion OpenGL process
 
@@ -36,7 +37,7 @@ context on one thread. The editor spawns it, passes a loopback TCP port, and the
 connects back. The editor **never imports `manimlib` or `moderngl`** — not even at module
 import. It talks to the host over a versioned JSON protocol.
 
-Two ways to present:
+The host can show the scene two ways:
 
 - **External window** — the host shows a normal GL window next to Qt.
 - **Embedded (default)** — the host keeps its window hidden, renders into the framebuffer,
@@ -82,12 +83,14 @@ editable patches possible.
 This is where the project got interesting, because the **obvious solution doesn't work.**
 
 **Attempt 1 — snapshots.** Save the scene state at every block boundary (`save_state()`),
-then drive `anim.interpolate(alpha)` from the restored snapshot. This is how you'd scrub a
-video: seek to a keyframe, then interpolate forward.
+then drive `anim.interpolate(alpha)` from the restored snapshot. On the face of it this is
+the video-player approach — store keyframes, interpolate between them — so surely it works
+for a timeline.
 
-It breaks with `always_redraw` and updaters. A `SceneState` does not capture an animation
-mid-flight, and restored mobject copies can detach from the closures that keep redrawing
-them. You get a frozen or wrong picture — silently.
+It breaks the moment a scene uses `always_redraw` or updaters. A `SceneState` cannot
+capture an animation mid-flight, and restored mobject copies can detach from the closures
+that keep redrawing them. You get a frozen or wrong picture — silently, which is the worst
+kind of wrong.
 
 **Attempt 2 — replay** (ADR 0002). Instead of rewinding a snapshot, *replay the scene*.
 Keep a dedicated scrub scene, and on each scrub:
@@ -98,7 +101,7 @@ Keep a dedicated scrub scene, and on each scrub:
    intercepted and each animation is interpolated to exactly the alpha the normal playback
    loop would compute.
 
-The essence:
+Stripped to its core:
 
 ```python
 def pose(self, time: float) -> TimelineBlock | None:
@@ -116,7 +119,7 @@ runtime instead of trusted to a snapshot. The cost is one replay per scrub step 
 at roughly **5–50 ms** for the test scenes — and the host coalesces scrub requests so a
 pointer-rate drag never queues work: latest wins.
 
-**Attempt 3 — a filmstrip cache** (ADR 0003). Replaying 10–50 ms per pointer move is fine
+**Attempt 3 — a filmstrip cache** (ADR 0003). Replaying 5–50 ms per pointer move is fine
 for a nudge, not for a drag you want to feel like video. So the host keeps an in-memory LRU
 of **already-encoded frames**, keyed by integer frame index. A background crawler fills it,
 block by block, rendering each frame in O(1) — the same loop manimgl uses for playback,
@@ -302,10 +305,10 @@ rendering engine instead of next to it.
 
 ## What's next
 
-The timeline's patch engine has room to grow: reordering, inserting animations from a
-library, per-animation lanes — all built on the same anchors. Packaging is Windows-first
-right now, with macOS and Linux on the roadmap. And the whole thing is scriptable, so it can
-be driven by an agent as easily as by a human.
+The patch engine has room to grow: reordering blocks and inserting animations from a
+library are the natural next steps, and both build on the same anchors. Packaging is
+Windows-first right now, with macOS and Linux on the roadmap. And the whole thing is
+scriptable end to end, so an agent can drive it as easily as a human can.
 
 Five days, 124 commits, ~17.7k lines of source against ~13.8k lines of tests. The bet — *a
 live preview you edit instead of a render you wait for* — held up.
