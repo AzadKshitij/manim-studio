@@ -13,11 +13,19 @@ playhead.  Sizes under 48 px get a simplified drawing (bolder S, yellow tip dot,
 construction lines or timeline) so the silhouette stays readable in the taskbar and
 title bar.
 
-Two copies are written from the same drawing code:
+Four copies are written from the same drawing code.  The app keeps the tile: the
+first two are the dark, rounded Chalkboard tile with the mark on top.
 
 * ``packaging/manim_studio.ico`` — build input for PyInstaller and Inno Setup.
 * ``src/manim_studio/assets/manim_studio.ico`` — runtime asset the editor loads
   with :func:`manim_studio.editor.icon.load_icon` for the window/taskbar icon.
+
+The last three are the same mark with **no background** (transparent), for docs,
+web and any surface where the tile would look out of place:
+
+* ``docs/assets/logo-transparent.png`` — 512 px PNG on transparency.
+* ``docs/assets/logo-transparent.ico`` — multi-size ICO on transparency.
+* ``docs/assets/logo-transparent.svg`` — the same mark as scalable vector art.
 
 ``scripts/build.ps1`` runs this automatically before PyInstaller.
 """
@@ -28,11 +36,14 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = Path(__file__).with_name("manim_studio.ico")
-ASSET_OUTPUT = (
-    Path(__file__).resolve().parents[1] / "src" / "manim_studio" / "assets" / "manim_studio.ico"
-)
+ASSET_OUTPUT = PROJECT_ROOT / "src" / "manim_studio" / "assets" / "manim_studio.ico"
+TRANSPARENT_PNG = PROJECT_ROOT / "docs" / "assets" / "logo-transparent.png"
+TRANSPARENT_ICO = PROJECT_ROOT / "docs" / "assets" / "logo-transparent.ico"
+TRANSPARENT_SVG = PROJECT_ROOT / "docs" / "assets" / "logo-transparent.svg"
 SIZES = (16, 24, 32, 48, 64, 128, 256)
+PNG_SIZE = 512
 SIMPLE_BELOW = 48  # sizes under this get the simplified drawing
 SUPERSAMPLE = 4
 
@@ -166,15 +177,23 @@ def _timeline_strip(size: int) -> Image.Image:
     return layer
 
 
-def _render(px: int) -> Image.Image:
-    """Draw the icon at ``px`` pixels square (supersampled, then reduced)."""
+def _render(px: int, *, background: bool = True) -> Image.Image:
+    """Draw the icon at ``px`` pixels square (supersampled, then reduced).
+
+    With ``background`` the mark sits on the rounded Chalkboard tile (the app
+    icon); without it the same mark is drawn on transparency.
+    """
     simple = px < SIMPLE_BELOW
     s = px * SUPERSAMPLE
 
-    tile = _gradient(s)
-    mask = Image.new("L", (s, s), 0)
     radius = round(s * CORNER_RADIUS)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, s - 1, s - 1), radius=radius, fill=255)
+    if background:
+        tile = _gradient(s)
+        mask = Image.new("L", (s, s), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, s - 1, s - 1), radius=radius, fill=255)
+    else:
+        tile = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        mask = None
 
     # Design space -> pixels.  The detailed icon shrinks the S to leave room for the strip.
     scale, top = (1.0, 0.05) if simple else (0.88, 0.085)
@@ -200,30 +219,148 @@ def _render(px: int) -> Image.Image:
     else:
         tile = Image.alpha_composite(tile, _construction(s, upper, lower))
         tile = Image.alpha_composite(tile, _timeline_strip(s))
-        # Fine edge so the tile holds its shape on dark taskbars.
-        edge, edraw = _layer(s)
-        edraw.rounded_rectangle(
-            (0, 0, s - 1, s - 1), radius=radius, outline=(*TILE_EDGE, 160), width=max(2, s // 128)
-        )
-        tile = Image.alpha_composite(tile, edge)
+        if background:
+            # Fine edge so the tile holds its shape on dark taskbars.
+            edge, edraw = _layer(s)
+            edraw.rounded_rectangle(
+                (0, 0, s - 1, s - 1),
+                radius=radius,
+                outline=(*TILE_EDGE, 160),
+                width=max(2, s // 128),
+            )
+            tile = Image.alpha_composite(tile, edge)
 
-    tile.putalpha(Image.composite(tile.getchannel("A"), Image.new("L", (s, s), 0), mask))
+    if mask is not None:
+        tile.putalpha(Image.composite(tile.getchannel("A"), Image.new("L", (s, s), 0), mask))
     return tile.resize((px, px), Image.Resampling.LANCZOS)
+
+
+def _hex(colour: tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*colour)
+
+
+def _svg_mark(size: int = 1000) -> str:
+    """The background-less mark as an SVG document (vector, no tile).
+
+    Mirrors the detailed :func:`_render` drawing in a square ``size`` viewBox so
+    the same geometry scales cleanly for docs, web or print.
+    """
+    scale, top = 0.88, 0.085  # the detailed drawing, as in _render
+
+    def place(point: Point) -> Point:
+        x, y = point
+        return ((0.5 + (x - 0.5) * scale) * size, (top + (y - 0.08) * scale) * size)
+
+    upper = [place(point) for point in _UPPER]
+    lower = [place(point) for point in _LOWER]
+    stroke = 0.07 * size
+    guide_width = 0.008 * size
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
+        f'width="{size}" height="{size}" fill="none">',
+    ]
+    # Bezier construction lines, drawn under the S.
+    for anchor, handle in (
+        (upper[0], upper[1]),
+        (upper[3], upper[2]),
+        (lower[0], lower[1]),
+        (lower[3], lower[2]),
+    ):
+        parts.append(
+            f'<line x1="{anchor[0]:.2f}" y1="{anchor[1]:.2f}" '
+            f'x2="{handle[0]:.2f}" y2="{handle[1]:.2f}" '
+            f'stroke="{_hex(GUIDE)}" stroke-opacity="0.75" stroke-width="{guide_width:.2f}"/>'
+        )
+    # The S as two cubic bezier segments.
+    for segment, colour in ((upper, CYAN), (lower, GREEN)):
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = segment
+        parts.append(
+            f'<path d="M {x0:.2f} {y0:.2f} C {x1:.2f} {y1:.2f}, '
+            f'{x2:.2f} {y2:.2f}, {x3:.2f} {y3:.2f}" '
+            f'stroke="{_hex(colour)}" stroke-width="{stroke:.2f}" stroke-linecap="round"/>'
+        )
+    # Hollow control points and square anchors.
+    ring = 0.022 * size
+    for x, y in (upper[1], upper[2], lower[1], lower[2]):
+        parts.append(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{ring:.2f}" fill="{_hex(TILE_TOP)}" '
+            f'stroke="{_hex(YELLOW)}" stroke-width="{0.009 * size:.2f}"/>'
+        )
+    box = 0.024 * size
+    for x, y in (upper[0], upper[3], lower[3]):
+        parts.append(
+            f'<rect x="{x - box:.2f}" y="{y - box:.2f}" width="{2 * box:.2f}" '
+            f'height="{2 * box:.2f}" fill="{_hex(YELLOW)}"/>'
+        )
+    # Timeline: track, progress, ruler ticks and the playhead.
+    left, right = 0.16 * size, 0.84 * size
+    track_top, track_bottom = 0.845 * size, 0.875 * size
+    playhead = left + (right - left) * 0.58
+    track_height = track_bottom - track_top
+    radius = 0.015 * size
+    parts.append(
+        f'<rect x="{left:.2f}" y="{track_top:.2f}" width="{right - left:.2f}" '
+        f'height="{track_height:.2f}" rx="{radius:.2f}" fill="{_hex(TILE_EDGE)}"/>'
+    )
+    parts.append(
+        f'<rect x="{left:.2f}" y="{track_top:.2f}" width="{playhead - left:.2f}" '
+        f'height="{track_height:.2f}" rx="{radius:.2f}" fill="{_hex(CYAN)}"/>'
+    )
+    ticks = 20
+    for i in range(ticks + 1):
+        x = left + (right - left) * i / ticks
+        tall = i % 5 == 0
+        tick_top = (0.775 if tall else 0.795) * size
+        parts.append(
+            f'<line x1="{x:.2f}" y1="{tick_top:.2f}" x2="{x:.2f}" y2="{0.825 * size:.2f}" '
+            f'stroke="{_hex(GUIDE)}" stroke-opacity="{1.0 if tall else 0.67:.2f}" '
+            f'stroke-width="{0.007 * size:.2f}"/>'
+        )
+    parts.append(
+        f'<line x1="{playhead:.2f}" y1="{0.76 * size:.2f}" x2="{playhead:.2f}" '
+        f'y2="{0.9 * size:.2f}" stroke="{_hex(YELLOW)}" stroke-width="{0.012 * size:.2f}"/>'
+    )
+    head = 0.022 * size
+    parts.append(
+        f'<polygon points="{playhead - head:.2f},{0.745 * size:.2f} '
+        f'{playhead + head:.2f},{0.745 * size:.2f} {playhead:.2f},{0.775 * size:.2f}" '
+        f'fill="{_hex(YELLOW)}"/>'
+    )
+    parts.append("</svg>")
+    return "\n".join(parts) + "\n"
 
 
 def main() -> int:
     frames = [_render(size) for size in SIZES]
     largest = frames[-1]
     others = frames[:-1]
+    ico_sizes = [(size, size) for size in SIZES]
     for output in (OUTPUT, ASSET_OUTPUT):
         output.parent.mkdir(parents=True, exist_ok=True)
         largest.save(
             output,
             format="ICO",
-            sizes=[(size, size) for size in SIZES],
+            sizes=ico_sizes,
             append_images=others,
         )
         print(f"wrote {output} ({output.stat().st_size} bytes)")
+
+    # Background-less mark for docs, web and other surfaces that the tile would
+    # clash with; the app icon above keeps its tile.
+    transparent = [_render(size, background=False) for size in SIZES]
+    TRANSPARENT_PNG.parent.mkdir(parents=True, exist_ok=True)
+    _render(PNG_SIZE, background=False).save(TRANSPARENT_PNG, format="PNG")
+    print(f"wrote {TRANSPARENT_PNG} ({TRANSPARENT_PNG.stat().st_size} bytes)")
+    transparent[-1].save(
+        TRANSPARENT_ICO,
+        format="ICO",
+        sizes=ico_sizes,
+        append_images=transparent[:-1],
+    )
+    print(f"wrote {TRANSPARENT_ICO} ({TRANSPARENT_ICO.stat().st_size} bytes)")
+    TRANSPARENT_SVG.write_text(_svg_mark(), encoding="utf-8")
+    print(f"wrote {TRANSPARENT_SVG} ({TRANSPARENT_SVG.stat().st_size} bytes)")
     return 0
 
 

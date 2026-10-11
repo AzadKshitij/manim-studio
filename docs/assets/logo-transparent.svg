@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000" fill="none">
+<line x1="711.20" y1="252.20" x2="676.00" y2="67.40" stroke="#96a0b4" stroke-opacity="0.75" stroke-width="8.00"/>
+<line x1="500.00" y1="401.80" x2="253.60" y2="102.60" stroke="#96a0b4" stroke-opacity="0.75" stroke-width="8.00"/>
+<line x1="500.00" y1="401.80" x2="746.40" y2="701.00" stroke="#96a0b4" stroke-opacity="0.75" stroke-width="8.00"/>
+<line x1="288.80" y1="551.40" x2="324.00" y2="736.20" stroke="#96a0b4" stroke-opacity="0.75" stroke-width="8.00"/>
+<path d="M 711.20 252.20 C 676.00 67.40, 253.60 102.60, 500.00 401.80" stroke="#58c4dd" stroke-width="70.00" stroke-linecap="round"/>
+<path d="M 500.00 401.80 C 746.40 701.00, 324.00 736.20, 288.80 551.40" stroke="#83c167" stroke-width="70.00" stroke-linecap="round"/>
+<circle cx="676.00" cy="67.40" r="22.00" fill="#1b2029" stroke="#ffd866" stroke-width="9.00"/>
+<circle cx="253.60" cy="102.60" r="22.00" fill="#1b2029" stroke="#ffd866" stroke-width="9.00"/>
+<circle cx="746.40" cy="701.00" r="22.00" fill="#1b2029" stroke="#ffd866" stroke-width="9.00"/>
+<circle cx="324.00" cy="736.20" r="22.00" fill="#1b2029" stroke="#ffd866" stroke-width="9.00"/>
+<rect x="687.20" y="228.20" width="48.00" height="48.00" fill="#ffd866"/>
+<rect x="476.00" y="377.80" width="48.00" height="48.00" fill="#ffd866"/>
+<rect x="264.80" y="527.40" width="48.00" height="48.00" fill="#ffd866"/>
+<rect x="160.00" y="845.00" width="680.00" height="30.00" rx="15.00" fill="#3a4352"/>
+<rect x="160.00" y="845.00" width="394.40" height="30.00" rx="15.00" fill="#58c4dd"/>
+<line x1="160.00" y1="775.00" x2="160.00" y2="825.00" stroke="#96a0b4" stroke-opacity="1.00" stroke-width="7.00"/>
+<line x1="194.00" y1="795.00" x2="194.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="228.00" y1="795.00" x2="228.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="262.00" y1="795.00" x2="262.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="296.00" y1="795.00" x2="296.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="330.00" y1="775.00" x2="330.00" y2="825.00" stroke="#96a0b4" stroke-opacity="1.00" stroke-width="7.00"/>
+<line x1="364.00" y1="795.00" x2="364.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="398.00" y1="795.00" x2="398.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="432.00" y1="795.00" x2="432.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="466.00" y1="795.00" x2="466.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="500.00" y1="775.00" x2="500.00" y2="825.00" stroke="#96a0b4" stroke-opacity="1.00" stroke-width="7.00"/>
+<line x1="534.00" y1="795.00" x2="534.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="568.00" y1="795.00" x2="568.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="602.00" y1="795.00" x2="602.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="636.00" y1="795.00" x2="636.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="670.00" y1="775.00" x2="670.00" y2="825.00" stroke="#96a0b4" stroke-opacity="1.00" stroke-width="7.00"/>
+<line x1="704.00" y1="795.00" x2="704.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="738.00" y1="795.00" x2="738.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="772.00" y1="795.00" x2="772.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="806.00" y1="795.00" x2="806.00" y2="825.00" stroke="#96a0b4" stroke-opacity="0.67" stroke-width="7.00"/>
+<line x1="840.00" y1="775.00" x2="840.00" y2="825.00" stroke="#96a0b4" stroke-opacity="1.00" stroke-width="7.00"/>
+<line x1="554.40" y1="760.00" x2="554.40" y2="900.00" stroke="#ffd866" stroke-width="12.00"/>
+<polygon points="532.40,745.00 576.40,745.00 554.40,775.00" fill="#ffd866"/>
+</svg>
