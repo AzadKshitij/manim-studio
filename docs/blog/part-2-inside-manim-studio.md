@@ -9,8 +9,8 @@ series: "Building Manim Studio"
 ---
 
 > This is **Part 2** of a two-part series. [Part 1](part-1-how-i-built-manim-studio.md)
-> covered why Manim Studio exists and how it went from an empty project to v1.1.0 in five
-> days. This part is the engineering: the architecture and every decision that mattered.
+> covered why Manim Studio exists and how it grew from an empty project to v1.1.0. This
+> part is the engineering: the architecture and every decision that mattered.
 
 Manim Studio is a realtime desktop editor for [ManimGL](https://github.com/3b1b/manim)
 scenes. Code editor on the left, live preview on the right, scrubbable timeline below. The
@@ -34,8 +34,8 @@ everything you hadn't saved.
 
 So all OpenGL lives in **a companion process** (`manim_studio/preview_host.py`) with one GL
 context on one thread. The editor spawns it, passes a loopback TCP port, and the host
-connects back. The editor **never imports `manimlib` or `moderngl`** — not even at module
-import. It talks to the host over a versioned JSON protocol.
+connects back. The editor never touches GL — rendering lives entirely in the host — and it
+talks to that host over a versioned JSON protocol.
 
 The host can show the scene two ways:
 
@@ -310,14 +310,15 @@ library are the natural next steps, and both build on the same anchors. Packagin
 Windows-first right now, with macOS and Linux on the roadmap. And the whole thing is
 scriptable end to end, so an agent can drive it as easily as a human can.
 
-Five days, 124 commits, ~17.7k lines of source against ~13.8k lines of tests. The bet — *a
-live preview you edit instead of a render you wait for* — held up.
+Five releases of the protocol later, 124 commits, ~17.7k lines of source against ~13.8k
+lines of tests. The bet — *a live preview you edit instead of a render you wait for* —
+held up.
 
 If that sounds useful:
 
 - **Source:** [github.com/AzadKshitij/manim-studio](https://github.com/AzadKshitij/manim-studio)
 - **Release:** [v1.1.0](https://github.com/AzadKshitij/manim-studio/releases/tag/v1.1.0)
-- **Part 1 (the story):** [How I built a realtime editor for ManimGL in five days](part-1-how-i-built-manim-studio.md)
+- **Part 1 (the story):** [How I built a realtime editor for ManimGL](part-1-how-i-built-manim-studio.md)
 
 Thanks for reading. If you make Manim animations — or you're building a desktop app on top
 of a GPU renderer — I'd love to hear what's slow for you.

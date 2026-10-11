@@ -1,7 +1,7 @@
 ---
-title: "How I built a realtime editor for ManimGL in five days"
+title: "How I built a realtime editor for ManimGL"
 published: false
-description: "I make Manim animations for YouTube. The tools that existed were too slow and nothing like editing, so I built Manim Studio: five days, 124 commits, three releases. This is the story. Part 2 goes inside the architecture."
+description: "I make Manim animations for YouTube. The tools that existed were too slow and nothing like editing, so I built Manim Studio. This is the story; Part 2 goes inside the architecture."
 tags: manim, python, opensource, productivity
 cover_image: ""
 series: "Building Manim Studio"
@@ -12,8 +12,8 @@ series: "Building Manim Studio"
 > [ManimGL](https://github.com/3b1b/manim) scenes: code on the left, a *live* preview on
 > the right, a scrubbable timeline below. No render-wait-tweak loop — save the file and the
 > preview updates in place; retime an animation by dragging it. It went from an empty
-> project to **v1.1.0 in five days and 124 commits**. This is Part 1: why, what, and how it
-> went. [Part 2](part-2-inside-manim-studio.md) is the technical deep-dive — the
+> project to **v1.1.0 in 124 commits**. This is Part 1: why it exists, what it does, and
+> how it went. [Part 2](part-2-inside-manim-studio.md) is the technical deep-dive — the
 > architecture and every choice that shaped it.
 
 ## The itch
@@ -24,8 +24,8 @@ result, tweak one number, wait again. Slow — and nothing about it felt like ed
 
 I tried the tools that already existed. The [Manim Community](https://www.manim.community/)
 version. VS Code extensions driving Jupyter notebooks. Neither stuck. The iteration speed
-was the killer, and Jupyter never felt like an editor — you're running cells, not cutting
-video.
+was the killer, and Jupyter never felt like an editor — it's a place to run code and inspect
+output, not a place to work on an animation.
 
 So I stopped looking and started building: something **faster**, that **feels like a video
 editor**.
@@ -40,7 +40,7 @@ editing a `run_time=` literal and re-rendering.
 Before writing code I wrote down what I actually wanted, and gave myself three
 non-negotiables:
 
-- **Realtime preview.** A persistent OpenGL context, updated at 60 fps — *no ffmpeg encode
+- **Realtime preview.** A persistent OpenGL context, updated at 30 fps — *no ffmpeg encode
   per edit*.
 - **Production-grade, no hacks.** Fully tested. Whenever a design decision changed course, I
   wrote down why — that habit became an
@@ -84,13 +84,13 @@ CircleToSquare scene" and the tooling can actually do it.
 
 ## The trajectory
 
-Five days, three shippable states:
+Three shippable states, each with a job to do:
 
-| Release | Date | What landed |
-| --- | --- | --- |
-| **0.1.0** — initial shareable build | Oct 6 | Scintilla editor, embedded realtime preview, runtime-traced timeline with replay-based scrubbing and a filmstrip cache, live IPython shell, video/still export, and the headless CLI |
-| **1.0.0** — first public release | Oct 7 | Pygments syntax highlighting, Jedi autocomplete + calltips, app icon, live memory/RAM status, and a one-click **frozen Windows build** (portable zip + per-user installer) |
-| **1.1.0** | Oct 10 | The **editable timeline**: retime and delete animations as anchored edits stored beside the scene, baked into exports. Themes. A big rendering-performance pass |
+| Release | What landed |
+| --- | --- |
+| **0.1.0** — initial shareable build | Scintilla editor, embedded realtime preview, runtime-traced timeline with replay-based scrubbing and a filmstrip cache, live IPython shell, video/still export, and the headless CLI |
+| **1.0.0** — first public release | Pygments syntax highlighting, Jedi autocomplete + calltips, app icon, live memory/RAM status, and a one-click **frozen Windows build** (portable zip + per-user installer) |
+| **1.1.0** | The **editable timeline**: retime and delete animations as anchored edits stored beside the scene, baked into exports. Themes. A big rendering-performance pass |
 
 The shape of that history is worth noticing: 0.1.0 is *"it works."* 1.0.0 is *"someone else
 can install it."* 1.1.0 is the release where it stops being a preview and becomes an
@@ -102,13 +102,13 @@ can install it."* 1.1.0 is the release where it stops being a preview and become
 
 ## How it actually went
 
-A few habits made five days possible. Every decision that bent the design got written down
-as an ADR the moment I made it — nine of them, in order, from "why a separate process" to
-"how to reuse cached frames after an edit." I kept the test suite green before every commit
-(by the first release: **474 passing tests**), and I optimised nothing without a benchmark
-to prove the change. That sounds like overhead. It isn't: when you're moving this fast, the
-written decisions are what stop you from re-litigating the same question three times, and
-the tests are what let you refactor a 1,000-line file into eight without breaking it.
+A few habits kept the project honest as it grew. Every decision that bent the design got
+written down as an ADR the moment I made it — nine of them, in order, from "why a separate
+process" to "how to reuse cached frames after an edit." I kept the test suite green before
+every commit (by the first release: **474 passing tests**), and I optimised nothing without
+a benchmark to prove the change. That sounds like overhead. It isn't: written decisions are
+what stop you from re-litigating the same question three times, and the tests are what let
+you refactor a 1,000-line file into eight without breaking it.
 
 ## The three results I'm proudest of
 
@@ -134,7 +134,7 @@ renamed to **Manim Studio** on the way to the first public release: import packa
 `manim_studio`, CLI `manim-studio`, Windows bundle `ManimStudio`. "Studio" describes what it
 grew into: not a text editor that *also* shows you a preview, but an environment you work
 in. The same stretch of work made the repository real — an MIT license, a CI pipeline
-(format, lint, types, and tests on Ubuntu and Windows), a tagged release workflow,
+(format, lint, types, and tests, currently on Windows), a tagged release workflow,
 Dependabot, and the usual community files. *"It works on my machine"* became *"it works on
 yours."*
 
@@ -143,8 +143,8 @@ yours."*
 Part 1 was the story. [Part 2](part-2-inside-manim-studio.md) is the engineering, and it's
 where the interesting decisions live:
 
-- Why the preview runs in a **separate process** with the only OpenGL context, and why the
-  editor never imports `manimlib`.
+- Why the preview runs in a **separate process** that owns the only OpenGL context —
+  and why the editor's GUI never touches GL.
 - Why the timeline is a **runtime trace**, not a parsed AST.
 - Scrubbing, **three designs deep** — and why the obvious one doesn't work.
 - How "make it fast" became a **measured discipline** with before/after numbers.
