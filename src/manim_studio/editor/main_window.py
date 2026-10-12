@@ -524,8 +524,28 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_cursor_moved(self, line: int, column: int) -> None:
-        """Mirror the caret in the status bar and highlight its timeline block."""
+        """Mirror the caret in the status bar; a caret that enters a call follows it."""
         self._cursor_label.setText(f"Ln {line}, Col {column}")
+        index = self.events.block_at_line(line)
+        if index is not None and index != self.timeline.active_block:
+            self._follow_caret_block(index)
+        self._refresh_caret_block(line)
+
+    def _follow_caret_block(self, index: int) -> None:
+        """A caret that enters a call selects its block and moves the playhead to it."""
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        self.timeline.set_selected_block(index)
+        if self._playback_active:
+            return  # never interrupt playback because the caret moved
+        if self._path is not None and self.controller.is_running and not self.video.active:
+            self.scrub_to_time(block.start)
+        else:
+            self.timeline.set_playhead(block.start)
+
+    def _refresh_caret_block(self, line: int) -> None:
+        """Highlight the block under the caret (the playhead does not move)."""
         self.timeline.set_active_block(self.events.block_at_line(line))
         self._refresh_inspector()
 
@@ -1215,7 +1235,7 @@ class MainWindow(QMainWindow):
         """A fresh trace tells us which call each block came from and which edits failed."""
         self.patches.on_log(message)
         # A fresh trace means new call sites: re-highlight the caret's block.
-        self._on_cursor_moved(self.editor.current_line(), self.editor.current_column())
+        self._refresh_caret_block(self.editor.current_line())
 
     def _on_block_resized(
         self, index: int, duration: float, *, iteration_only: bool = False
