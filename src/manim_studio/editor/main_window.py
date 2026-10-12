@@ -55,6 +55,7 @@ from manim_studio.editor.styling import apply_theme
 from manim_studio.editor.timeline_controller import MediaTransport
 from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
+from manim_studio.editor.unsaved import CANCEL, SAVE, ask_discard
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.editor.welcome_panel import WelcomePanel
 from manim_studio.scene_runner import check_scene_file
@@ -594,6 +595,8 @@ class MainWindow(QMainWindow):
             self.shell.append(f"open failed: {target}: {check.error}", reveal=True)
             self._forget_recent(target)
             return False
+        if not self._confirm_discard("open another scene"):
+            return False
         self.editor.load_file(target)
         self._path = target.resolve()
         # Edits made on the timeline travel with the scene: the host loads its first
@@ -737,6 +740,24 @@ class MainWindow(QMainWindow):
     ) -> Path:
         """Write a scene template to ``path``, deriving the class name when omitted."""
         return scene_files.create_scene_file(path, template_key, scene_name)
+
+    def _confirm_discard(self, action: str) -> bool:
+        """Before ``action`` replaces or closes the buffer: True when it may go ahead."""
+        if not scene_files.has_unsaved_changes(
+            self._path, self.editor.text(), self.editor.is_modified()
+        ):
+            return True
+        name = self._path.name if self._path is not None else "untitled scene"
+        choice = ask_discard(self, name, action)
+        if choice == CANCEL:
+            return False
+        if choice == SAVE:
+            self.save_buffer()
+            # Save As can be cancelled, which leaves the work unsaved: stay put then.
+            return not scene_files.has_unsaved_changes(
+                self._path, self.editor.text(), self.editor.is_modified()
+            )
+        return True
 
     def save_buffer(self) -> None:
         if self._path is None:
@@ -1648,6 +1669,9 @@ class MainWindow(QMainWindow):
         self._settings.setValue("window/embedded", self._embedded)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_discard("close the editor"):
+            event.ignore()
+            return
         self.watcher.stop()
         self.completions.stop()
         self.controller.shutdown()
