@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from manim_studio import APP_NAME, recent
+from manim_studio import APP_NAME, external_changes, recent
 from manim_studio.editor import api_cache, scene_files
 from manim_studio.editor.autosave_controller import AutosaveController
 from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
@@ -42,6 +42,7 @@ from manim_studio.editor.editor_pane import EditorPane
 from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
+from manim_studio.editor.external_change_bar import ExternalChangeBar
 from manim_studio.editor.file_watcher import FileWatcher
 from manim_studio.editor.glyphs import glyph, refresh_glyphs
 from manim_studio.editor.icon import load_icon
@@ -70,6 +71,7 @@ from manim_studio.editor.unsaved import (
 )
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.editor.welcome_panel import WelcomePanel
+from manim_studio.external_changes import Decision
 from manim_studio.preview_status import CRASHED, OFF, RUNNING, PreviewStatus, summarize
 from manim_studio.scene_runner import check_scene_file
 from manim_studio.site_index import block_line_range
@@ -121,6 +123,7 @@ class MainWindow(QMainWindow):
         self._restore_settings = restore_settings
         self._settings = settings or QSettings("ManimStudio", "ManimStudio")
         self._session = SessionState(self._settings, enabled=restore_settings)
+        self._external_policy = self._session.external_policy()
         self._layout_restored = False
         if embedded is None:  # not chosen on the command line: keep the last mode
             embedded = self._session.embedded() is not False
@@ -202,6 +205,8 @@ class MainWindow(QMainWindow):
     def _build_layout(self) -> None:
         horizontal = QSplitter(Qt.Orientation.Horizontal, self)
         self.editor_pane = EditorPane(self.editor, self)
+        self._external_bar = ExternalChangeBar(self)
+        self.editor_pane.set_banner(self._external_bar)
         horizontal.addWidget(self.editor_pane)
         self._right_stack = QStackedWidget(self)
         self._right_stack.addWidget(self.preview_panel)
@@ -246,6 +251,19 @@ class MainWindow(QMainWindow):
         )
         self._add_action(file_menu, "Open…", self.open_dialog, QKeySequence.StandardKey.Open)
         self._recent_menu = file_menu.addMenu("Open recent")
+        external_menu = file_menu.addMenu("External changes")
+        self._external_group = QActionGroup(self)
+        self._external_group.setExclusive(True)
+        self._external_actions: dict[str, QAction] = {}
+        for policy in external_changes.POLICIES:
+            action = QAction(external_changes.POLICY_LABELS[policy], self, checkable=True)
+            action.setChecked(policy == self._external_policy)
+            action.triggered.connect(
+                lambda _checked=False, value=policy: self._set_external_policy(value)
+            )
+            self._external_group.addAction(action)
+            self._external_actions[policy] = action
+            external_menu.addAction(action)
         self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
         self._add_action(file_menu, "Save", self.save_buffer, QKeySequence.StandardKey.Save)
         self._add_action(
@@ -512,12 +530,15 @@ class MainWindow(QMainWindow):
         self.controller.statsReceived.connect(self.stats.on_stats)
         self.stats.memoryLabelChanged.connect(self._mem_label.setText)
         self.stats.cacheStatusChanged.connect(self.preview_panel.set_cache_status)
-        self.controller.hostLogReceived.connect(self.shell.append)
+        self.controller.hostLogReceived.connect(self.shell.append_output)
         self.watcher.file_changed.connect(self._on_file_changed)
+        self._external_bar.keepRequested.connect(self._keep_my_edits)
+        self._external_bar.takeRequested.connect(self._take_external_version)
+        self._external_bar.diffRequested.connect(self._show_external_diff)
         self.watcher.file_missing.connect(lambda path: self._set_status(f"file missing: {path}"))
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
         self.exports.statusChanged.connect(self._set_status)
-        self.exports.outputLine.connect(self.shell.append)
+        self.exports.outputLine.connect(self.shell.append_output)
         self.exports.previewVideoReady.connect(self._on_preview_video_ready)
         self.exports.previewVideoFailed.connect(self._on_preview_video_failed)
         self.exports.exportFinished.connect(self._on_export_finished)
@@ -684,6 +705,7 @@ class MainWindow(QMainWindow):
         if not edits_settled and not self._confirm_discard("open another scene"):
             return False
         self.editor.load_file(target)
+        self._external_bar.dismiss()
         self._path = target.resolve()
         # Edits made on the timeline travel with the scene: the host loads its first
         # trace from argv, so the controller must know them before it starts.
@@ -1658,22 +1680,68 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_file_changed(self, path: str) -> None:
-        if self.editor.is_modified():
-            self._set_status("file changed on disk — save (Ctrl+S) to overwrite, or reopen")
-            return
         if scene_files.read_disk_text(Path(path)) == self.editor.text():
             # Rewritten with identical code (a touch, a no-op formatter, another
             # tool saving the same bytes): reloading would reset the cursor and
             # undo history, and re-render the scene, for nothing.
             self._set_status("file touched on disk — code unchanged")
             return
-        # External change with a clean buffer: refresh the editor text, the scene
-        # list (a class may have been renamed) and the preview, so all three agree.
-        self._set_status("file changed on disk — reloading editor and preview")
-        self.editor.load_file(path)
-        self._refresh_scene_list(Path(path))
+        decision = external_changes.decide(self._external_policy, self.editor.is_modified())
+        if decision is Decision.RELOAD:
+            self._take_external_version(keep_undo=False)
+        elif decision is Decision.RELOAD_OVER_EDITS:
+            self._take_external_version(keep_undo=True)
+        elif decision is Decision.ASK:
+            self._external_bar.show_change(Path(path).name)
+            self._set_status("file changed on disk — choose what to keep, above the code")
+        else:
+            self._set_status("file changed on disk — ignored (External changes: Ignore)")
+
+    def _take_external_version(self, *, keep_undo: bool = True) -> None:
+        """Show the file as it is on disk, then re-check the scene list and the preview."""
+        if self._path is None:
+            return
+        if keep_undo:
+            disk_text = scene_files.read_disk_text(self._path)
+            if disk_text is None:
+                self._set_status("cannot read the file on disk")
+                return
+            # Your edits stay on the undo stack: Ctrl+Z brings them back.
+            self.editor.reload_from_disk(disk_text)
+        else:
+            self.editor.load_file(self._path)
+        self._external_bar.dismiss()
+        # The file may have renamed a class, so the scene list and the preview follow it.
+        self._refresh_scene_list(self._path)
         self._warm_up_completion()
         self.reload_preview()
+        note = " (Ctrl+Z brings your edits back)" if keep_undo else ""
+        self._set_status(f"took the file from disk{note}")
+
+    def _keep_my_edits(self) -> None:
+        self._external_bar.dismiss()
+        self._set_status("kept your edits — saving (Ctrl+S) overwrites the file on disk")
+
+    def _show_external_diff(self) -> None:
+        if self._path is None:
+            return
+        disk_text = scene_files.read_disk_text(self._path)
+        if disk_text is None:
+            self._set_status("cannot read the file on disk")
+            return
+        notes = ["Taking the file from disk replaces the lines marked '-' with the '+' lines."]
+        dialog = EditsDiffDialog(
+            unified_diff(self.editor.text(), disk_text, self._path.name), notes, self
+        )
+        dialog.exec()
+
+    def _set_external_policy(self, policy: str) -> None:
+        self._external_policy = external_changes.parse_policy(policy)
+        self._external_actions[self._external_policy].setChecked(True)
+        self._session.remember_external_policy(self._external_policy)
+        self._set_status(
+            f"external changes: {external_changes.POLICY_LABELS[self._external_policy]}"
+        )
 
     # ------------------------------------------------------------------
     # Live shell

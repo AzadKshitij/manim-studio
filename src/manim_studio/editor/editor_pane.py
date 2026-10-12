@@ -18,6 +18,7 @@ class EditorPane(QWidget):
     def __init__(self, editor: CodeEditor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.editor = editor
+        self._banner: QWidget | None = None
         self._file = QLabel("untitled", self)
         self._file.setObjectName("fileTab")
         self._dot = QLabel("", self)
@@ -38,11 +39,19 @@ class EditorPane(QWidget):
         row.addWidget(self._language)
 
         layout = QVBoxLayout(self)
+        self._column = layout  # typed here; self.layout() may be None to the type checker
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(header)
         layout.addWidget(editor, 1)
         self.set_file(None)
+
+    def set_banner(self, banner: QWidget) -> None:
+        """Place ``banner`` between the header and the code; it stays hidden until shown."""
+        if self._banner is not None:
+            self._column.removeWidget(self._banner)
+        self._banner = banner
+        self._column.insertWidget(1, banner)
 
     def set_file(self, name: str | None, *, modified: bool = False) -> None:
         self._file.setText(name or "untitled")

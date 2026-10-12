@@ -15,6 +15,8 @@ from typing import Any
 from PySide6.QtCore import QByteArray, QSettings
 from PySide6.QtWidgets import QSplitter
 
+from manim_studio import external_changes
+
 __all__ = ["SessionState", "scene_key"]
 
 _HORIZONTAL = "layout/horizontal"
@@ -23,6 +25,7 @@ _SHELL_VISIBLE = "layout/shell_visible"
 _EMBEDDED = "window/embedded"
 _LAST_FILE = "session/last_file"
 _REOPEN_LAST = "session/reopen_last_file"
+_EXTERNAL = "file/external_changes"
 
 
 def scene_key(path: Path) -> str:
@@ -104,6 +107,16 @@ class SessionState:
     def remember_last_file(self, path: Path) -> None:
         if self._enabled:
             self._settings.setValue(_LAST_FILE, str(path.resolve()))
+
+    def external_policy(self) -> str:
+        """How changes on disk are handled (see :mod:`manim_studio.external_changes`)."""
+        if not self._enabled:
+            return external_changes.DEFAULT_POLICY
+        return external_changes.parse_policy(self._settings.value(_EXTERNAL))
+
+    def remember_external_policy(self, policy: str) -> None:
+        if self._enabled:
+            self._settings.setValue(_EXTERNAL, external_changes.parse_policy(policy))
 
     @property
     def reopen_last_file(self) -> bool:
