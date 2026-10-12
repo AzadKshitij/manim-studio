@@ -56,7 +56,7 @@ def create_application(argv: list[str] | None = None) -> QApplication:
 def run_editor(
     path: str | None = None,
     *,
-    embedded: bool = True,
+    embedded: bool | None = None,
     preview_size: tuple[int, int] = (1280, 720),
 ) -> int:
     """Create the editor window and run the Qt event loop."""

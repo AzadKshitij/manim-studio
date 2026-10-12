@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, QSize, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -51,6 +51,7 @@ from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
 from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.editor.preview_panel import PreviewPanel
+from manim_studio.editor.session_state import SessionState
 from manim_studio.editor.shell_panel import ShellPanel
 from manim_studio.editor.stats_controller import StatsController
 from manim_studio.editor.status_chip import StatusChip
@@ -98,7 +99,7 @@ class MainWindow(QMainWindow):
         self,
         path: str | Path | None = None,
         *,
-        embedded: bool = True,
+        embedded: bool | None = None,
         preview_size: tuple[int, int] = (1280, 720),
         restore_settings: bool = True,
         settings: QSettings | None = None,
@@ -110,7 +111,6 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(load_icon())
-        self._embedded = embedded
         self._preview_size = preview_size
         self._initial_frame = initial_frame
         self._path: Path | None = None
@@ -118,6 +118,11 @@ class MainWindow(QMainWindow):
         self._auto_preview = auto_preview
         self._restore_settings = restore_settings
         self._settings = settings or QSettings("ManimStudio", "ManimStudio")
+        self._session = SessionState(self._settings, enabled=restore_settings)
+        self._layout_restored = False
+        if embedded is None:  # not chosen on the command line: keep the last mode
+            embedded = self._session.embedded() is not False
+        self._embedded = embedded
         self._theme_key = "builtin:chalkboard"
         if restore_settings:
             self._restore_theme()
@@ -137,6 +142,7 @@ class MainWindow(QMainWindow):
         self._autosave = AutosaveController(self.editor, self)
         self.timings = TimingStats()
         self.preview_panel = PreviewPanel(self, timings=self.timings)
+        self.preview_panel.set_mode(embedded=self._embedded)
         self.welcome_panel = WelcomePanel(self)
         self.timeline = TimelineWidget(self)
         self.controller = PreviewController(self, timings=self.timings)
@@ -179,10 +185,13 @@ class MainWindow(QMainWindow):
         self.completions = CompletionController(self.editor, enabled=completion, parent=self)
         if restore_settings:
             self._restore_geometry()
+        if path is None and self._session.reopen_last_file:
+            last = self._session.last_file()
+            path = last if last is not None and last.is_file() else None
         if path is not None:
             self.open_path(path)
-        else:
-            self.welcome_panel.set_recent(self.recent_files())
+        # Filled in whichever page starts up, so the recents are ready on the welcome page.
+        self.welcome_panel.set_recent(self.recent_files())
 
     # ------------------------------------------------------------------
     # UI construction
@@ -216,6 +225,7 @@ class MainWindow(QMainWindow):
         vertical.addWidget(bottom)
         vertical.setStretchFactor(0, 4)
         vertical.setStretchFactor(1, 1)
+        self._horizontal, self._vertical = horizontal, vertical
         self.setCentralWidget(vertical)
 
     def _build_actions(self) -> None:
@@ -312,6 +322,10 @@ class MainWindow(QMainWindow):
         self._embedded_action.setChecked(self._embedded)
         self._embedded_action.triggered.connect(self.set_embedded)
         view_menu.addAction(self._embedded_action)
+        self._reopen_action = QAction("Reopen last file on launch", self, checkable=True)
+        self._reopen_action.setChecked(self._session.reopen_last_file)
+        self._reopen_action.toggled.connect(self._session.set_reopen_last_file)
+        view_menu.addAction(self._reopen_action)
         self._add_action(view_menu, "Fit timeline", self.timeline.fit, "Ctrl+0")
         self._snap_action = QAction("Snap timeline", self, checkable=True)
         self._snap_action.setChecked(self.timeline.snapping)
@@ -600,6 +614,7 @@ class MainWindow(QMainWindow):
 
     def set_embedded(self, checked: bool) -> None:
         self._embedded = bool(checked)
+        self._session.remember_embedded(self._embedded)
         self.preview_panel.set_mode(embedded=self._embedded)
         if self._path is not None and self._auto_preview and self._auto_reload:
             self._start_preview()
@@ -637,10 +652,12 @@ class MainWindow(QMainWindow):
         self.controller.patches = self.patches.open_scene(self._path)
         self.watcher.watch(self._path)
         self._refresh_scene_list(self._path)
+        self._restore_scene_choice(self._path)
         self._update_title()
         self._autosave.set_path(self._path)
         self._offer_recovery()
         self._remember_recent(self._path)
+        self._session.remember_last_file(self._path)
         self._right_stack.setCurrentWidget(self.preview_panel)
         self._update_scene_actions()
         self._set_status(f"opened {self._path.name} ({len(check.scenes)} scene(s))")
@@ -776,6 +793,17 @@ class MainWindow(QMainWindow):
     ) -> Path:
         """Write a scene template to ``path``, deriving the class name when omitted."""
         return scene_files.create_scene_file(path, template_key, scene_name)
+
+    def _restore_scene_choice(self, path: Path) -> None:
+        """Select the scene this file last used; not a user choice, so it saves nothing."""
+        saved = self._session.scene_for(path)
+        index = self._scene_combo.findText(saved) if saved else -1
+        if index >= 0 and index != self._scene_combo.currentIndex():
+            self._scene_combo.blockSignals(True)
+            try:
+                self._scene_combo.setCurrentIndex(index)
+            finally:
+                self._scene_combo.blockSignals(False)
 
     def _offer_recovery(self) -> None:
         """Offer the snapshot a crash left behind, when it holds code the disk does not."""
@@ -1135,6 +1163,8 @@ class MainWindow(QMainWindow):
         self.transport_bar.set_playing(self._playback_active)
 
     def _on_scene_selected(self, name: str) -> None:
+        if self._path is not None and name:
+            self._session.remember_scene(self._path, name)
         if self._path is not None and name and self.controller.is_running:
             self.controller.load(self._path, name)
 
@@ -1717,13 +1747,26 @@ class MainWindow(QMainWindow):
         geometry = self._settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
-        self._settings.setValue("window/embedded", self._embedded)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if not self._layout_restored:
+            # Splitters only take saved sizes once the window has its real size.
+            self._layout_restored = True
+            if self._session.restore_layout(horizontal=self._horizontal, vertical=self._vertical):
+                self.shell.show()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._confirm_discard("close the editor"):
             event.ignore()
             return
         self._autosave.discard()
+        self._session.remember_layout(
+            horizontal=self._horizontal,
+            vertical=self._vertical,
+            shell_visible=not self.shell.isHidden(),
+        )
+        self._session.remember_embedded(self._embedded)
         self.watcher.stop()
         self.completions.stop()
         self.controller.shutdown()
