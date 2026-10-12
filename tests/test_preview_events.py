@@ -81,7 +81,7 @@ class _StubShell:
     def __init__(self) -> None:
         self.lines: list[str] = []
 
-    def append(self, text: str) -> None:
+    def append(self, text: str, *, reveal: bool = False) -> None:
         self.lines.append(text)
 
 

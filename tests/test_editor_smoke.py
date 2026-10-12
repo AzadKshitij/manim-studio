@@ -1270,7 +1270,8 @@ class TestTimelineToolbar:
         for name in ("Reload", "Play", "Stop", "Render preview"):
             action = window._toolbar_actions[name]
             assert not action.icon().isNull()
-            assert action.toolTip() == name
+            # Disabled actions append a reason ("— open a scene first"); the name leads.
+            assert action.toolTip().startswith(name)
 
 
 @pytest.mark.usefixtures("scene_copy")

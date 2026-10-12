@@ -6,12 +6,20 @@ from manim_studio.editor.shell_panel import ShellPanel
 
 
 class TestOutput:
-    def test_append_reveals_and_records(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+    def test_routine_append_counts_unread_without_revealing(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         panel = ShellPanel()
         qtbot.addWidget(panel)
         panel.append("hello")
-        assert panel.isVisible()
+        assert not panel.isVisible()
+        assert panel.unread == 1
         assert "hello" in panel.output.toPlainText()
+
+    def test_reveal_append_opens_dock_and_records(self, qtbot) -> None:  # type: ignore[no-untyped-def]
+        panel = ShellPanel()
+        qtbot.addWidget(panel)
+        panel.append("boom", reveal=True)
+        assert panel.isVisible()
+        assert "boom" in panel.output.toPlainText()
 
     def test_blank_append_is_ignored(self, qtbot) -> None:  # type: ignore[no-untyped-def]
         panel = ShellPanel()

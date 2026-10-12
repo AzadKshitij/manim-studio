@@ -584,8 +584,13 @@ class MainWindow(QMainWindow):
         """Remembered scenes, newest first, minus files that no longer exist."""
         if not self._restore_settings:
             return []
-        raw = self._settings.value("recent/files", [])
-        entries = [raw] if isinstance(raw, str) else [str(e) for e in raw or []]
+        raw: object = self._settings.value("recent/files", [])
+        if isinstance(raw, str):
+            entries = [raw]
+        elif isinstance(raw, list):
+            entries = [str(entry) for entry in raw]
+        else:
+            entries = []
         return recent.prune_recent(entries)
 
     def _remember_recent(self, path: Path) -> None:
