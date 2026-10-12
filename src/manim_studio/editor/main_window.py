@@ -57,6 +57,7 @@ from manim_studio.editor.stats_controller import StatsController
 from manim_studio.editor.status_chip import StatusChip
 from manim_studio.editor.styling import apply_theme
 from manim_studio.editor.timeline_controller import MediaTransport
+from manim_studio.editor.timeline_ops import TimelineOpActions
 from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
 from manim_studio.editor.unsaved import (
@@ -86,6 +87,7 @@ from manim_studio.theme import (
     themes_dir,
 )
 from manim_studio.timeline_model import TimelineLog, format_duration
+from manim_studio.timeline_ops import TimelineFacts, op_states
 
 __all__ = ["MainWindow"]
 
@@ -230,6 +232,12 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         menu_bar = self.menuBar()
+        # One set of timeline operations: the menus, shortcuts, palette and timeline
+        # menu all use these actions, so their names, shortcuts and states agree.
+        self._timeline_ops = TimelineOpActions(self)
+        self._timeline_ops.attach_to_window()
+        self._timeline_ops.attach_to_timeline(self.timeline)
+        self.timeline.set_operation_actions(self._timeline_ops.actions)
 
         file_menu = menu_bar.addMenu("&File")
         self._add_action(
@@ -299,22 +307,20 @@ class MainWindow(QMainWindow):
         self._scene_actions.append(
             self._add_action(run_menu, "Render preview video", self.render_preview_video, "Ctrl+R")
         )
-        self._add_action(
-            run_menu, "Insert hold at playhead", self.insert_hold_at_playhead, "Ctrl+Shift+H"
-        )
         self._add_action(run_menu, "Focus live shell", self.focus_shell, "Ctrl+`")
 
         timeline_menu = menu_bar.addMenu("&Timeline")
-        self._add_action(timeline_menu, "Undo timeline edit", self._undo_timing)
-        self._add_action(timeline_menu, "Redo timeline edit", self._redo_timing)
-        timeline_menu.addSeparator()
-        self._add_action(
-            timeline_menu, "Apply timeline edits to source", self.apply_edits_to_source
+        operations = self._timeline_ops
+        groups = (
+            ("undo", "redo"),
+            ("delete", "reset", "jump"),
+            ("hold", "apply", "diff"),
+            ("orphans", "discard_orphans", "discard_all"),
         )
-        self._add_action(timeline_menu, "Show timeline edits as diff…", self.show_edits_diff)
-        timeline_menu.addSeparator()
-        self._add_action(timeline_menu, "Discard orphaned edits", self.discard_orphaned_edits)
-        self._add_action(timeline_menu, "Discard all timeline edits", self.discard_all_edits)
+        for number, group in enumerate(groups):
+            if number:
+                timeline_menu.addSeparator()
+            timeline_menu.addActions([operations.action(key) for key in group])
         view_menu = menu_bar.addMenu("&View")
         self._add_action(view_menu, "Command palette…", self.open_command_palette, "Ctrl+Shift+P")
         view_menu.addSeparator()
@@ -334,6 +340,7 @@ class MainWindow(QMainWindow):
         )
         self._snap_action.toggled.connect(self.timeline.set_snapping)
         view_menu.addAction(self._snap_action)
+        self.transport_bar.bind_snap_action(self._snap_action)
         view_menu.addSeparator()
         self._theme_menu = view_menu.addMenu("Theme")
         self._theme_menu.aboutToShow.connect(self._populate_theme_menu)
@@ -465,7 +472,8 @@ class MainWindow(QMainWindow):
         self.timeline.undoRequested.connect(self._undo_timing)
         self.timeline.redoRequested.connect(self._redo_timing)
         self.transport_bar.playPauseRequested.connect(self._toggle_play)
-        self.transport_bar.editRequested.connect(self._on_transport_edit)
+        self.transport_bar.editRequested.connect(self._on_timeline_op)
+        self._timeline_ops.requested.connect(self._on_timeline_op)
         self.timeline.blockSelected.connect(self._on_block_selected)
         self.inspector.durationCommitted.connect(self._on_inspector_duration)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
@@ -509,6 +517,7 @@ class MainWindow(QMainWindow):
         self.exports.exportFinished.connect(self._on_export_finished)
         self.editor.completionsRequested.connect(self._on_completions_requested)
         self.editor.signaturesRequested.connect(self._on_signatures_requested)
+        self._refresh_edit_buttons()  # the timeline operations start in their true state
 
     # ------------------------------------------------------------------
     # Completion (Jedi worker)
@@ -963,6 +972,7 @@ class MainWindow(QMainWindow):
             self._loop_paused = True  # never auto-replay after a crash/stop
             self._was_playing = False
             self._set_transport_playing(False)
+        self._refresh_edit_buttons()  # running or not decides which operations apply
 
     def _on_transport_loop(self, enabled: bool) -> None:
         self._loop = bool(enabled)
@@ -1316,19 +1326,7 @@ class MainWindow(QMainWindow):
             {i: self.patches.iteration_count(i) for i in range(count)},
             [i for i in range(count) if self.patches.block_is_edited(i)],
         )
-        enabled = {
-            "Undo timeline edit": self.patches.can_undo,
-            "Redo timeline edit": self.patches.can_redo,
-            "Apply timeline edits to source": self.patches.edit_count > 0,
-            "Show timeline edits as diff…": self.patches.edit_count > 0,
-            "Discard orphaned edits": self.patches.orphan_count > 0,
-            "Discard all timeline edits": self.patches.edit_count > 0,
-        }
-        for text, state in enabled.items():
-            action = self._toolbar_actions.get(text)
-            if action is not None:
-                action.setEnabled(state)
-        self._refresh_inspector()
+        self._refresh_inspector()  # also enables the timeline operations that apply now
 
     def selected_block_index(self) -> int | None:
         """The block toolbar operations act on: clicked, else caret, else playhead."""
@@ -1344,24 +1342,25 @@ class MainWindow(QMainWindow):
         index = self.selected_block_index()
         running = self._path is not None and self.controller.is_running
         editable = running and index is not None and self.patches.block_ref(index) is not None
-        self.transport_bar.set_edit_state(
-            {
-                "undo": self.patches.can_undo,
-                "redo": self.patches.can_redo,
-                "delete": editable,
-                "reset": index is not None and self.patches.block_is_edited(index),
-                "jump": index is not None and self.events.call_line(index) is not None,
-                "hold": running and not self.timeline.log.is_empty,
-                "apply": self.patches.edit_count > 0,
-                "diff": self.patches.edit_count > 0,
-                "orphans": self.patches.orphan_count > 0,
-                "discard_orphans": self.patches.orphan_count > 0,
-                "discard_all": self.patches.edit_count > 0,
-            }
+        states = op_states(
+            TimelineFacts(
+                running=running,
+                has_log=not self.timeline.log.is_empty,
+                block=index,
+                block_editable=editable,
+                block_has_line=index is not None and self.events.call_line(index) is not None,
+                block_edited=index is not None and self.patches.block_is_edited(index),
+                can_undo=self.patches.can_undo,
+                can_redo=self.patches.can_redo,
+                edit_count=self.patches.edit_count,
+                orphan_count=self.patches.orphan_count,
+            )
         )
+        self._timeline_ops.apply(states)
+        self.transport_bar.set_operation_states(states)
 
-    def _on_transport_edit(self, action_id: str) -> None:
-        """A timeline-operation button was pressed."""
+    def _on_timeline_op(self, action_id: str) -> None:
+        """Run a timeline operation (from its button, a menu, a shortcut or the palette)."""
         index = self.selected_block_index()
         if action_id == "undo":
             self._undo_timing()

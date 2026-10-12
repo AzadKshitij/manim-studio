@@ -72,10 +72,11 @@ class TestTimeline:
         assert not play.enabled
         assert play.reason == "open a scene first"
 
-    def test_selected_block_operations_need_a_selection(self, window: MainWindow) -> None:
+    def test_selected_block_operations_need_a_running_scene(self, window: MainWindow) -> None:
         delete = _find(window, "Delete selected block's call").entry
         assert not delete.enabled
-        assert delete.reason == "select a block first"
+        # With no running preview there are no blocks to select, so the scene reason comes first.
+        assert delete.reason == "open a scene first"
 
 
 class TestScenesRecentsAndBlocks:

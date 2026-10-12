@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
+    QAction,
     QColor,
     QContextMenuEvent,
     QFontMetrics,
@@ -63,6 +64,8 @@ LANE_HEIGHT = 15.0
 MAX_LANES = 6
 #: Holding a block edge this close to the window edge scrolls the timeline.
 AUTOSCROLL_MARGIN_PX = 28.0
+#: The timeline operations the right-click menus offer (the shared actions, with shortcuts).
+MENU_OPERATIONS: tuple[str, ...] = ("undo", "redo", "hold", "apply", "diff", "discard_all")
 
 
 def block_color(name: str) -> QColor:
@@ -119,6 +122,7 @@ class TimelineWidget(QWidget):
         self._clips: tuple[tuple[ClipTrace, ...], ...] = ()  # animations per block
         self._clip_tip = False  # the tooltip currently shows a clip, not a block
         self._context_menu: QMenu | None = None  # kept for tests
+        self._operations: dict[str, QAction] = {}  # the shared timeline operations
         self._looping = False  # mirrors the transport's loop toggle
         self._mode: str | None = None  # "scrub" | "pan" | "resize"
         self._press_pos: QPoint | None = None
@@ -279,13 +283,28 @@ class TimelineWidget(QWidget):
         start, end = self._range
         return abs(start - block.start) < 1e-6 and abs(end - block.end) < 1e-6
 
+    def set_operation_actions(self, actions: Mapping[str, QAction]) -> None:
+        """The shared timeline operations; the right-click menus offer them with their shortcuts."""
+        self._operations = dict(actions)
+
+    def _add_operations(self, menu: QMenu, keys: tuple[str, ...]) -> None:
+        present = [self._operations[key] for key in keys if key in self._operations]
+        if not present:
+            return
+        menu.addSeparator()
+        for action in present:
+            menu.addAction(action)
+
     def context_menu(self, index: int | None) -> QMenu:
         """Build the block context menu; ``index`` is the right-clicked block."""
         menu = QMenu(self)
         if index is None:
-            menu.addAction("Fit timeline").triggered.connect(self.fit)
+            menu.addAction("Fit timeline\tCtrl+0").triggered.connect(self.fit)
             if self._range is not None:
                 menu.addAction("Clear selection").triggered.connect(self.clear_range)
+            menu.addAction("Zoom in\t+").triggered.connect(lambda: self.zoom_by(1.25))
+            menu.addAction("Zoom out\t-").triggered.connect(lambda: self.zoom_by(0.8))
+            self._add_operations(menu, MENU_OPERATIONS)
             return menu
         menu.addAction("Play this block").triggered.connect(
             lambda: self.blockPlayRequested.emit(index)
@@ -319,6 +338,7 @@ class TimelineWidget(QWidget):
         menu.addSeparator()
         menu.addAction("Jump to code").triggered.connect(lambda: self.blockActivated.emit(index))
         menu.addAction("Zoom to block").triggered.connect(lambda: self.zoom_to_block(index))
+        self._add_operations(menu, MENU_OPERATIONS)
         return menu
 
     def _copy_timing(self, index: int) -> None:
@@ -332,6 +352,12 @@ class TimelineWidget(QWidget):
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         block = self._log.block_at(self._view.x_to_time(event.pos().x()))
+        if block is not None and block.index != self._selected_index:
+            # The menu acts on the block it was opened on, so the toolbar and palette
+            # operations (which act on the selection) follow it.
+            self._selected_index = block.index
+            self.update()
+            self.blockSelected.emit(block.index)
         menu = self.context_menu(block.index if block is not None else None)
         self._context_menu = menu
         menu.exec(event.globalPos())

@@ -2,8 +2,9 @@
 
 Everything is read from the live window each time the palette opens, so enabled
 states, the scene list, recent files and blocks are current.  Menu and toolbar actions
-come from the window's own QActions (nothing is hand-maintained); timeline operations
-emit the same signals the timeline buttons emit, so both paths stay one code path.
+come from the window's own QActions (nothing is hand-maintained).  The timeline
+operations are among those actions, so the palette, menus, shortcuts and buttons run
+the same code and show the same states.
 """
 
 from __future__ import annotations
@@ -26,13 +27,6 @@ __all__ = ["build_items"]
 
 #: Actions that would reopen the palette or duplicate it; never listed.
 _EXCLUDED_TITLES = frozenset({"command palette"})
-
-#: Timeline operations that act on the selected block; they need one selected.
-_SELECTED_BLOCK_OPS: tuple[tuple[str, str], ...] = (
-    ("delete", "Delete selected block's call"),
-    ("reset", "Reset selected block's timing"),
-    ("jump", "Jump to selected block's source"),
-)
 
 
 def build_items(window: MainWindow) -> list[PaletteItem]:
@@ -61,12 +55,16 @@ def _action_items(window: MainWindow) -> list[PaletteItem]:
         seen.add(folded)
         enabled = action.isEnabled()
         detail = ("on" if action.isChecked() else "off") if action.isCheckable() else ""
+        # Timeline operations name their group and show their key (bound elsewhere).
+        shortcut = action.property("shortcut_text") or action.shortcut().toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
         entry = PaletteEntry(
             key=f"action:{folded}",
             title=title,
-            group=ACTIONS,
+            group=str(action.property("palette_group") or ACTIONS),
             detail=detail,
-            shortcut=action.shortcut().toString(QKeySequence.SequenceFormat.NativeText),
+            shortcut=str(shortcut),
             enabled=enabled,
             reason="" if enabled else _unavailable_reason(action.toolTip()),
         )
@@ -105,26 +103,6 @@ def _timeline_items(window: MainWindow) -> list[PaletteItem]:
         )
         items.append(PaletteItem(entry, run))
 
-    for key, title in _SELECTED_BLOCK_OPS:
-        enabled = transport.edit_button(key).isEnabled()
-        entry = PaletteEntry(
-            key=f"timeline:{key}",
-            title=title,
-            group=TIMELINE,
-            enabled=enabled,
-            reason="" if enabled else "select a block first",
-        )
-        items.append(PaletteItem(entry, partial(transport.editRequested.emit, key)))
-
-    orphans_enabled = transport.edit_button("orphans").isEnabled()
-    orphan_entry = PaletteEntry(
-        key="timeline:orphans",
-        title="Review orphaned edits",
-        group=TIMELINE,
-        enabled=orphans_enabled,
-        reason="" if orphans_enabled else "no orphaned edits",
-    )
-    items.append(PaletteItem(orphan_entry, partial(transport.editRequested.emit, "orphans")))
     return items
 
 
@@ -176,8 +154,8 @@ def _block_items(window: MainWindow) -> list[PaletteItem]:
 
 
 def _clean_title(text: str) -> str:
-    """Menu text without mnemonics or the trailing ellipsis: ``"&Export…"`` -> ``"Export"``."""
-    return text.replace("&", "").rstrip("…").strip()
+    """The menu text's name: no shortcut column, mnemonics or trailing ellipsis."""
+    return text.split("\t", 1)[0].replace("&", "").rstrip("…").strip()
 
 
 def _unavailable_reason(tooltip: str) -> str:
