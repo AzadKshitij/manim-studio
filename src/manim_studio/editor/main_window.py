@@ -452,6 +452,8 @@ class MainWindow(QMainWindow):
         self.welcome_panel.recentRequested.connect(self.open_path)
         self.preview_panel.errorGotoLineRequested.connect(self.editor.go_to_line)
         self.preview_panel.errorReloadRequested.connect(self.reload_preview)
+        self.preview_panel.playToggleRequested.connect(self._toggle_play)
+        self.preview_panel.frameStepRequested.connect(self._on_transport_step)
         self.editor.saveRequested.connect(self.save_buffer)
         self.editor.fileDropped.connect(self.open_path)
         self.editor.cursorMoved.connect(self._on_cursor_moved)
@@ -958,10 +960,11 @@ class MainWindow(QMainWindow):
     # Transport toolbar
     # ------------------------------------------------------------------
 
-    def _on_transport_step(self, direction: int) -> None:
+    def _on_transport_step(self, frames: int) -> None:
+        """Step the playhead by ``frames`` (negative = back): the buttons step one at a time."""
         if self._path is None or not self.controller.is_running:
             return
-        self.scrub_to_time(self.timeline.playhead_time + direction * self.timeline.frame_step)
+        self.scrub_to_time(self.timeline.playhead_time + frames * self.timeline.frame_step)
 
     def _on_transport_jump(self, where: str) -> None:
         if self._path is None or not self.controller.is_running:

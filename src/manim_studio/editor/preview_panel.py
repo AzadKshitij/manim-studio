@@ -9,7 +9,7 @@ transport toolbar and the main toolbar; orchestration lives in
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QImage, QPixmap, QResizeEvent, QShowEvent
+from PySide6.QtGui import QImage, QMouseEvent, QPixmap, QResizeEvent, QShowEvent, QWheelEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -33,9 +33,13 @@ class PreviewPanel(QWidget):
 
     errorGotoLineRequested = Signal(int)  # the error banner's Go to line
     errorReloadRequested = Signal()  # the error banner's Reload
+    playToggleRequested = Signal()  # a click on the picture: play or pause
+    frameStepRequested = Signal(int)  # wheel travel in frames (negative = back)
 
     #: How long after the last streamed frame the viewport re-scales smoothly.
     SETTLE_MS = 150
+    #: Qt reports one mouse-wheel notch as 120 units of angle; one notch steps one frame.
+    WHEEL_NOTCH = 120
 
     def __init__(
         self,
@@ -46,6 +50,7 @@ class PreviewPanel(QWidget):
         super().__init__(parent)
         self._image: QImage | None = None
         self._embedded = True
+        self._wheel_travel = 0  # wheel units that do not make a whole notch yet
         self.timings = timings if timings is not None else TimingStats()
         # Streaming frames scale with a fast (nearest) filter — the eye cannot
         # resolve detail in motion — and a short settle timer re-renders the last
@@ -78,6 +83,7 @@ class PreviewPanel(QWidget):
         self._viewport.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._viewport.setMinimumSize(320, 180)
         self._viewport.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._viewport.setToolTip("Click: play or pause  ·  Wheel: step frames")
 
         self._placeholder = QLabel(
             "External GL window mode\n\n"
@@ -95,6 +101,7 @@ class PreviewPanel(QWidget):
         self._body.setLayout(self._stack)
         self._loading = LoadingOverlay(self._body)
         self._body.installEventFilter(self)
+        self._viewport.installEventFilter(self)  # after the body: the filter reads it
         self._banner = ErrorBanner(self)
         self._banner.gotoLineRequested.connect(self.errorGotoLineRequested)
         self._banner.reloadRequested.connect(self.errorReloadRequested)
@@ -186,7 +193,29 @@ class PreviewPanel(QWidget):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self._body and event.type() == QEvent.Type.Resize:
             self._place_loading()
+        elif watched is self._viewport:
+            if (
+                isinstance(event, QMouseEvent)
+                and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                self.playToggleRequested.emit()
+                return True
+            if isinstance(event, QWheelEvent):
+                return self._wheel_step(event.angleDelta().y())
         return super().eventFilter(watched, event)
+
+    def _wheel_step(self, delta: int) -> bool:
+        """Step one frame per notch of wheel travel; wheel up steps back, as the timeline does.
+
+        Trackpads send many small deltas, so travel is summed until it makes a notch.
+        """
+        self._wheel_travel += delta
+        notches = int(self._wheel_travel / self.WHEEL_NOTCH)
+        if notches:
+            self._wheel_travel -= notches * self.WHEEL_NOTCH
+            self.frameStepRequested.emit(-notches)
+        return True
 
     def show_loading(self, text: str) -> None:
         """Spinner over the body; the last frame, if any, stays underneath, dimmed."""
