@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QToolBar,
     QToolButton,
@@ -30,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from manim_studio import APP_NAME
+from manim_studio import APP_NAME, recent
 from manim_studio.editor import api_cache, scene_files
 from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
 from manim_studio.editor.code_editor import CodeEditor
@@ -53,6 +54,7 @@ from manim_studio.editor.timeline_controller import MediaTransport
 from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
 from manim_studio.editor.video_mode import VideoModeController
+from manim_studio.editor.welcome_panel import WelcomePanel
 from manim_studio.scene_runner import check_scene_file
 from manim_studio.site_index import block_line_range
 from manim_studio.stats import TimingStats, process_rss_bytes
@@ -118,6 +120,7 @@ class MainWindow(QMainWindow):
         self.editor = CodeEditor(self)
         self.timings = TimingStats()
         self.preview_panel = PreviewPanel(self, timings=self.timings)
+        self.welcome_panel = WelcomePanel(self)
         self.timeline = TimelineWidget(self)
         self.controller = PreviewController(self, timings=self.timings)
         self.exports = ExportController(self)
@@ -131,6 +134,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_shell_dock()
         self._build_status_bar()
+        self._update_scene_actions()
         self.video = VideoModeController(
             transport=self.transport,
             preview_panel=self.preview_panel,
@@ -160,6 +164,8 @@ class MainWindow(QMainWindow):
             self._restore_geometry()
         if path is not None:
             self.open_path(path)
+        else:
+            self.welcome_panel.set_recent(self.recent_files())
 
     # ------------------------------------------------------------------
     # UI construction
@@ -169,7 +175,11 @@ class MainWindow(QMainWindow):
         horizontal = QSplitter(Qt.Orientation.Horizontal, self)
         self.editor_pane = EditorPane(self.editor, self)
         horizontal.addWidget(self.editor_pane)
-        horizontal.addWidget(self.preview_panel)
+        self._right_stack = QStackedWidget(self)
+        self._right_stack.addWidget(self.preview_panel)
+        self._right_stack.addWidget(self.welcome_panel)
+        self._right_stack.setCurrentWidget(self.welcome_panel)
+        horizontal.addWidget(self._right_stack)
         horizontal.setStretchFactor(0, 3)
         horizontal.setStretchFactor(1, 2)
 
@@ -199,17 +209,24 @@ class MainWindow(QMainWindow):
             file_menu, "New scene…", self.new_scene_dialog, QKeySequence.StandardKey.New
         )
         self._add_action(file_menu, "Open…", self.open_dialog, QKeySequence.StandardKey.Open)
+        self._recent_menu = file_menu.addMenu("Open recent")
+        self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
         self._add_action(file_menu, "Save", self.save_buffer, QKeySequence.StandardKey.Save)
         self._add_action(
             file_menu, "Save As…", self.save_buffer_as, QKeySequence.StandardKey.SaveAs
         )
         file_menu.addSeparator()
-        self._add_action(file_menu, "Export…", self.export_dialog, "Ctrl+E")
-        self._add_action(
-            file_menu,
-            "Export still…",
-            lambda: self.export_dialog(still=True),
-            "Ctrl+Shift+E",
+        self._scene_actions: list[QAction] = []
+        self._scene_actions.append(
+            self._add_action(file_menu, "Export…", self.export_dialog, "Ctrl+E")
+        )
+        self._scene_actions.append(
+            self._add_action(
+                file_menu,
+                "Export still…",
+                lambda: self.export_dialog(still=True),
+                "Ctrl+Shift+E",
+            )
         )
         file_menu.addSeparator()
         self._add_action(file_menu, "Quit", self.close, QKeySequence.StandardKey.Quit)
@@ -243,14 +260,18 @@ class MainWindow(QMainWindow):
             )
 
         run_menu = menu_bar.addMenu("&Run")
-        self._add_action(run_menu, "Reload preview", self.reload_preview, "F5")
-        self._add_action(
-            run_menu, "Reload preview (discard cache)", self.reload_preview_fresh, "Ctrl+F5"
-        )
-        self._add_action(run_menu, "Play from playhead", self.request_play, "F6")
-        self._add_action(run_menu, "Stop playback", self.request_stop, "F7")
+        self._scene_actions += [
+            self._add_action(run_menu, "Reload preview", self.reload_preview, "F5"),
+            self._add_action(
+                run_menu, "Reload preview (discard cache)", self.reload_preview_fresh, "Ctrl+F5"
+            ),
+            self._add_action(run_menu, "Play from playhead", self.request_play, "F6"),
+            self._add_action(run_menu, "Stop playback", self.request_stop, "F7"),
+        ]
         run_menu.addSeparator()
-        self._add_action(run_menu, "Render preview video", self.render_preview_video, "Ctrl+R")
+        self._scene_actions.append(
+            self._add_action(run_menu, "Render preview video", self.render_preview_video, "Ctrl+R")
+        )
         self._add_action(
             run_menu, "Insert hold at playhead", self.insert_hold_at_playhead, "Ctrl+Shift+H"
         )
@@ -311,12 +332,15 @@ class MainWindow(QMainWindow):
         self._scene_combo.setMinimumWidth(160)
         toolbar.addWidget(self._scene_combo)
         toolbar.addSeparator()
-        self._add_toolbar_action(toolbar, "Render preview", self.render_preview_video, "render")
+        render = self._add_toolbar_action(
+            toolbar, "Render preview", self.render_preview_video, "render"
+        )
         spacer = QWidget(self)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
         export = self._add_toolbar_action(toolbar, "Export…", self.export_dialog, "export")
         self._label_toolbar_button(toolbar, export)
+        self._scene_actions += [play, reload_, stop, render, export]
 
     def _build_shell_dock(self) -> None:
         self.shell = ShellPanel(self)
@@ -331,11 +355,21 @@ class MainWindow(QMainWindow):
         self._mem_label.setToolTip("Filmstrip cache RAM and process memory (Help > App stats…)")
         self._latex_label = QLabel("")
         self._cursor_label = QLabel("Ln 1, Col 1")
+        self._shell_button = QToolButton(self)
+        self._shell_button.setAutoRaise(True)
+        self._shell_button.setText("Live shell")
+        self._shell_button.setToolTip("Show the live shell (Ctrl+`)")
+        self._shell_button.clicked.connect(self.focus_shell)
+        self.shell.unreadChanged.connect(self._on_shell_unread)
+        bar.addPermanentWidget(self._shell_button)
         bar.addPermanentWidget(self._cursor_label)
         bar.addPermanentWidget(self._latex_label)
         bar.addPermanentWidget(self._mem_label)
         bar.addPermanentWidget(self._host_state_label)
         self.refresh_latex_indicator()
+
+    def _on_shell_unread(self, count: int) -> None:
+        self._shell_button.setText(f"Live shell · {count}" if count else "Live shell")
 
     def refresh_latex_indicator(self) -> None:
         from manim_studio.latex import latex_status
@@ -366,6 +400,9 @@ class MainWindow(QMainWindow):
                 self._start_preview()
 
     def _connect_signals(self) -> None:
+        self.welcome_panel.openRequested.connect(self.open_dialog)
+        self.welcome_panel.newRequested.connect(self.new_scene_dialog)
+        self.welcome_panel.recentRequested.connect(self.open_path)
         self.editor.saveRequested.connect(self.save_buffer)
         self.editor.fileDropped.connect(self.open_path)
         self.editor.cursorMoved.connect(self._on_cursor_moved)
@@ -521,7 +558,8 @@ class MainWindow(QMainWindow):
         check = check_scene_file(target)
         if not check.ok:
             self._set_status(f"cannot open: {check.error}")
-            self.shell.append(f"open failed: {target}: {check.error}")
+            self.shell.append(f"open failed: {target}: {check.error}", reveal=True)
+            self._forget_recent(target)
             return False
         self.editor.load_file(target)
         self._path = target.resolve()
@@ -531,11 +569,54 @@ class MainWindow(QMainWindow):
         self.watcher.watch(self._path)
         self._refresh_scene_list(self._path)
         self._update_title()
+        self._remember_recent(self._path)
+        self._right_stack.setCurrentWidget(self.preview_panel)
+        self._update_scene_actions()
         self._set_status(f"opened {self._path.name} ({len(check.scenes)} scene(s))")
         self._warm_up_completion()
         if self._auto_reload:
             self._start_preview()
         return True
+
+    # Recent files ------------------------------------------------------
+
+    def recent_files(self) -> list[str]:
+        """Remembered scenes, newest first, minus files that no longer exist."""
+        if not self._restore_settings:
+            return []
+        raw = self._settings.value("recent/files", [])
+        entries = [raw] if isinstance(raw, str) else [str(e) for e in raw or []]
+        return recent.prune_recent(entries)
+
+    def _remember_recent(self, path: Path) -> None:
+        if not self._restore_settings:
+            return
+        self._settings.setValue("recent/files", recent.push_recent(self.recent_files(), path))
+
+    def _forget_recent(self, path: Path) -> None:
+        if not self._restore_settings:
+            return
+        key = str(path.resolve()).casefold()
+        kept = [e for e in self.recent_files() if str(Path(e).resolve()).casefold() != key]
+        self._settings.setValue("recent/files", kept)
+
+    def _populate_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        entries = self.recent_files()
+        for entry in entries:
+            action = self._recent_menu.addAction(Path(entry).name)
+            action.setToolTip(entry)
+            action.triggered.connect(lambda checked=False, p=entry: self.open_path(p))
+        if not entries:
+            self._recent_menu.addAction("(none)").setEnabled(False)
+
+    def _update_scene_actions(self) -> None:
+        """Enable scene-dependent actions only while a scene is open."""
+        has_scene = self._path is not None
+        for action in self._scene_actions:
+            action.setEnabled(has_scene)
+            tip = action.text().replace("&", "")
+            action.setToolTip(tip if has_scene else f"{tip} — open a scene first")
 
     def _refresh_scene_list(self, path: Path) -> tuple[str, ...]:
         """Repopulate the scene combo from the file without impersonating a user.

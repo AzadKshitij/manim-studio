@@ -183,10 +183,10 @@ class PreviewEvents(QObject):
     def on_error(self, message: dict[str, Any]) -> None:
         text = str(message.get("message", "unknown error"))
         self._preview_panel.set_status("error", text)
-        self._shell.append(f"ERROR: {text}")
+        self._shell.append(f"ERROR: {text}", reveal=True)
         traceback_text = str(message.get("traceback", ""))
         if traceback_text:
-            self._shell.append(traceback_text.rstrip())
+            self._shell.append(traceback_text.rstrip(), reveal=True)
         line = message.get("line")
         if isinstance(line, int):
             self._editor.set_error_marker(line, text)
