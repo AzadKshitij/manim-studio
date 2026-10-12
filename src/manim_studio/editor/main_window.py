@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from manim_studio import APP_NAME, recent
 from manim_studio.editor import api_cache, scene_files
+from manim_studio.editor.autosave_controller import AutosaveController
 from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
 from manim_studio.editor.code_editor import CodeEditor
 from manim_studio.editor.completion_controller import CompletionController
@@ -55,7 +56,14 @@ from manim_studio.editor.styling import apply_theme
 from manim_studio.editor.timeline_controller import MediaTransport
 from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
-from manim_studio.editor.unsaved import CANCEL, SAVE, ask_discard
+from manim_studio.editor.unsaved import (
+    CANCEL,
+    DISCARD_RECOVERY,
+    RECOVER,
+    SAVE,
+    ask_discard,
+    ask_recovery,
+)
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.editor.welcome_panel import WelcomePanel
 from manim_studio.scene_runner import check_scene_file
@@ -121,6 +129,7 @@ class MainWindow(QMainWindow):
         self._speed = 1.0
 
         self.editor = CodeEditor(self)
+        self._autosave = AutosaveController(self.editor, self)
         self.timings = TimingStats()
         self.preview_panel = PreviewPanel(self, timings=self.timings)
         self.welcome_panel = WelcomePanel(self)
@@ -605,6 +614,8 @@ class MainWindow(QMainWindow):
         self.watcher.watch(self._path)
         self._refresh_scene_list(self._path)
         self._update_title()
+        self._autosave.set_path(self._path)
+        self._offer_recovery()
         self._remember_recent(self._path)
         self._right_stack.setCurrentWidget(self.preview_panel)
         self._update_scene_actions()
@@ -741,6 +752,19 @@ class MainWindow(QMainWindow):
         """Write a scene template to ``path``, deriving the class name when omitted."""
         return scene_files.create_scene_file(path, template_key, scene_name)
 
+    def _offer_recovery(self) -> None:
+        """Offer the snapshot a crash left behind, when it holds code the disk does not."""
+        recovered = self._autosave.pending_recovery()
+        if recovered is None or self._path is None:
+            return
+        choice = ask_recovery(self, self._path.name)
+        self._autosave.release()
+        if choice == RECOVER:
+            self.editor.replace_text(recovered)
+            self._set_status("recovered unsaved changes — save to keep them")
+        elif choice == DISCARD_RECOVERY:
+            self._autosave.discard()
+
     def _confirm_discard(self, action: str) -> bool:
         """Before ``action`` replaces or closes the buffer: True when it may go ahead."""
         if not scene_files.has_unsaved_changes(
@@ -757,6 +781,7 @@ class MainWindow(QMainWindow):
             return not scene_files.has_unsaved_changes(
                 self._path, self.editor.text(), self.editor.is_modified()
             )
+        self._autosave.discard()  # the edits are being thrown away
         return True
 
     def save_buffer(self) -> None:
@@ -772,6 +797,7 @@ class MainWindow(QMainWindow):
             self._set_status(f"no changes — {self._path.name} is up to date")
             return
         self.editor.save_file(self._path)
+        self._autosave.discard()
         self.watcher.note_save()
         self._update_title()
         self._set_status(f"saved {self._path.name}")
@@ -1672,6 +1698,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard("close the editor"):
             event.ignore()
             return
+        self._autosave.discard()
         self.watcher.stop()
         self.completions.stop()
         self.controller.shutdown()
