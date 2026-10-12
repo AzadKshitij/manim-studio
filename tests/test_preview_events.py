@@ -65,6 +65,8 @@ class _StubPanel:
         self.cache_status = "sentinel"
         self.loading: list[str] = []
         self.loading_hidden = 0
+        self.errors: list[tuple[str, int | None]] = []
+        self.error_cleared = 0
 
     def set_status(self, state: str, note: str = "") -> None:
         self.statuses.append((state, note))
@@ -83,6 +85,12 @@ class _StubPanel:
 
     def hide_loading(self) -> None:
         self.loading_hidden += 1
+
+    def show_error(self, text: str, line: int | None) -> None:
+        self.errors.append((text, line))
+
+    def clear_error(self) -> None:
+        self.error_cleared += 1
 
 
 class _StubShell:
@@ -379,3 +387,30 @@ class TestLoadingStages:
         h.events.on_log({**SAMPLE_LOG, "cause": "patches"})
         assert h.panel.loading == []
         assert h.panel.loading_hidden == 0
+
+
+class TestErrorBanner:
+    """A failure is named over the preview, and a successful trace clears it."""
+
+    def test_scene_error_carries_its_line(self) -> None:
+        h = _Harness()
+        h.events.on_error({"message": "ValueError: boom", "line": 3, "traceback": "tb"})
+        assert h.panel.errors == [("ValueError: boom", 3)]
+
+    def test_error_without_a_line_has_no_line(self) -> None:
+        h = _Harness()
+        h.events.on_error({"message": "LaTeX failed"})
+        assert h.panel.errors == [("LaTeX failed", None)]
+
+    def test_a_successful_trace_clears_the_error(self) -> None:
+        h = _Harness()
+        h.events.on_error({"message": "boom", "line": 2})
+        h.events.on_log(SAMPLE_LOG)
+        assert h.panel.error_cleared == 1
+
+    def test_a_crashed_host_says_how_to_recover(self) -> None:
+        h = _Harness()
+        h.controller.stateChanged.emit("crashed")
+        text, line = h.panel.errors[-1]
+        assert line is None
+        assert "Reload" in text

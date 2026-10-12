@@ -158,6 +158,7 @@ class PreviewEvents(QObject):
             self._preview_panel.set_time(self._timeline.playhead_time, self._total_duration)
             self._play_from_index = None
         self._advance_loading(loading.TRACED)
+        self._preview_panel.clear_error()
         self._status_line(
             f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
         )
@@ -198,6 +199,7 @@ class PreviewEvents(QObject):
         line = message.get("line")
         if isinstance(line, int):
             self._editor.set_error_marker(line, text)
+        self._preview_panel.show_error(text, line if isinstance(line, int) else None)
         if "LaTeX" in text or "latex" in text:
             self._refresh_latex()
             self._status_line(
@@ -236,4 +238,7 @@ class PreviewEvents(QObject):
             self._advance_loading(loading.FAILED)
         if state == "crashed":
             self._preview_panel.set_status("crashed", "host process died — press Reload")
+            self._preview_panel.show_error(
+                "The preview host stopped unexpectedly. Press Reload to restart it.", None
+            )
             self._status_line("preview host crashed")

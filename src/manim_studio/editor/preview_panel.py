@@ -8,7 +8,7 @@ transport toolbar and the main toolbar; orchestration lives in
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from manim_studio.editor.elided_label import ElidedLabel
+from manim_studio.editor.error_banner import ErrorBanner
 from manim_studio.editor.loading_overlay import LoadingOverlay
 from manim_studio.stats import TimingStats
 from manim_studio.theme import Theme, current_theme
@@ -30,6 +31,9 @@ __all__ = ["PreviewPanel"]
 
 class PreviewPanel(QWidget):
     """Embedded preview viewport (transport lives on the timeline toolbar)."""
+
+    errorGotoLineRequested = Signal(int)  # the error banner's Go to line
+    errorReloadRequested = Signal()  # the error banner's Reload
 
     #: How long after the last streamed frame the viewport re-scales smoothly.
     SETTLE_MS = 150
@@ -91,14 +95,22 @@ class PreviewPanel(QWidget):
         self._stack = QStackedLayout()
         self._stack.addWidget(self._placeholder)
         self._stack.addWidget(self._viewport)
-        # Sits over the body (not the header) and is positioned in resizeEvent.
-        self._loading = LoadingOverlay(self)
+        # The body holds the stacked pages and the spinner; the banner sits above it.
+        self._body = QWidget(self)
+        self._body.setObjectName("previewBody")
+        self._body.setLayout(self._stack)
+        self._loading = LoadingOverlay(self._body)
+        self._body.installEventFilter(self)
+        self._banner = ErrorBanner(self)
+        self._banner.gotoLineRequested.connect(self.errorGotoLineRequested)
+        self._banner.reloadRequested.connect(self.errorReloadRequested)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(header_bar)
-        layout.addLayout(self._stack, 1)
+        layout.addWidget(self._banner)
+        layout.addWidget(self._body, 1)
 
         self._state = "idle"
         self._state_detail = ""
@@ -189,6 +201,18 @@ class PreviewPanel(QWidget):
         self._place_loading()
         super().resizeEvent(event)
 
+    def show_error(self, message: str, line: int | None) -> None:
+        """Name the error over the preview; the last good frame stays underneath."""
+        self._banner.show_error(message, line)
+
+    def clear_error(self) -> None:
+        self._banner.clear()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self._body and event.type() == QEvent.Type.Resize:
+            self._place_loading()
+        return super().eventFilter(watched, event)
+
     def show_loading(self, text: str) -> None:
         """Spinner over the body; the last frame, if any, stays underneath, dimmed."""
         self._loading.set_caption(text, veil=self._image is not None)
@@ -197,8 +221,7 @@ class PreviewPanel(QWidget):
         self._loading.clear()
 
     def _place_loading(self) -> None:
-        top = self._header_bar.height()
-        self._loading.setGeometry(0, top, self.width(), max(0, self.height() - top))
+        self._loading.setGeometry(self._body.rect())
 
     def showEvent(self, event: QShowEvent) -> None:
         # A frame that arrived while hidden was stored but never scaled.

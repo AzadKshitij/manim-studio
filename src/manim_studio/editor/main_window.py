@@ -419,6 +419,8 @@ class MainWindow(QMainWindow):
         self.welcome_panel.openRequested.connect(self.open_dialog)
         self.welcome_panel.newRequested.connect(self.new_scene_dialog)
         self.welcome_panel.recentRequested.connect(self.open_path)
+        self.preview_panel.errorGotoLineRequested.connect(self.editor.go_to_line)
+        self.preview_panel.errorReloadRequested.connect(self.reload_preview)
         self.editor.saveRequested.connect(self.save_buffer)
         self.editor.fileDropped.connect(self.open_path)
         self.editor.cursorMoved.connect(self._on_cursor_moved)

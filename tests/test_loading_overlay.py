@@ -124,11 +124,12 @@ class TestPreviewPanelIntegration:
         panel.show()
         panel.show_loading("Starting preview…")
         overlay = panel.findChild(LoadingOverlay)
-        header = panel.findChild(QWidget, "panelHeader")
-        assert overlay is not None and header is not None
+        body = panel.findChild(QWidget, "previewBody")
+        assert overlay is not None and body is not None
         qtbot.waitUntil(lambda: overlay.is_showing)
-        assert overlay.geometry().top() == header.height()
-        assert overlay.geometry().height() == panel.height() - header.height()
+        assert overlay.parentWidget() is body
+        assert overlay.geometry() == body.rect()
+        assert body.geometry().top() > 0  # the body sits below the header
         panel.hide_loading()
 
     def test_reload_dims_the_last_frame_but_cold_start_does_not(self, qtbot) -> None:  # type: ignore[no-untyped-def]
