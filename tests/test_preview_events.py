@@ -63,6 +63,8 @@ class _StubPanel:
         self.times: list[tuple[float, float]] = []
         self.frames: list[QImage] = []
         self.cache_status = "sentinel"
+        self.loading: list[str] = []
+        self.loading_hidden = 0
 
     def set_status(self, state: str, note: str = "") -> None:
         self.statuses.append((state, note))
@@ -75,6 +77,12 @@ class _StubPanel:
 
     def set_cache_status(self, text: str) -> None:
         self.cache_status = text
+
+    def show_loading(self, text: str) -> None:
+        self.loading.append(text)
+
+    def hide_loading(self) -> None:
+        self.loading_hidden += 1
 
 
 class _StubShell:
@@ -93,6 +101,8 @@ class _StubController(QObject):
     errorReceived = Signal(dict)
     frameReceived = Signal(QImage)
     stateChanged = Signal(str)
+    helloReceived = Signal(dict)
+    loadRequested = Signal()
 
 
 class _Harness:
@@ -310,3 +320,62 @@ class TestClips:
         h.events.on_log({**SAMPLE_LOG, "clips": bad})
         assert h.events.clips(0) == ()
         assert h.timeline.log.num_blocks == 2
+
+
+class TestLoadingStages:
+    """The spinner follows the host's real events: start, hello, trace, frame."""
+
+    def test_cold_start_runs_through_every_stage(self) -> None:
+        h = _Harness()
+        h.controller.stateChanged.emit("starting")
+        assert h.panel.loading == ["Starting preview…"]
+        h.controller.helloReceived.emit({"channel": "control"})
+        assert h.panel.loading[-1] == "Importing scene…"
+        h.events.on_log(SAMPLE_LOG)
+        assert h.panel.loading[-1] == "Rendering first frame…"
+        h.controller.frameReceived.emit(QImage())
+        assert h.panel.loading_hidden == 1
+
+    def test_reload_shows_reloading_and_ends_on_frame(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        assert h.panel.loading == ["Reloading scene…"]
+        h.events.on_log(SAMPLE_LOG)
+        h.controller.frameReceived.emit(QImage())
+        assert h.panel.loading_hidden == 1
+
+    def test_repeated_load_requests_do_not_restart_the_spinner(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.controller.loadRequested.emit()
+        assert h.panel.loading == ["Reloading scene…"]
+
+    def test_idle_before_the_trace_does_not_end_loading(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.events.on_status("idle", {})
+        assert h.panel.loading_hidden == 0
+
+    def test_idle_after_the_trace_ends_loading_when_no_frames_come(self) -> None:
+        # External-window mode streams no frames, so the host's idle is the finish line.
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.events.on_log(SAMPLE_LOG)
+        h.events.on_status("idle", {})
+        assert h.panel.loading_hidden == 1
+
+    def test_error_and_crash_end_loading(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.events.on_error({"message": "boom"})
+        assert h.panel.loading_hidden == 1
+        h.controller.loadRequested.emit()
+        h.controller.stateChanged.emit("crashed")
+        assert h.panel.loading_hidden == 2
+
+    def test_patch_trace_without_a_load_shows_nothing(self) -> None:
+        # Timeline edits re-trace in place; they must not raise the spinner.
+        h = _Harness()
+        h.events.on_log({**SAMPLE_LOG, "cause": "patches"})
+        assert h.panel.loading == []
+        assert h.panel.loading_hidden == 0

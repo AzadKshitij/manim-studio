@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QLabel
 
+from manim_studio import loading
 from manim_studio.timeline_model import block_for_line, format_duration, parse_call_lines, parse_log
 from manim_studio.tracer import ClipTrace, parse_clips
 
@@ -62,7 +63,10 @@ class PreviewEvents(QObject):
         self._playing = False
         self._call_lines: tuple[int | None, ...] = ()
         self._clips: tuple[tuple[ClipTrace, ...], ...] = ()
+        self._loading_stage: str | None = None
 
+        controller.helloReceived.connect(self.on_hello)
+        controller.loadRequested.connect(self.on_load_requested)
         controller.logReceived.connect(self.on_log)
         controller.statusChanged.connect(self.on_status)
         controller.tickReceived.connect(self.on_tick)
@@ -153,12 +157,15 @@ class PreviewEvents(QObject):
             )
             self._preview_panel.set_time(self._timeline.playhead_time, self._total_duration)
             self._play_from_index = None
+        self._advance_loading(loading.TRACED)
         self._status_line(
             f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
         )
 
     def on_status(self, state: str, message: dict[str, Any]) -> None:
         note = str(message.get("note", ""))
+        settled = state not in ("error", "closed")
+        self._advance_loading(loading.SETTLED if settled else loading.FAILED)
         self._playing = state == "playing"
         self._preview_panel.set_status(state, note)
         self._timeline.set_playing(self._playing)
@@ -183,6 +190,7 @@ class PreviewEvents(QObject):
     def on_error(self, message: dict[str, Any]) -> None:
         text = str(message.get("message", "unknown error"))
         self._preview_panel.set_status("error", text)
+        self._advance_loading(loading.FAILED)
         self._shell.append(f"ERROR: {text}", reveal=True)
         traceback_text = str(message.get("traceback", ""))
         if traceback_text:
@@ -198,12 +206,34 @@ class PreviewEvents(QObject):
         else:
             self._status_line(f"preview error: {text}")
 
+    def on_hello(self, _hello: dict[str, Any]) -> None:
+        self._advance_loading(loading.HELLO)
+
+    def on_load_requested(self) -> None:
+        self._advance_loading(loading.BEGIN_RELOAD)
+
     def on_frame(self, image: QImage) -> None:
+        self._advance_loading(loading.FRAME)
         if not self._video_mode_active():
             self._preview_panel.set_frame(image)
 
+    def _advance_loading(self, event: str) -> None:
+        """Move the loading spinner through the stage ``event`` leads to."""
+        stage = loading.next_stage(self._loading_stage, event)
+        if stage == self._loading_stage:
+            return
+        self._loading_stage = stage
+        if stage is None:
+            self._preview_panel.hide_loading()
+        else:
+            self._preview_panel.show_loading(loading.caption(stage))
+
     def on_host_state(self, state: str) -> None:
         self._host_state_label.setText(f"preview: {state}")
+        if state == "starting":
+            self._advance_loading(loading.BEGIN_START)
+        elif state in ("crashed", "stopped"):
+            self._advance_loading(loading.FAILED)
         if state == "crashed":
             self._preview_panel.set_status("crashed", "host process died — press Reload")
             self._status_line("preview host crashed")

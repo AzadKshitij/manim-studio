@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from manim_studio.editor.elided_label import ElidedLabel
+from manim_studio.editor.loading_overlay import LoadingOverlay
 from manim_studio.stats import TimingStats
 from manim_studio.theme import Theme, current_theme
 from manim_studio.timeline_model import format_duration
@@ -65,6 +66,7 @@ class PreviewPanel(QWidget):
         header_bar.setObjectName("panelHeader")
         header_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         header_bar.setFixedHeight(32)
+        self._header_bar = header_bar
         header = QHBoxLayout(header_bar)
         header.setContentsMargins(12, 0, 12, 0)
         header.addWidget(self._mode_label)
@@ -89,6 +91,8 @@ class PreviewPanel(QWidget):
         self._stack = QStackedLayout()
         self._stack.addWidget(self._placeholder)
         self._stack.addWidget(self._viewport)
+        # Sits over the body (not the header) and is positioned in resizeEvent.
+        self._loading = LoadingOverlay(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -182,7 +186,19 @@ class PreviewPanel(QWidget):
         # and let the next streamed frame take over in fast mode.
         self._settle_timer.stop()
         self._rescale(fast=False)
+        self._place_loading()
         super().resizeEvent(event)
+
+    def show_loading(self, text: str) -> None:
+        """Spinner over the body; the last frame, if any, stays underneath, dimmed."""
+        self._loading.set_caption(text, veil=self._image is not None)
+
+    def hide_loading(self) -> None:
+        self._loading.clear()
+
+    def _place_loading(self) -> None:
+        top = self._header_bar.height()
+        self._loading.setGeometry(0, top, self.width(), max(0, self.height() - top))
 
     def showEvent(self, event: QShowEvent) -> None:
         # A frame that arrived while hidden was stored but never scaled.
