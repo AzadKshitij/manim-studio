@@ -40,8 +40,8 @@ class TimelineOp:
 
 
 OPS: tuple[TimelineOp, ...] = (
-    TimelineOp("undo", "Undo timeline edit", "undo", "Ctrl+Z", "display", "Undo", "edit"),
-    TimelineOp("redo", "Redo timeline edit", "redo", "Ctrl+Y", "display", "", "edit"),
+    TimelineOp("undo", "Undo", "undo", "Ctrl+Z", "display", "Undo", "edit"),
+    TimelineOp("redo", "Redo", "redo", "Ctrl+Y", "display", "", "edit"),
     TimelineOp(
         "delete", "Delete selected block's call", "delete", "Del", "timeline", "Delete", "edit"
     ),
@@ -101,6 +101,7 @@ class TimelineFacts:
     """What the editor knows right now, from which availability follows."""
 
     running: bool = False  # a scene is open and its preview host runs
+    scene_open: bool = False  # a scene file is open, whether or not its preview runs
     has_log: bool = False  # the trace has blocks
     block: int | None = None  # the block the operations act on (clicked, caret or playhead)
     block_editable: bool = False  # the block's call exists in the source (so it can be deleted)
@@ -122,6 +123,8 @@ def op_states(facts: TimelineFacts) -> dict[str, OpState]:
     """Whether each operation is available, and the reason when it is not."""
     no_block = "select a block first"
     no_scene = "open a scene first"
+    # With a scene open, the preview is what is missing; saying "open a scene" would mislead.
+    not_running = "start the preview first" if facts.scene_open else no_scene
     no_edits = "no timeline edits"
     no_orphans = "no orphaned edits"
     states: dict[str, OpState] = {}
@@ -143,11 +146,11 @@ def op_states(facts: TimelineFacts) -> dict[str, OpState]:
         gate("reset", facts.block_edited, "this block has no timeline edits")
         gate("jump", facts.block_has_line, "this block has no source line")
     if not facts.running:
-        states["delete"] = OpState(False, no_scene)
+        states["delete"] = OpState(False, not_running)
     gate(
         "hold",
         facts.running and facts.has_log,
-        no_scene if not facts.running else "the trace is empty",
+        not_running if not facts.running else "the trace is empty",
     )
     gate("apply", facts.edit_count > 0, no_edits)
     gate("diff", facts.edit_count > 0, no_edits)

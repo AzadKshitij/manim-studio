@@ -177,6 +177,12 @@ class TimelineTransport(QWidget):
         layout.addSpacing(6)
         layout.addWidget(self.edits_label)
         layout.addStretch(1)
+        # A click on the toolbar gives focus to the bar, which hands it to the timeline (see
+        # MainWindow); the buttons stay reachable with Tab but do not take a click themselves.
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        for button in self.findChildren(QToolButton):
+            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._speed_combo.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self._measure()
 
     # ------------------------------------------------------------------

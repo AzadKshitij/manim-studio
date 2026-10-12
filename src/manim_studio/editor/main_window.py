@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, QSize, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QShowEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeyEvent, QKeySequence, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -215,6 +215,7 @@ class MainWindow(QMainWindow):
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         self.transport_bar = TimelineTransport(self)
+        self.transport_bar.setFocusProxy(self.timeline)  # toolbar clicks hand the keys over
         self._edits_label = self.transport_bar.edits_label
         bottom_layout.setSpacing(0)
         bottom_layout.addWidget(self.transport_bar)
@@ -236,7 +237,7 @@ class MainWindow(QMainWindow):
         # menu all use these actions, so their names, shortcuts and states agree.
         self._timeline_ops = TimelineOpActions(self)
         self._timeline_ops.attach_to_window()
-        self._timeline_ops.attach_to_timeline(self.timeline)
+        self._timeline_ops.attach_to_timeline(self.transport_bar, self.timeline)
         self.timeline.set_operation_actions(self._timeline_ops.actions)
 
         file_menu = menu_bar.addMenu("&File")
@@ -267,10 +268,9 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Quit", self.close, QKeySequence.StandardKey.Quit)
 
         edit_menu = menu_bar.addMenu("&Edit")
-        self._add_action(
-            edit_menu, "Undo", lambda: self.editor.undo(), QKeySequence.StandardKey.Undo
-        )
-        self._add_action(edit_menu, "Redo", lambda: self.editor.redo(), "Ctrl+Y")
+        # One undo stack for the code and the timeline: these reach timeline edits too.
+        self._add_action(edit_menu, "Undo", self._undo_edit, QKeySequence.StandardKey.Undo)
+        self._add_action(edit_menu, "Redo", self._redo_edit, "Ctrl+Y")
         self._add_action(edit_menu, "Cut", lambda: self.editor.cut(), QKeySequence.StandardKey.Cut)
         self._add_action(
             edit_menu, "Copy", lambda: self.editor.copy(), QKeySequence.StandardKey.Copy
@@ -471,11 +471,12 @@ class MainWindow(QMainWindow):
         self.timeline.blockStillRequested.connect(self._render_block_still)
         self.timeline.blockDeleteRequested.connect(self._delete_block)
         self.timeline.blockIterationEditRequested.connect(self._edit_block_iteration)
-        self.timeline.undoRequested.connect(self._undo_timing)
-        self.timeline.redoRequested.connect(self._redo_timing)
+        self.timeline.undoRequested.connect(self._undo_edit)
+        self.timeline.redoRequested.connect(self._redo_edit)
         self.transport_bar.playPauseRequested.connect(self._toggle_play)
         self.transport_bar.editRequested.connect(self._on_timeline_op)
         self._timeline_ops.requested.connect(self._on_timeline_op)
+        self._timeline_ops.unavailable.connect(self._set_status)
         self.timeline.blockSelected.connect(self._on_block_selected)
         self.inspector.durationCommitted.connect(self._on_inspector_duration)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
@@ -501,6 +502,9 @@ class MainWindow(QMainWindow):
         self.controller.logReceived.connect(self._on_trace_log)
         self.patches.patchesChanged.connect(self._on_patches_changed)
         self.patches.stateChanged.connect(self._refresh_edits_ui)
+        self.patches.recorded.connect(self._record_timeline_step)
+        self.editor.containerUndone.connect(self._on_timeline_step_undone)
+        self.editor.containerRedone.connect(self._on_timeline_step_redone)
         self.patches.message.connect(self._set_status)
         self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
         self.controller.execResultReceived.connect(self.shell.append_exec_result)
@@ -1329,13 +1333,33 @@ class MainWindow(QMainWindow):
         else:
             self._set_status(f"block {index} has no known source line")
 
-    def _undo_timing(self) -> None:
+    def _undo_edit(self) -> None:
+        """Undo the latest change, to the code or to the timeline: there is one stack."""
+        self.editor.undo()
+        self.editor.settle_saved_state()
+        self._refresh_edit_buttons()
+
+    def _redo_edit(self) -> None:
+        self.editor.redo()
+        self.editor.settle_saved_state()
+        self._refresh_edit_buttons()
+
+    def _record_timeline_step(self) -> None:
+        """A timeline change joins the editor's undo stack, so one Ctrl+Z can reach it."""
+        self.editor.addUndoAction(0, 0)
+        self.editor.settle_saved_state()  # no text changed, so the file is still saved
+
+    def _on_timeline_step_undone(self) -> None:
         if self.patches.undo():
             self._set_status("timeline edit undone")
+        else:
+            self._set_status("timeline history out of step: nothing was undone")
 
-    def _redo_timing(self) -> None:
+    def _on_timeline_step_redone(self) -> None:
         if self.patches.redo():
             self._set_status("timeline edit redone")
+        else:
+            self._set_status("timeline history out of step: nothing was redone")
 
     # ------------------------------------------------------------------
     # Timeline edits: persistence, host sync and writing them into the source
@@ -1374,13 +1398,14 @@ class MainWindow(QMainWindow):
         states = op_states(
             TimelineFacts(
                 running=running,
+                scene_open=self._path is not None,
                 has_log=not self.timeline.log.is_empty,
                 block=index,
                 block_editable=editable,
                 block_has_line=index is not None and self.events.call_line(index) is not None,
                 block_edited=index is not None and self.patches.block_is_edited(index),
-                can_undo=self.patches.can_undo,
-                can_redo=self.patches.can_redo,
+                can_undo=self.editor.canUndo(),
+                can_redo=self.editor.canRedo(),
                 edit_count=self.patches.edit_count,
                 orphan_count=self.patches.orphan_count,
             )
@@ -1392,9 +1417,9 @@ class MainWindow(QMainWindow):
         """Run a timeline operation (from its button, a menu, a shortcut or the palette)."""
         index = self.selected_block_index()
         if action_id == "undo":
-            self._undo_timing()
+            self._undo_edit()
         elif action_id == "redo":
-            self._redo_timing()
+            self._redo_edit()
         elif action_id == "delete" and index is not None:
             self._delete_block(index)
         elif action_id == "reset" and index is not None:
@@ -1478,13 +1503,18 @@ class MainWindow(QMainWindow):
             self._set_status("no timeline edit can be written to the source")
             return
         left_over = self.patches.edit_count - len(plan.applied)
-        self.editor.replace_text(plan.text)
-        self.editor.save_file(self._path)
-        self.watcher.note_save()
-        self._update_title()
-        # The edits are now code: drop them from the sidecar; the host reloads once
-        # (through patchesChanged) with the new source and whatever could not be baked.
-        self.patches.finish_apply(plan)
+        # One undo step: the text, the saved file and the timeline edits come back together.
+        self.editor.beginUndoAction()
+        try:
+            self.editor.replace_text(plan.text)
+            self.editor.save_file(self._path)
+            self.watcher.note_save()
+            self._update_title()
+            # The edits are now code: drop them from the sidecar; the host reloads once
+            # (through patchesChanged) with the new source and whatever could not be baked.
+            self.patches.finish_apply(plan)
+        finally:
+            self.editor.endUndoAction()
         note = f"applied {len(plan.applied)} timeline edit(s) to {self._path.name}"
         if left_over:
             note += f"; {left_over} could not be written and stay as timeline edits"
@@ -1766,6 +1796,11 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, text: str) -> None:
         self.statusBar().showMessage(text)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Only keys that no widget took arrive here: a shortcut that is off says why.
+        self._timeline_ops.explain_unavailable(QApplication.focusWidget(), event)
+        super().keyPressEvent(event)
 
     def _update_title(self) -> None:
         self._set_preview_state(dirty=self.editor.is_modified())

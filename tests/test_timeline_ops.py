@@ -58,6 +58,8 @@ def test_everything_is_available_when_the_block_and_edits_allow_it() -> None:
         (TimelineFacts(running=True, block=0), "reset", "this block has no timeline edits"),
         (TimelineFacts(running=True, block=0), "jump", "this block has no source line"),
         (TimelineFacts(), "hold", "open a scene first"),
+        (TimelineFacts(scene_open=True), "delete", "start the preview first"),
+        (TimelineFacts(scene_open=True), "hold", "start the preview first"),
         (TimelineFacts(running=True), "hold", "the trace is empty"),
         (TimelineFacts(), "apply", "no timeline edits"),
         (TimelineFacts(), "orphans", "no orphaned edits"),

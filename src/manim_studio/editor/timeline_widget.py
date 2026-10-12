@@ -351,6 +351,7 @@ class TimelineWidget(QWidget):
             self.blockResized.emit(index, self._timing_clipboard)
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        self.setFocus(Qt.FocusReason.MouseFocusReason)  # the menu's keys are the timeline's
         block = self._log.block_at(self._view.x_to_time(event.pos().x()))
         if block is not None and block.index != self._selected_index:
             # The menu acts on the block it was opened on, so the toolbar and palette

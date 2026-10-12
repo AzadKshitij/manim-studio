@@ -51,7 +51,7 @@ def test_window_shortcuts_are_bound_and_display_only_ones_are_not(host: QMainWin
     assert ops.action("apply") in host.actions()
     # Ctrl+Z is the code editor's undo and the timeline's own key: the menu shows it only.
     assert ops.action("undo").shortcut().isEmpty()
-    assert ops.action("undo").text() == "Undo timeline edit\tCtrl+Z"
+    assert ops.action("undo").text() == "Undo\tCtrl+Z"
 
 
 def test_timeline_keys_attach_only_to_the_timeline(host: QMainWindow) -> None:
@@ -78,7 +78,7 @@ def test_timeline_menus_offer_the_shared_operations(host: QMainWindow) -> None:
     timeline.set_operation_actions(TimelineOpActions(host).actions)
     empty_area = [action.text() for action in timeline.context_menu(None).actions()]
     assert "Apply timeline edits to source" in empty_area
-    assert "Undo timeline edit\tCtrl+Z" in empty_area
+    assert "Undo\tCtrl+Z" in empty_area
     on_block = [action.text() for action in timeline.context_menu(0).actions()]
     assert "Apply timeline edits to source" in on_block
 
