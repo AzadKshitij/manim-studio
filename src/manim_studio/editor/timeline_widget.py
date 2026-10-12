@@ -11,6 +11,7 @@ application exclusively through signals.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
@@ -82,6 +83,16 @@ def hash_name(name: str) -> int:
     return value
 
 
+def lane_legend(clips: Sequence[Sequence[ClipTrace]]) -> dict[int, str]:
+    """The mobject each lane animates: the target it shows most often (unnamed ones skipped)."""
+    seen: dict[int, Counter[str]] = {}
+    for block in clips:
+        for clip in block:
+            if clip.target:
+                seen.setdefault(clip.lane, Counter())[clip.target] += 1
+    return {lane: counts.most_common(1)[0][0] for lane, counts in seen.items()}
+
+
 class TimelineWidget(QWidget):
     """Custom-painted timeline with continuous scrubbing and zoom/pan."""
 
@@ -120,6 +131,7 @@ class TimelineWidget(QWidget):
         self._iterations: dict[int, int] = {}  # block -> loop iterations sharing its call
         self._edited: frozenset[int] = frozenset()  # blocks whose call has timeline edits
         self._clips: tuple[tuple[ClipTrace, ...], ...] = ()  # animations per block
+        self._lane_names: dict[int, str] = {}  # the mobject each lane animates
         self._clip_tip = False  # the tooltip currently shows a clip, not a block
         self._context_menu: QMenu | None = None  # kept for tests
         self._operations: dict[str, QAction] = {}  # the shared timeline operations
@@ -189,6 +201,7 @@ class TimelineWidget(QWidget):
     def set_clips(self, clips: Sequence[Sequence[ClipTrace]]) -> None:
         """Set the animations of each block (parallel to the log) and size the lane rows."""
         self._clips = tuple(tuple(block) for block in clips)
+        self._lane_names = lane_legend(self._clips)
         self._update_min_height()
         self.update()
 
@@ -196,6 +209,10 @@ class TimelineWidget(QWidget):
         """Number of lane rows drawn under the block strip (``0`` without clips)."""
         highest = max((c.lane for block in self._clips for c in block), default=-1)
         return min(highest + 1, MAX_LANES)
+
+    def lane_names(self) -> dict[int, str]:
+        """The name of the mobject each lane animates (the legend drawn at the lane's left)."""
+        return dict(self._lane_names)
 
     def _lanes_top(self) -> float:
         return RULER_HEIGHT + BLOCK_ROW_HEIGHT + 4.0
@@ -936,6 +953,23 @@ class TimelineWidget(QWidget):
                     painter.drawText(
                         rect.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignVCenter, label
                     )
+        # One name per lane, pinned to the visible left edge so it reads while scrolling.
+        left = max(4.0, self._view.time_to_x(0.0) + 4.0)
+        for lane, name in self._lane_names.items():
+            if lane >= lanes:
+                continue
+            label = metrics.elidedText(name, Qt.TextElideMode.ElideRight, 140)
+            pill = QRectF(
+                left,
+                top + lane * LANE_HEIGHT + 1,
+                metrics.horizontalAdvance(label) + 10,
+                LANE_HEIGHT - 2,
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(colors.surface))
+            painter.drawRoundedRect(pill, 3, 3)
+            painter.setPen(QColor(colors.muted))
+            painter.drawText(pill.adjusted(5, 0, -5, 0), Qt.AlignmentFlag.AlignVCenter, label)
 
     def _draw_range(self, painter: QPainter, width: int, height: int) -> None:
         """Draw the selected loop/export range as a band with edge markers."""
