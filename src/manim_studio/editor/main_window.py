@@ -1589,12 +1589,18 @@ class MainWindow(QMainWindow):
         self._set_status(f"preview video ready: {output}")
 
     def _on_preview_video_failed(self, exit_code: int) -> None:
-        self._set_status(f"preview render failed (exit {exit_code})")
+        self._report_failure(f"preview render failed (exit {exit_code})")
 
     def _on_export_finished(self, exit_code: int) -> None:
-        self._set_status(
-            "export finished" if exit_code == 0 else f"export failed (exit {exit_code})"
-        )
+        if exit_code == 0:
+            self._set_status("export finished")
+        else:
+            self._report_failure(f"export failed (exit {exit_code})")
+
+    def _report_failure(self, text: str) -> None:
+        """A failed render or export must not be missed: name it and open the live shell."""
+        self._set_status(text)
+        self.shell.append(f"{text}; the lines above say why", reveal=True)
 
     # ------------------------------------------------------------------
     # Stats snapshot
