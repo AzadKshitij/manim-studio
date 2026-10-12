@@ -665,8 +665,11 @@ class MainWindow(QMainWindow):
         if path:
             self.open_path(path)
 
-    def open_path(self, path: str | Path) -> bool:
-        """Load a scene file into the editor and (re)start the preview."""
+    def open_path(self, path: str | Path, *, edits_settled: bool = False) -> bool:
+        """Load a scene file into the editor and (re)start the preview.
+
+        ``edits_settled`` says the caller has already asked about the unsaved edits.
+        """
         target = Path(path)
         check = check_scene_file(target)
         if not check.ok:
@@ -674,7 +677,7 @@ class MainWindow(QMainWindow):
             self.shell.append(f"open failed: {target}: {check.error}", reveal=True)
             self._forget_recent(target)
             return False
-        if not self._confirm_discard("open another scene"):
+        if not edits_settled and not self._confirm_discard("open another scene"):
             return False
         self.editor.load_file(target)
         self._path = target.resolve()
@@ -789,8 +792,11 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        # Settle unsaved edits before writing anything, so a cancel leaves no file behind.
+        if not self._confirm_discard("create a new scene"):
+            return
         target = self.create_scene_file(path, template_key, scene_name)
-        self.open_path(target)
+        self.open_path(target, edits_settled=True)
 
     def _prompt_scene_name(self, default: str) -> str | None:
         """Ask for the scene class name until it is a usable Python identifier.

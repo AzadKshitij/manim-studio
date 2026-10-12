@@ -70,11 +70,19 @@ def run_editor(
 
     apply_runtime_path()
     app = create_application()
+    from manim_studio.editor.splash import create_splash
+
+    splash = create_splash()
+    if splash is not None:
+        splash.show()
+        app.processEvents()
     from manim_studio.editor.main_window import MainWindow
 
     window = MainWindow(path=path, embedded=embedded, preview_size=preview_size)
     window.resize(1500, 950)
     window.show()
+    if splash is not None:
+        splash.finish(window)
     logger.info("editor started (embedded=%s, file=%s)", embedded, path)
     exit_code = app.exec()
     logger.info("editor exited with code %s", exit_code)
