@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from manim_studio.editor.elided_label import ElidedLabel
 from manim_studio.editor.error_banner import ErrorBanner
 from manim_studio.editor.loading_overlay import LoadingOverlay
 from manim_studio.stats import TimingStats
@@ -56,13 +55,11 @@ class PreviewPanel(QWidget):
         self._settle_timer.setInterval(self.SETTLE_MS)
         self._settle_timer.timeout.connect(self._settle)
 
-        # Error messages land here: elide them rather than widen the window.
-        self._state_label = ElidedLabel("idle")
-        self._state_label.setObjectName("previewState")
-        self._mode_label = QLabel("embedded")
-        self._mode_label.setObjectName("previewMode")
-        self._cache_label = QLabel("")
-        self._cache_label.setObjectName("previewCache")
+        # The status bar's chip says what the preview is doing; the header only names
+        # the view and shows the playhead time.
+        self._title_label = QLabel("Preview")
+        self._title_label.setObjectName("previewTitle")
+        self._cache_text = ""
         self._time_label = QLabel("0.0s")
         self._time_label.setObjectName("previewTime")
 
@@ -73,12 +70,9 @@ class PreviewPanel(QWidget):
         self._header_bar = header_bar
         header = QHBoxLayout(header_bar)
         header.setContentsMargins(12, 0, 12, 0)
-        header.addWidget(self._mode_label)
-        header.addWidget(self._cache_label)
+        header.addWidget(self._title_label)
         header.addStretch(1)
         header.addWidget(self._time_label)
-        header.addSpacing(8)
-        header.addWidget(self._state_label)
 
         self._viewport = QLabel()
         self._viewport.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -112,8 +106,6 @@ class PreviewPanel(QWidget):
         layout.addWidget(self._banner)
         layout.addWidget(self._body, 1)
 
-        self._state = "idle"
-        self._state_detail = ""
         self.set_mode(embedded=True)
         self.apply_theme()
 
@@ -123,8 +115,6 @@ class PreviewPanel(QWidget):
         well = f"background-color: {colors.preview}; color: {colors.muted};"
         self._viewport.setStyleSheet(well)
         self._placeholder.setStyleSheet(well)
-        self._cache_label.setStyleSheet(f"color: {colors.faint};")
-        self.set_status(self._state, self._state_detail)
 
     # ------------------------------------------------------------------
     # State
@@ -132,7 +122,6 @@ class PreviewPanel(QWidget):
 
     def set_mode(self, *, embedded: bool) -> None:
         self._embedded = embedded
-        self._mode_label.setText("embedded" if embedded else "external window")
         self._stack.setCurrentWidget(self._viewport if embedded else self._placeholder)
         if embedded:
             self._rescale(fast=False)
@@ -147,7 +136,7 @@ class PreviewPanel(QWidget):
 
     @property
     def cache_status(self) -> str:
-        return self._cache_label.text().lstrip(" ·")
+        return self._cache_text
 
     def set_frame(self, image: QImage) -> None:
         self._image = image
@@ -163,24 +152,10 @@ class PreviewPanel(QWidget):
         """Re-render the last streamed frame smoothly now that it has paused."""
         self._rescale(fast=False)
 
-    def set_status(self, state: str, detail: str = "") -> None:
-        self._state = state
-        self._state_detail = detail
-        text = state if not detail else f"{state} — {detail}"
-        self._state_label.setText(text)
-        colors = current_theme().colors
-        color = {
-            "idle": colors.ok,
-            "playing": colors.accent,
-            "seeking": colors.warn,
-            "error": colors.err,
-            "crashed": colors.err,
-        }.get(state, colors.muted)
-        self._state_label.setStyleSheet(f"color: {color};")
-
     def set_cache_status(self, text: str) -> None:
         """Small filmstrip indicator ('cache: 312 frames…')."""
-        self._cache_label.setText(f" · {text}" if text else "")
+        self._cache_text = text
+        self._title_label.setToolTip(text)
 
     def set_time(self, seconds: float, total: float | None = None) -> None:
         if total is None:

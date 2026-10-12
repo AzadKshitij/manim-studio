@@ -47,6 +47,7 @@ explaining why not.
 | `manim_studio/recent.py` | Recent-files ordering/pruning rules | stdlib only |
 | `manim_studio/command_palette.py` | Palette entries, query scopes (`>` `@` `?`), fuzzy ranking and recency | stdlib only |
 | `manim_studio/autosave.py` | Autosave snapshot naming and recovery offer rules | stdlib only |
+| `manim_studio/preview_status.py` | The preview's one status (word, tone, detail) from host, load, error and edit facts | stdlib only |
 | `manim_studio/loading.py` | Preview loading stages from host events, caption text and the minimum-visible rule | stdlib only |
 | `manim_studio/theme.py` | Colour themes: model, built-ins, JSON theme files, derived colours (ADR 0008) | stdlib only |
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
@@ -71,7 +72,7 @@ wire protocol and `docs/adr/` for architectural decisions.
 Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`) must never import Qt,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.

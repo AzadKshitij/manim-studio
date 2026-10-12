@@ -6,6 +6,7 @@ the file watcher and the rendered-preview transport, and routes every event.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,7 @@ from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.editor.preview_panel import PreviewPanel
 from manim_studio.editor.shell_panel import ShellPanel
 from manim_studio.editor.stats_controller import StatsController
+from manim_studio.editor.status_chip import StatusChip
 from manim_studio.editor.styling import apply_theme
 from manim_studio.editor.timeline_controller import MediaTransport
 from manim_studio.editor.timeline_transport import TimelineTransport
@@ -66,6 +68,7 @@ from manim_studio.editor.unsaved import (
 )
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.editor.welcome_panel import WelcomePanel
+from manim_studio.preview_status import CRASHED, OFF, RUNNING, PreviewStatus, summarize
 from manim_studio.scene_runner import check_scene_file
 from manim_studio.site_index import block_line_range
 from manim_studio.stats import TimingStats, process_rss_bytes
@@ -84,6 +87,8 @@ from manim_studio.theme import (
 from manim_studio.timeline_model import TimelineLog, format_duration
 
 __all__ = ["MainWindow"]
+
+_HOST_BY_STATE = {"starting": RUNNING, "stopped": OFF, "crashed": CRASHED}
 
 
 class MainWindow(QMainWindow):
@@ -161,7 +166,6 @@ class MainWindow(QMainWindow):
             preview_panel=self.preview_panel,
             shell=self.shell,
             controller=self.controller,
-            host_state_label=self._host_state_label,
             initial_frame=self._initial_frame,
             status_line=self._set_status,
             refresh_latex=self.refresh_latex_indicator,
@@ -366,7 +370,8 @@ class MainWindow(QMainWindow):
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
         self.setStatusBar(bar)
-        self._host_state_label = QLabel("preview: off")
+        self._preview_state = PreviewStatus()
+        self._status_chip = StatusChip(self)
         self._mem_label = QLabel("cache: —")
         self._mem_label.setToolTip("Filmstrip cache RAM and process memory (Help > App stats…)")
         self._latex_label = QLabel("")
@@ -381,8 +386,13 @@ class MainWindow(QMainWindow):
         bar.addPermanentWidget(self._cursor_label)
         bar.addPermanentWidget(self._latex_label)
         bar.addPermanentWidget(self._mem_label)
-        bar.addPermanentWidget(self._host_state_label)
+        bar.addPermanentWidget(self._status_chip)
         self.refresh_latex_indicator()
+
+    def _set_preview_state(self, **changes: Any) -> None:
+        """Feed one fact to the status chip; the chip is the only place the state shows."""
+        self._preview_state = replace(self._preview_state, **changes)
+        self._status_chip.show_summary(summarize(self._preview_state))
 
     def _on_shell_unread(self, count: int) -> None:
         self._shell_button.setText(f"Live shell · {count}" if count else "Live shell")
@@ -450,6 +460,18 @@ class MainWindow(QMainWindow):
         self.transport_bar.speedChanged.connect(self._on_transport_speed)
         self.transport_bar.zoomRequested.connect(self._on_zoom_requested)
         self.controller.statusChanged.connect(self._on_host_status)
+        self.controller.stateChanged.connect(
+            lambda state: self._set_preview_state(host=_HOST_BY_STATE.get(state, OFF))
+        )
+        self.controller.statusChanged.connect(
+            lambda state, _message: self._set_preview_state(
+                activity=state if state in ("playing", "seeking") else "idle"
+            )
+        )
+        self.events.loadingStageChanged.connect(
+            lambda stage: self._set_preview_state(loading=stage)
+        )
+        self.events.errorChanged.connect(lambda text: self._set_preview_state(error=text))
         self.controller.stateChanged.connect(self._on_host_state_changed)
         self.controller.stoppedReceived.connect(self._on_stopped_loop)
         self.controller.logReceived.connect(self._on_trace_log)
@@ -667,6 +689,7 @@ class MainWindow(QMainWindow):
     def _update_scene_actions(self) -> None:
         """Enable scene-dependent actions only while a scene is open."""
         has_scene = self._path is not None
+        self._set_preview_state(scene_open=has_scene)
         for action in self._scene_actions:
             action.setEnabled(has_scene)
             tip = action.text().replace("&", "")
@@ -829,7 +852,6 @@ class MainWindow(QMainWindow):
         if self._path is None or not self._auto_preview:
             return
         self.timeline.set_log(TimelineLog(()))
-        self.preview_panel.set_status("starting")
         self.controller.start(
             self._path,
             self._scene_name(),
@@ -1682,6 +1704,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(text)
 
     def _update_title(self) -> None:
+        self._set_preview_state(dirty=self.editor.is_modified())
         if self._path is None:
             self.setWindowTitle(APP_NAME)
             self.editor_pane.set_file(None)

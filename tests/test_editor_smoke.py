@@ -1163,9 +1163,9 @@ class TestEditing:
         window.shell.append("hello from host")
         assert "hello from host" in window.shell.output.toPlainText()
 
-    def test_host_state_label(self, window: MainWindow) -> None:
-        window.events.on_host_state("crashed")
-        assert "crashed" in window._host_state_label.text()
+    def test_host_state_is_shown_by_the_status_chip(self, window: MainWindow) -> None:
+        window.controller.stateChanged.emit("crashed")
+        assert window._preview_state.host == "crashed"
 
 
 @pytest.mark.usefixtures("scene_copy")

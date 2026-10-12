@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QLabel
 
 from manim_studio import loading
 from manim_studio.timeline_model import block_for_line, format_duration, parse_call_lines, parse_log
@@ -33,6 +32,9 @@ __all__ = ["PreviewEvents"]
 class PreviewEvents(QObject):
     """Routes preview-host events and owns trace/playback session state."""
 
+    loadingStageChanged = Signal(object)  # the spinner's stage, or None when idle
+    errorChanged = Signal(object)  # the last error, or None once a trace clears it
+
     def __init__(
         self,
         *,
@@ -41,7 +43,6 @@ class PreviewEvents(QObject):
         preview_panel: PreviewPanel,
         shell: ShellPanel,
         controller: PreviewController,
-        host_state_label: QLabel,
         initial_frame: str,
         status_line: Callable[[str], None],
         refresh_latex: Callable[[], None],
@@ -53,7 +54,6 @@ class PreviewEvents(QObject):
         self._timeline = timeline
         self._preview_panel = preview_panel
         self._shell = shell
-        self._host_state_label = host_state_label
         self._initial_frame = initial_frame
         self._status_line = status_line
         self._refresh_latex = refresh_latex
@@ -159,16 +159,15 @@ class PreviewEvents(QObject):
             self._play_from_index = None
         self._advance_loading(loading.TRACED)
         self._preview_panel.clear_error()
+        self.errorChanged.emit(None)
         self._status_line(
             f"trace: {timeline_log.num_blocks} blocks, {format_duration(self._total_duration)}"
         )
 
     def on_status(self, state: str, message: dict[str, Any]) -> None:
-        note = str(message.get("note", ""))
         settled = state not in ("error", "closed")
         self._advance_loading(loading.SETTLED if settled else loading.FAILED)
         self._playing = state == "playing"
-        self._preview_panel.set_status(state, note)
         self._timeline.set_playing(self._playing)
 
     def on_tick(self, time_seconds: float, _index: int, scrubbing: bool = False) -> None:
@@ -190,7 +189,6 @@ class PreviewEvents(QObject):
 
     def on_error(self, message: dict[str, Any]) -> None:
         text = str(message.get("message", "unknown error"))
-        self._preview_panel.set_status("error", text)
         self._advance_loading(loading.FAILED)
         self._shell.append(f"ERROR: {text}", reveal=True)
         traceback_text = str(message.get("traceback", ""))
@@ -200,6 +198,7 @@ class PreviewEvents(QObject):
         if isinstance(line, int):
             self._editor.set_error_marker(line, text)
         self._preview_panel.show_error(text, line if isinstance(line, int) else None)
+        self.errorChanged.emit(text)
         if "LaTeX" in text or "latex" in text:
             self._refresh_latex()
             self._status_line(
@@ -225,19 +224,18 @@ class PreviewEvents(QObject):
         if stage == self._loading_stage:
             return
         self._loading_stage = stage
+        self.loadingStageChanged.emit(stage)
         if stage is None:
             self._preview_panel.hide_loading()
         else:
             self._preview_panel.show_loading(loading.caption(stage))
 
     def on_host_state(self, state: str) -> None:
-        self._host_state_label.setText(f"preview: {state}")
         if state == "starting":
             self._advance_loading(loading.BEGIN_START)
         elif state in ("crashed", "stopped"):
             self._advance_loading(loading.FAILED)
         if state == "crashed":
-            self._preview_panel.set_status("crashed", "host process died — press Reload")
             self._preview_panel.show_error(
                 "The preview host stopped unexpectedly. Press Reload to restart it.", None
             )

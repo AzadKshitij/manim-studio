@@ -7,7 +7,6 @@ from typing import Any, ClassVar
 import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QLabel
 
 from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.timeline_model import TimelineLog
@@ -120,7 +119,6 @@ class _Harness:
         self.panel = _StubPanel()
         self.shell = _StubShell()
         self.controller = _StubController()
-        self.label = QLabel()
         self.statuses: list[str] = []
         self.latexs = 0
         self.video = False
@@ -130,7 +128,6 @@ class _Harness:
             preview_panel=self.panel,
             shell=self.shell,
             controller=self.controller,
-            host_state_label=self.label,
             initial_frame=initial_frame,
             status_line=self.statuses.append,
             refresh_latex=self._refresh_latex,
@@ -255,7 +252,6 @@ class TestStatusAndTicks:
         assert h.timeline.playing is True
         h.events.on_status("paused", {"note": "n"})
         assert h.events.playing is False
-        assert h.panel.statuses[-1] == ("paused", "n")
 
     def test_tick_moves_playhead_only_when_live(self) -> None:
         h = _Harness()
@@ -292,11 +288,12 @@ class TestErrorsAndHostState:
         h.events.on_error({"message": "LaTeX failed"})
         assert h.latexs == 1
 
-    def test_host_state_updates_label_and_crash_status(self) -> None:
+    def test_host_crash_is_named_over_the_preview(self) -> None:
         h = _Harness()
         h.events.on_host_state("crashed")
-        assert "crashed" in h.label.text()
-        assert ("crashed", "host process died — press Reload") in h.panel.statuses
+        text, line = h.panel.errors[-1]
+        assert line is None
+        assert "Reload" in text
 
 
 class TestClips:
