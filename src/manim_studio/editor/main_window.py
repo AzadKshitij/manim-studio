@@ -43,6 +43,8 @@ from manim_studio.editor.export_dialog import ExportDialog
 from manim_studio.editor.file_watcher import FileWatcher
 from manim_studio.editor.glyphs import glyph, refresh_glyphs
 from manim_studio.editor.icon import load_icon
+from manim_studio.editor.palette_dialog import CommandPalette
+from manim_studio.editor.palette_sources import build_items as palette_items
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
 from manim_studio.editor.preview_events import PreviewEvents
@@ -157,6 +159,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._connect_signals()
+        self._palette = CommandPalette(self, lambda: palette_items(self))
 
         self.editor.set_completions(self._api_names)
         self.completions = CompletionController(self.editor, enabled=completion, parent=self)
@@ -289,6 +292,8 @@ class MainWindow(QMainWindow):
         self._add_action(timeline_menu, "Discard orphaned edits", self.discard_orphaned_edits)
         self._add_action(timeline_menu, "Discard all timeline edits", self.discard_all_edits)
         view_menu = menu_bar.addMenu("&View")
+        self._add_action(view_menu, "Command palette…", self.open_command_palette, "Ctrl+Shift+P")
+        view_menu.addSeparator()
         self._embedded_action = QAction("Embedded preview", self, checkable=True)
         self._embedded_action.setChecked(self._embedded)
         self._embedded_action.triggered.connect(self.set_embedded)
@@ -310,6 +315,7 @@ class MainWindow(QMainWindow):
 
         help_menu = menu_bar.addMenu("&Help")
         self._add_action(help_menu, "App stats…", self.stats.show_dialog)
+        self._add_action(help_menu, "Keyboard shortcuts…", lambda: self.open_command_palette("?"))
         self._add_action(help_menu, "About", self.show_about)
 
         toolbar = QToolBar("Main", self)
@@ -530,6 +536,33 @@ class MainWindow(QMainWindow):
 
     def focus_shell(self) -> None:
         self.shell.focus_prompt()
+
+    # Palette hooks: small read/act methods the command palette calls.
+
+    def open_command_palette(self, prefix: str = "") -> None:
+        self._palette.open_palette(prefix)
+
+    def has_scene(self) -> bool:
+        return self._path is not None
+
+    def scene_names(self) -> tuple[str, ...]:
+        return tuple(self._scene_combo.itemText(i) for i in range(self._scene_combo.count()))
+
+    def current_scene_name(self) -> str:
+        return self._scene_combo.currentText()
+
+    def select_scene(self, name: str) -> None:
+        index = self._scene_combo.findText(name)
+        if index >= 0:
+            self._scene_combo.setCurrentIndex(index)
+
+    def jump_to_block(self, index: int) -> None:
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        self.timeline.set_selected_block(index)
+        self.scrub_to_time(block.start)
+        self._on_block_activated(index)
 
     def set_embedded(self, checked: bool) -> None:
         self._embedded = bool(checked)
