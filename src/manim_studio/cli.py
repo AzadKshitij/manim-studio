@@ -353,7 +353,7 @@ def cmd_gui(args: argparse.Namespace) -> int:
         return 1
     return run_editor(
         str(args.file) if args.file else None,
-        embedded=not args.external,
+        embedded=False if args.external else None,
         preview_size=args.size,
     )
 

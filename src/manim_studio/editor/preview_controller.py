@@ -42,6 +42,7 @@ class PreviewController(QObject):
     frameReceived = Signal(QImage)
     hostLogReceived = Signal(str)
     stateChanged = Signal(str)  # starting | running | stopped | crashed
+    loadRequested = Signal()  # a load or reload command was sent to the host
 
     def __init__(
         self,
@@ -188,7 +189,7 @@ class PreviewController(QObject):
             payload["fresh"] = True
         if path is not None:
             payload["path"] = str(Path(path).resolve())
-        return self.send(Command.RELOAD, **payload)
+        return self._send_load(Command.RELOAD, payload)
 
     def load(self, path: str | Path, scene_name: str | None = None, *, fresh: bool = False) -> bool:
         """Load a scene; ``fresh`` also discards the host's cached frames."""
@@ -202,7 +203,13 @@ class PreviewController(QObject):
             payload["fresh"] = True
         if scene_name is not None:
             payload["scene_name"] = scene_name
-        return self.send(Command.LOAD, **payload)
+        return self._send_load(Command.LOAD, payload)
+
+    def _send_load(self, command: str, payload: dict[str, Any]) -> bool:
+        sent = self.send(command, **payload)
+        if sent:
+            self.loadRequested.emit()
+        return sent
 
     def set_patches(self, patches: list[dict[str, Any]], time_seconds: float = 0.0) -> bool:
         """Run the scene with new timeline edits and re-pose at ``time_seconds``.

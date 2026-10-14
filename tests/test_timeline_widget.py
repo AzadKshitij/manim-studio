@@ -377,8 +377,9 @@ class TestContextMenu:
         self._action(timeline.context_menu(2), "Zoom to block").trigger()
         assert timeline.view().span < 4.0
 
-    def test_empty_area_menu_offers_fit(self, timeline: TimelineWidget) -> None:
-        assert [a.text() for a in timeline.context_menu(None).actions()] == ["Fit timeline"]
+    def test_empty_area_menu_offers_fit_and_zoom(self, timeline: TimelineWidget) -> None:
+        texts = [a.text() for a in timeline.context_menu(None).actions()]
+        assert texts == ["Fit timeline\tCtrl+0", "Zoom in\t+", "Zoom out\t-"]
 
     def test_loop_action_is_checkable(self, timeline: TimelineWidget) -> None:
         action = self._action(timeline.context_menu(1), "Loop this block")

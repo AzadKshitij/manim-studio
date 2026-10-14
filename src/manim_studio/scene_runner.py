@@ -50,7 +50,14 @@ _SCENE_BASE_NAMES = {"Scene", "InteractiveScene", "ThreeDScene", "MovingCameraSc
 
 
 class SceneLoadError(Exception):
-    """Raised when a scene file cannot be loaded, parsed or resolved."""
+    """Raised when a scene file cannot be loaded, parsed or resolved.
+
+    ``line`` is the line of the scene file the failure points at, when a check found one.
+    """
+
+    def __init__(self, message: str, *, line: int | None = None) -> None:
+        super().__init__(message)
+        self.line = line
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +76,53 @@ class SceneError:
             "line": self.line,
             "scene_file": self.scene_file,
         }
+
+
+def _same_file(name: str, target: Path) -> bool:
+    try:
+        return Path(name).resolve() == target
+    except OSError:
+        return False
+
+
+def _line_in_one(error: BaseException, target: Path) -> int | None:
+    """The line in ``target`` where this one exception was raised, if it was raised there."""
+    import traceback as _traceback
+
+    if isinstance(error, SceneLoadError) and error.line is not None:
+        return error.line  # a failed check already located it
+    if (
+        isinstance(error, SyntaxError)
+        and error.lineno is not None
+        and error.filename
+        and _same_file(error.filename, target)
+    ):
+        # compile() reports a syntax error without any traceback frame: its lineno is the location.
+        return error.lineno
+    line: int | None = None
+    for frame in _traceback.extract_tb(error.__traceback__):
+        if _same_file(frame.filename, target):
+            line = frame.lineno
+    return line
+
+
+def _location_in_scene(exc: BaseException, target: Path) -> int | None:
+    """The line in ``target`` that caused ``exc``, looking through wrapped causes.
+
+    Scene loading wraps the real failure: a SyntaxError or NameError raised while importing
+    the scene arrives inside a SceneLoadError.  The search starts at the root cause, so the
+    innermost line in the scene is the one reported.
+    """
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and not any(current is seen for seen in chain):
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    for error in reversed(chain):
+        line = _line_in_one(error, target)
+        if line is not None:
+            return line
+    return None
 
 
 def format_scene_error(exc: BaseException, scene_path: str | Path | None = None) -> SceneError:
@@ -92,13 +146,7 @@ def format_scene_error(exc: BaseException, scene_path: str | Path | None = None)
     if scene_path is not None:
         target = Path(scene_path).resolve()
         scene_file = str(target)
-        frames = _traceback.extract_tb(exc.__traceback__)
-        for frame in frames:
-            try:
-                if Path(frame.filename).resolve() == target:
-                    line = frame.lineno
-            except OSError:
-                continue
+        line = _location_in_scene(exc, target)
     return SceneError(
         message=message,
         traceback_text=text,
@@ -558,7 +606,7 @@ def run_trace(
     apply_runtime_path()
     check = check_scene_file(path)
     if not check.ok:
-        raise SceneLoadError(check.error or "scene check failed")
+        raise SceneLoadError(check.error or "scene check failed", line=check.error_line)
 
     started = time.perf_counter()
     with manimlib_argv_guard():

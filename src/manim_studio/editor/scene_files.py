@@ -47,6 +47,18 @@ def buffer_matches_disk(path: str | Path, buffer_text: str) -> bool:
     return disk is not None and disk == buffer_text
 
 
+def has_unsaved_changes(path: str | Path | None, buffer_text: str, modified: bool) -> bool:
+    """True when replacing or closing the buffer would throw away work.
+
+    An untitled buffer counts once it holds any text.  A saved scene counts only when
+    the editor reports edits *and* the text differs from the file on disk, so retyping
+    the saved code is not mistaken for a change.
+    """
+    if path is None:
+        return bool(buffer_text.strip())
+    return modified and not buffer_matches_disk(path, buffer_text)
+
+
 def preview_video_path(scene_path: str | Path) -> Path:
     """Where the low-quality scrub video for ``scene_path`` is rendered."""
     path = Path(scene_path)

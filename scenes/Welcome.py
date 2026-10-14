@@ -23,6 +23,11 @@ from manimlib import (
     TEAL,
     UP,
     YELLOW,
+    DEG,
+    RIGHT,
+    LEFT,
+    TOP,
+    BOTTOM,
     Circle,
     Dot,
     FadeIn,
@@ -47,6 +52,8 @@ from manimlib import (
 PALETTE = [BLUE, TEAL, GREEN, YELLOW, ORANGE, RED, PINK, PURPLE]
 
 
+
+
 class Welcome(InteractiveScene):
     def construct(self) -> None:
         # --- 1. Title ---------------------------------------------------------
@@ -54,6 +61,13 @@ class Welcome(InteractiveScene):
         title.set_color_by_gradient(BLUE, TEAL, GREEN)
         self.play(Write(title), run_time=2.4)
         self.wait(0.5)
+        title1 = Text("Welcome to Manim Studio", font_size=44)
+        title2 =  Text("Welcome to Manim Studio", font_size=44)
+        
+        
+        group = VGroup(title1, title2).arrange(RIGHT, buff=0.5)
+        self.play(group.animate.to_edge(DOWN))
+        
 
         # --- 2. A ring of dots spins up around the title ---------------------
         ring = VGroup(
@@ -71,14 +85,16 @@ class Welcome(InteractiveScene):
             LaggedStart(*(FadeIn(d, scale=0.1) for d in ring), lag_ratio=0.05),
             run_time=2.0,
         )
-        self.play(Rotate(ring, TAU / 2, run_time=2), run_time=0.766)
+        self.play(Rotate(ring, TAU / 2, run_time=2), run_time=1.033)
 
         # --- 3. Circle -> square morph, ring collapses into the circle -------
         circle = Circle(radius=2, stroke_color=BLUE, stroke_width=6)
         square = Square(side_length=3.5, stroke_color=YELLOW, stroke_width=6)
         self.play(ShowCreation(circle), FadeOut(ring), run_time=1.5)
-        self.play(Transform(circle, square), run_time=1.5)
-        self.play(circle.animate.rotate(TAU / 8).set_stroke(PINK), run_time=1)
+        self.play(Transform(circle, square), run_time=1.001)
+        self.play(circle.animate.rotate(TAU / 8).set_stroke(PINK), run_time=1.0)
+        for _ in range(3):
+            self.play(Rotate(circle, 90 * DEG, run_time=1.0))
         self.play(FadeOut(circle))
 
         # --- 4. Travelling sine wave (redrawn from a ValueTracker) ------------
@@ -94,7 +110,7 @@ class Welcome(InteractiveScene):
 
         wave = always_redraw(make_wave)
         self.play(ShowCreation(wave), run_time=1.5)
-        self.play(phase.animate.set_value(TAU), run_time=3, rate_func=linear)
+        self.play(phase.animate.set_value(TAU), run_time=1.5, rate_func=linear)
         self.play(FadeOut(wave), run_time=1.833)
 
         # --- 5. Lissajous curve drawn by a moving dot ------------------------
@@ -116,7 +132,7 @@ class Welcome(InteractiveScene):
         self.add(trail, tracer)
         self.play(pen.animate.set_value(TAU), run_time=1.734, rate_func=linear)
         self.play(FadeOut(tracer), run_time=0.267)
-        self.play(FadeOut(trail), run_time=0.5)
+        self.play(FadeOut(trail), run_time=0.8)
 
         # --- 6. A grid of squares with a colour wave -------------------------
         grid = VGroup(*(Square(side_length=0.55) for _ in range(12 * 6)))
@@ -146,3 +162,11 @@ class Welcome(InteractiveScene):
         self.play(Write(hint), run_time=1.5)
         self.play(FadeIn(hint2, shift=UP * 0.3))
         self.wait(0.956)
+
+class Intro(InteractiveScene):
+    def construct(self) -> None:
+        # --- 1. Title ---------------------------------------------------------
+        title = Text("Welcome to Manim Studio", font_size=64)
+        title.set_color_by_gradient(BLUE, TEAL, GREEN)
+        self.play(Write(title), run_time=2.4)
+        self.wait(0.5)

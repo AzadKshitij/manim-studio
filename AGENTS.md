@@ -44,8 +44,14 @@ explaining why not.
 | `manim_studio/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
 | `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + single-pass filmstrip crawler (construct() suspended on a greenlet, same GL thread) | `manimlib`, `greenlet` lazily |
 | `manim_studio/reuse.py` | Which cached filmstrip blocks survive an edit (ADR 0009) | stdlib only |
+| `manim_studio/recent.py` | Recent-files ordering/pruning rules | stdlib only |
+| `manim_studio/command_palette.py` | Palette entries, query scopes (`>` `@` `?`), fuzzy ranking and recency | stdlib only |
+| `manim_studio/autosave.py` | Autosave snapshot naming and recovery offer rules | stdlib only |
+| `manim_studio/preview_status.py` | The preview's one status (word, tone, detail) from host, load, error and edit facts | stdlib only |
+| `manim_studio/loading.py` | Preview loading stages from host events, caption text and the minimum-visible rule | stdlib only |
 | `manim_studio/theme.py` | Colour themes: model, built-ins, JSON theme files, derived colours (ADR 0008) | stdlib only |
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
+| `manim_studio/timeline_ops.py` | Timeline operations: names, shortcuts, scope and when each is available | stdlib only |
 | `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
 | `manim_studio/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
 | `manim_studio/export.py` | Video export via `manimgl -w` subprocess; bakes the sidecar's edits in | `subprocess`, `sidecar` |
@@ -67,7 +73,7 @@ wire protocol and `docs/adr/` for architectural decisions.
 Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`) must never import Qt,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.

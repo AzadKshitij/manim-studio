@@ -531,7 +531,7 @@ class SceneHost:
         mark = load_started
         check = check_scene_file(scene_path)
         if not check.ok:
-            raise SceneLoadError(f"{scene_path}: {check.error}")
+            raise SceneLoadError(f"{scene_path}: {check.error}", line=check.error_line)
         mark = lap("check", mark)
 
         # Timeline edits run as patched in-memory source; the file on disk is untouched.

@@ -7,7 +7,6 @@ from typing import Any, ClassVar
 import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QLabel
 
 from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.timeline_model import TimelineLog
@@ -63,6 +62,10 @@ class _StubPanel:
         self.times: list[tuple[float, float]] = []
         self.frames: list[QImage] = []
         self.cache_status = "sentinel"
+        self.loading: list[str] = []
+        self.loading_hidden = 0
+        self.errors: list[tuple[str, int | None]] = []
+        self.error_cleared = 0
 
     def set_status(self, state: str, note: str = "") -> None:
         self.statuses.append((state, note))
@@ -76,12 +79,24 @@ class _StubPanel:
     def set_cache_status(self, text: str) -> None:
         self.cache_status = text
 
+    def show_loading(self, text: str) -> None:
+        self.loading.append(text)
+
+    def hide_loading(self) -> None:
+        self.loading_hidden += 1
+
+    def show_error(self, text: str, line: int | None) -> None:
+        self.errors.append((text, line))
+
+    def clear_error(self) -> None:
+        self.error_cleared += 1
+
 
 class _StubShell:
     def __init__(self) -> None:
         self.lines: list[str] = []
 
-    def append(self, text: str) -> None:
+    def append(self, text: str, *, reveal: bool = False) -> None:
         self.lines.append(text)
 
 
@@ -93,6 +108,8 @@ class _StubController(QObject):
     errorReceived = Signal(dict)
     frameReceived = Signal(QImage)
     stateChanged = Signal(str)
+    helloReceived = Signal(dict)
+    loadRequested = Signal()
 
 
 class _Harness:
@@ -102,7 +119,6 @@ class _Harness:
         self.panel = _StubPanel()
         self.shell = _StubShell()
         self.controller = _StubController()
-        self.label = QLabel()
         self.statuses: list[str] = []
         self.latexs = 0
         self.video = False
@@ -112,7 +128,6 @@ class _Harness:
             preview_panel=self.panel,
             shell=self.shell,
             controller=self.controller,
-            host_state_label=self.label,
             initial_frame=initial_frame,
             status_line=self.statuses.append,
             refresh_latex=self._refresh_latex,
@@ -237,7 +252,6 @@ class TestStatusAndTicks:
         assert h.timeline.playing is True
         h.events.on_status("paused", {"note": "n"})
         assert h.events.playing is False
-        assert h.panel.statuses[-1] == ("paused", "n")
 
     def test_tick_moves_playhead_only_when_live(self) -> None:
         h = _Harness()
@@ -274,11 +288,12 @@ class TestErrorsAndHostState:
         h.events.on_error({"message": "LaTeX failed"})
         assert h.latexs == 1
 
-    def test_host_state_updates_label_and_crash_status(self) -> None:
+    def test_host_crash_is_named_over_the_preview(self) -> None:
         h = _Harness()
         h.events.on_host_state("crashed")
-        assert "crashed" in h.label.text()
-        assert ("crashed", "host process died — press Reload") in h.panel.statuses
+        text, line = h.panel.errors[-1]
+        assert line is None
+        assert "Reload" in text
 
 
 class TestClips:
@@ -310,3 +325,89 @@ class TestClips:
         h.events.on_log({**SAMPLE_LOG, "clips": bad})
         assert h.events.clips(0) == ()
         assert h.timeline.log.num_blocks == 2
+
+
+class TestLoadingStages:
+    """The spinner follows the host's real events: start, hello, trace, frame."""
+
+    def test_cold_start_runs_through_every_stage(self) -> None:
+        h = _Harness()
+        h.controller.stateChanged.emit("starting")
+        assert h.panel.loading == ["Starting preview…"]
+        h.controller.helloReceived.emit({"channel": "control"})
+        assert h.panel.loading[-1] == "Importing scene…"
+        h.events.on_log(SAMPLE_LOG)
+        assert h.panel.loading[-1] == "Rendering first frame…"
+        h.controller.frameReceived.emit(QImage())
+        assert h.panel.loading_hidden == 1
+
+    def test_reload_shows_reloading_and_ends_on_frame(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        assert h.panel.loading == ["Reloading scene…"]
+        h.events.on_log(SAMPLE_LOG)
+        h.controller.frameReceived.emit(QImage())
+        assert h.panel.loading_hidden == 1
+
+    def test_repeated_load_requests_do_not_restart_the_spinner(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.controller.loadRequested.emit()
+        assert h.panel.loading == ["Reloading scene…"]
+
+    def test_idle_before_the_trace_does_not_end_loading(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.events.on_status("idle", {})
+        assert h.panel.loading_hidden == 0
+
+    def test_idle_after_the_trace_ends_loading_when_no_frames_come(self) -> None:
+        # External-window mode streams no frames, so the host's idle is the finish line.
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.events.on_log(SAMPLE_LOG)
+        h.events.on_status("idle", {})
+        assert h.panel.loading_hidden == 1
+
+    def test_error_and_crash_end_loading(self) -> None:
+        h = _Harness()
+        h.controller.loadRequested.emit()
+        h.events.on_error({"message": "boom"})
+        assert h.panel.loading_hidden == 1
+        h.controller.loadRequested.emit()
+        h.controller.stateChanged.emit("crashed")
+        assert h.panel.loading_hidden == 2
+
+    def test_patch_trace_without_a_load_shows_nothing(self) -> None:
+        # Timeline edits re-trace in place; they must not raise the spinner.
+        h = _Harness()
+        h.events.on_log({**SAMPLE_LOG, "cause": "patches"})
+        assert h.panel.loading == []
+        assert h.panel.loading_hidden == 0
+
+
+class TestErrorBanner:
+    """A failure is named over the preview, and a successful trace clears it."""
+
+    def test_scene_error_carries_its_line(self) -> None:
+        h = _Harness()
+        h.events.on_error({"message": "ValueError: boom", "line": 3, "traceback": "tb"})
+        assert h.panel.errors == [("ValueError: boom", 3)]
+
+    def test_error_without_a_line_has_no_line(self) -> None:
+        h = _Harness()
+        h.events.on_error({"message": "LaTeX failed"})
+        assert h.panel.errors == [("LaTeX failed", None)]
+
+    def test_a_successful_trace_clears_the_error(self) -> None:
+        h = _Harness()
+        h.events.on_error({"message": "boom", "line": 2})
+        h.events.on_log(SAMPLE_LOG)
+        assert h.panel.error_cleared == 1
+
+    def test_a_crashed_host_says_how_to_recover(self) -> None:
+        h = _Harness()
+        h.controller.stateChanged.emit("crashed")
+        text, line = h.panel.errors[-1]
+        assert line is None
+        assert "Reload" in text

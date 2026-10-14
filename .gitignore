@@ -16,6 +16,7 @@ htmlcov/
 
 # Editor runtime artifacts
 .manim-studio/
+.*.autosave
 log.json
 trace.json
 media/

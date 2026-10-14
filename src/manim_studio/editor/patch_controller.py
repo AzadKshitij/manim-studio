@@ -64,6 +64,8 @@ class PatchController(QObject):
     stateChanged = Signal()
     #: A short human-readable note for the status line.
     message = Signal(str)
+    #: A new edit was recorded in the history (undo and redo are not new edits).
+    recorded = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -252,10 +254,10 @@ class PatchController(QObject):
         return self._commit(self._stack.discard_site(ref.site_id))
 
     def undo(self) -> bool:
-        return self._commit(self._stack.undo())
+        return self._commit(self._stack.undo(), record=False)
 
     def redo(self) -> bool:
-        return self._commit(self._stack.redo())
+        return self._commit(self._stack.redo(), record=False)
 
     def clear(self) -> bool:
         """Discard every timeline edit."""
@@ -330,9 +332,13 @@ class PatchController(QObject):
         site = None if ref is None else self._site(ref.site_id)
         return None if site is None else str(site.duration.kind)
 
-    def _commit(self, changed: bool) -> bool:
+    def _commit(self, changed: bool, *, record: bool = True) -> bool:
         if not changed:
             return False
+        if record:
+            # First: the editor's undo stack must hold the step before the UI asks what can
+            # be undone (the state refresh below reads it).
+            self.recorded.emit()
         if self._scene_path is not None:
             try:
                 save_sidecar(self._scene_path, self._stack.patches)

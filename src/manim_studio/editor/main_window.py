@@ -6,11 +6,12 @@ the file watcher and the rendered-preview transport, and routes every event.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, QSize, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeyEvent, QKeySequence, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QToolBar,
     QToolButton,
@@ -30,8 +32,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from manim_studio import APP_NAME
+from manim_studio import APP_NAME, external_changes, recent
 from manim_studio.editor import api_cache, scene_files
+from manim_studio.editor.autosave_controller import AutosaveController
 from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
 from manim_studio.editor.code_editor import CodeEditor
 from manim_studio.editor.completion_controller import CompletionController
@@ -39,20 +42,37 @@ from manim_studio.editor.editor_pane import EditorPane
 from manim_studio.editor.edits_diff_dialog import EditsDiffDialog, unified_diff
 from manim_studio.editor.export_controller import ExportController
 from manim_studio.editor.export_dialog import ExportDialog
+from manim_studio.editor.external_change_bar import ExternalChangeBar
 from manim_studio.editor.file_watcher import FileWatcher
 from manim_studio.editor.glyphs import glyph, refresh_glyphs
 from manim_studio.editor.icon import load_icon
+from manim_studio.editor.palette_dialog import CommandPalette
+from manim_studio.editor.palette_sources import build_items as palette_items
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
 from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.editor.preview_panel import PreviewPanel
+from manim_studio.editor.session_state import SessionState
 from manim_studio.editor.shell_panel import ShellPanel
 from manim_studio.editor.stats_controller import StatsController
+from manim_studio.editor.status_chip import StatusChip
 from manim_studio.editor.styling import apply_theme
 from manim_studio.editor.timeline_controller import MediaTransport
+from manim_studio.editor.timeline_ops import TimelineOpActions
 from manim_studio.editor.timeline_transport import TimelineTransport
 from manim_studio.editor.timeline_widget import TimelineWidget
+from manim_studio.editor.unsaved import (
+    CANCEL,
+    DISCARD_RECOVERY,
+    RECOVER,
+    SAVE,
+    ask_discard,
+    ask_recovery,
+)
 from manim_studio.editor.video_mode import VideoModeController
+from manim_studio.editor.welcome_panel import WelcomePanel
+from manim_studio.external_changes import Decision
+from manim_studio.preview_status import CRASHED, OFF, RUNNING, PreviewStatus, summarize
 from manim_studio.scene_runner import check_scene_file
 from manim_studio.site_index import block_line_range
 from manim_studio.stats import TimingStats, process_rss_bytes
@@ -69,8 +89,11 @@ from manim_studio.theme import (
     themes_dir,
 )
 from manim_studio.timeline_model import TimelineLog, format_duration
+from manim_studio.timeline_ops import TimelineFacts, op_states
 
 __all__ = ["MainWindow"]
+
+_HOST_BY_STATE = {"starting": RUNNING, "stopped": OFF, "crashed": CRASHED}
 
 
 class MainWindow(QMainWindow):
@@ -80,7 +103,7 @@ class MainWindow(QMainWindow):
         self,
         path: str | Path | None = None,
         *,
-        embedded: bool = True,
+        embedded: bool | None = None,
         preview_size: tuple[int, int] = (1280, 720),
         restore_settings: bool = True,
         settings: QSettings | None = None,
@@ -92,7 +115,6 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(load_icon())
-        self._embedded = embedded
         self._preview_size = preview_size
         self._initial_frame = initial_frame
         self._path: Path | None = None
@@ -100,6 +122,12 @@ class MainWindow(QMainWindow):
         self._auto_preview = auto_preview
         self._restore_settings = restore_settings
         self._settings = settings or QSettings("ManimStudio", "ManimStudio")
+        self._session = SessionState(self._settings, enabled=restore_settings)
+        self._external_policy = self._session.external_policy()
+        self._layout_restored = False
+        if embedded is None:  # not chosen on the command line: keep the last mode
+            embedded = self._session.embedded() is not False
+        self._embedded = embedded
         self._theme_key = "builtin:chalkboard"
         if restore_settings:
             self._restore_theme()
@@ -116,8 +144,11 @@ class MainWindow(QMainWindow):
         self._speed = 1.0
 
         self.editor = CodeEditor(self)
+        self._autosave = AutosaveController(self.editor, self)
         self.timings = TimingStats()
         self.preview_panel = PreviewPanel(self, timings=self.timings)
+        self.preview_panel.set_mode(embedded=self._embedded)
+        self.welcome_panel = WelcomePanel(self)
         self.timeline = TimelineWidget(self)
         self.controller = PreviewController(self, timings=self.timings)
         self.exports = ExportController(self)
@@ -131,6 +162,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_shell_dock()
         self._build_status_bar()
+        self._update_scene_actions()
         self.video = VideoModeController(
             transport=self.transport,
             preview_panel=self.preview_panel,
@@ -145,7 +177,6 @@ class MainWindow(QMainWindow):
             preview_panel=self.preview_panel,
             shell=self.shell,
             controller=self.controller,
-            host_state_label=self._host_state_label,
             initial_frame=self._initial_frame,
             status_line=self._set_status,
             refresh_latex=self.refresh_latex_indicator,
@@ -153,13 +184,19 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._connect_signals()
+        self._palette = CommandPalette(self, lambda: palette_items(self))
 
         self.editor.set_completions(self._api_names)
         self.completions = CompletionController(self.editor, enabled=completion, parent=self)
         if restore_settings:
             self._restore_geometry()
+        if path is None and self._session.reopen_last_file:
+            last = self._session.last_file()
+            path = last if last is not None and last.is_file() else None
         if path is not None:
             self.open_path(path)
+        # Filled in whichever page starts up, so the recents are ready on the welcome page.
+        self.welcome_panel.set_recent(self.recent_files())
 
     # ------------------------------------------------------------------
     # UI construction
@@ -168,8 +205,14 @@ class MainWindow(QMainWindow):
     def _build_layout(self) -> None:
         horizontal = QSplitter(Qt.Orientation.Horizontal, self)
         self.editor_pane = EditorPane(self.editor, self)
+        self._external_bar = ExternalChangeBar(self)
+        self.editor_pane.set_banner(self._external_bar)
         horizontal.addWidget(self.editor_pane)
-        horizontal.addWidget(self.preview_panel)
+        self._right_stack = QStackedWidget(self)
+        self._right_stack.addWidget(self.preview_panel)
+        self._right_stack.addWidget(self.welcome_panel)
+        self._right_stack.setCurrentWidget(self.welcome_panel)
+        horizontal.addWidget(self._right_stack)
         horizontal.setStretchFactor(0, 3)
         horizontal.setStretchFactor(1, 2)
 
@@ -177,6 +220,7 @@ class MainWindow(QMainWindow):
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         self.transport_bar = TimelineTransport(self)
+        self.transport_bar.setFocusProxy(self.timeline)  # toolbar clicks hand the keys over
         self._edits_label = self.transport_bar.edits_label
         bottom_layout.setSpacing(0)
         bottom_layout.addWidget(self.transport_bar)
@@ -189,36 +233,62 @@ class MainWindow(QMainWindow):
         vertical.addWidget(bottom)
         vertical.setStretchFactor(0, 4)
         vertical.setStretchFactor(1, 1)
+        self._horizontal, self._vertical = horizontal, vertical
         self.setCentralWidget(vertical)
 
     def _build_actions(self) -> None:
         menu_bar = self.menuBar()
+        # One set of timeline operations: the menus, shortcuts, palette and timeline
+        # menu all use these actions, so their names, shortcuts and states agree.
+        self._timeline_ops = TimelineOpActions(self)
+        self._timeline_ops.attach_to_window()
+        self._timeline_ops.attach_to_timeline(self.transport_bar, self.timeline)
+        self.timeline.set_operation_actions(self._timeline_ops.actions)
 
         file_menu = menu_bar.addMenu("&File")
         self._add_action(
             file_menu, "New scene…", self.new_scene_dialog, QKeySequence.StandardKey.New
         )
         self._add_action(file_menu, "Open…", self.open_dialog, QKeySequence.StandardKey.Open)
+        self._recent_menu = file_menu.addMenu("Open recent")
+        external_menu = file_menu.addMenu("External changes")
+        self._external_group = QActionGroup(self)
+        self._external_group.setExclusive(True)
+        self._external_actions: dict[str, QAction] = {}
+        for policy in external_changes.POLICIES:
+            action = QAction(external_changes.POLICY_LABELS[policy], self, checkable=True)
+            action.setChecked(policy == self._external_policy)
+            action.triggered.connect(
+                lambda _checked=False, value=policy: self._set_external_policy(value)
+            )
+            self._external_group.addAction(action)
+            self._external_actions[policy] = action
+            external_menu.addAction(action)
+        self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
         self._add_action(file_menu, "Save", self.save_buffer, QKeySequence.StandardKey.Save)
         self._add_action(
             file_menu, "Save As…", self.save_buffer_as, QKeySequence.StandardKey.SaveAs
         )
         file_menu.addSeparator()
-        self._add_action(file_menu, "Export…", self.export_dialog, "Ctrl+E")
-        self._add_action(
-            file_menu,
-            "Export still…",
-            lambda: self.export_dialog(still=True),
-            "Ctrl+Shift+E",
+        self._scene_actions: list[QAction] = []
+        self._scene_actions.append(
+            self._add_action(file_menu, "Export…", self.export_dialog, "Ctrl+E")
+        )
+        self._scene_actions.append(
+            self._add_action(
+                file_menu,
+                "Export still…",
+                lambda: self.export_dialog(still=True),
+                "Ctrl+Shift+E",
+            )
         )
         file_menu.addSeparator()
         self._add_action(file_menu, "Quit", self.close, QKeySequence.StandardKey.Quit)
 
         edit_menu = menu_bar.addMenu("&Edit")
-        self._add_action(
-            edit_menu, "Undo", lambda: self.editor.undo(), QKeySequence.StandardKey.Undo
-        )
-        self._add_action(edit_menu, "Redo", lambda: self.editor.redo(), "Ctrl+Y")
+        # One undo stack for the code and the timeline: these reach timeline edits too.
+        self._add_action(edit_menu, "Undo", self._undo_edit, QKeySequence.StandardKey.Undo)
+        self._add_action(edit_menu, "Redo", self._redo_edit, "Ctrl+Y")
         self._add_action(edit_menu, "Cut", lambda: self.editor.cut(), QKeySequence.StandardKey.Cut)
         self._add_action(
             edit_menu, "Copy", lambda: self.editor.copy(), QKeySequence.StandardKey.Copy
@@ -243,35 +313,43 @@ class MainWindow(QMainWindow):
             )
 
         run_menu = menu_bar.addMenu("&Run")
-        self._add_action(run_menu, "Reload preview", self.reload_preview, "F5")
-        self._add_action(
-            run_menu, "Reload preview (discard cache)", self.reload_preview_fresh, "Ctrl+F5"
-        )
-        self._add_action(run_menu, "Play from playhead", self.request_play, "F6")
-        self._add_action(run_menu, "Stop playback", self.request_stop, "F7")
+        self._scene_actions += [
+            self._add_action(run_menu, "Reload preview", self.reload_preview, "F5"),
+            self._add_action(
+                run_menu, "Reload preview (discard cache)", self.reload_preview_fresh, "Ctrl+F5"
+            ),
+            self._add_action(run_menu, "Play from playhead", self.request_play, "F6"),
+            self._add_action(run_menu, "Stop playback", self.request_stop, "F7"),
+        ]
         run_menu.addSeparator()
-        self._add_action(run_menu, "Render preview video", self.render_preview_video, "Ctrl+R")
-        self._add_action(
-            run_menu, "Insert hold at playhead", self.insert_hold_at_playhead, "Ctrl+Shift+H"
+        self._scene_actions.append(
+            self._add_action(run_menu, "Render preview video", self.render_preview_video, "Ctrl+R")
         )
         self._add_action(run_menu, "Focus live shell", self.focus_shell, "Ctrl+`")
 
         timeline_menu = menu_bar.addMenu("&Timeline")
-        self._add_action(timeline_menu, "Undo timeline edit", self._undo_timing)
-        self._add_action(timeline_menu, "Redo timeline edit", self._redo_timing)
-        timeline_menu.addSeparator()
-        self._add_action(
-            timeline_menu, "Apply timeline edits to source", self.apply_edits_to_source
+        operations = self._timeline_ops
+        groups = (
+            ("undo", "redo"),
+            ("delete", "reset", "jump"),
+            ("hold", "apply", "diff"),
+            ("orphans", "discard_orphans", "discard_all"),
         )
-        self._add_action(timeline_menu, "Show timeline edits as diff…", self.show_edits_diff)
-        timeline_menu.addSeparator()
-        self._add_action(timeline_menu, "Discard orphaned edits", self.discard_orphaned_edits)
-        self._add_action(timeline_menu, "Discard all timeline edits", self.discard_all_edits)
+        for number, group in enumerate(groups):
+            if number:
+                timeline_menu.addSeparator()
+            timeline_menu.addActions([operations.action(key) for key in group])
         view_menu = menu_bar.addMenu("&View")
+        self._add_action(view_menu, "Command palette…", self.open_command_palette, "Ctrl+Shift+P")
+        view_menu.addSeparator()
         self._embedded_action = QAction("Embedded preview", self, checkable=True)
         self._embedded_action.setChecked(self._embedded)
         self._embedded_action.triggered.connect(self.set_embedded)
         view_menu.addAction(self._embedded_action)
+        self._reopen_action = QAction("Reopen last file on launch", self, checkable=True)
+        self._reopen_action.setChecked(self._session.reopen_last_file)
+        self._reopen_action.toggled.connect(self._session.set_reopen_last_file)
+        view_menu.addAction(self._reopen_action)
         self._add_action(view_menu, "Fit timeline", self.timeline.fit, "Ctrl+0")
         self._snap_action = QAction("Snap timeline", self, checkable=True)
         self._snap_action.setChecked(self.timeline.snapping)
@@ -280,6 +358,7 @@ class MainWindow(QMainWindow):
         )
         self._snap_action.toggled.connect(self.timeline.set_snapping)
         view_menu.addAction(self._snap_action)
+        self.transport_bar.bind_snap_action(self._snap_action)
         view_menu.addSeparator()
         self._theme_menu = view_menu.addMenu("Theme")
         self._theme_menu.aboutToShow.connect(self._populate_theme_menu)
@@ -289,6 +368,7 @@ class MainWindow(QMainWindow):
 
         help_menu = menu_bar.addMenu("&Help")
         self._add_action(help_menu, "App stats…", self.stats.show_dialog)
+        self._add_action(help_menu, "Keyboard shortcuts…", lambda: self.open_command_palette("?"))
         self._add_action(help_menu, "About", self.show_about)
 
         toolbar = QToolBar("Main", self)
@@ -311,12 +391,15 @@ class MainWindow(QMainWindow):
         self._scene_combo.setMinimumWidth(160)
         toolbar.addWidget(self._scene_combo)
         toolbar.addSeparator()
-        self._add_toolbar_action(toolbar, "Render preview", self.render_preview_video, "render")
+        render = self._add_toolbar_action(
+            toolbar, "Render preview", self.render_preview_video, "render"
+        )
         spacer = QWidget(self)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
         export = self._add_toolbar_action(toolbar, "Export…", self.export_dialog, "export")
         self._label_toolbar_button(toolbar, export)
+        self._scene_actions += [play, reload_, stop, render, export]
 
     def _build_shell_dock(self) -> None:
         self.shell = ShellPanel(self)
@@ -326,16 +409,32 @@ class MainWindow(QMainWindow):
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
         self.setStatusBar(bar)
-        self._host_state_label = QLabel("preview: off")
+        self._preview_state = PreviewStatus()
+        self._status_chip = StatusChip(self)
         self._mem_label = QLabel("cache: —")
         self._mem_label.setToolTip("Filmstrip cache RAM and process memory (Help > App stats…)")
         self._latex_label = QLabel("")
         self._cursor_label = QLabel("Ln 1, Col 1")
+        self._shell_button = QToolButton(self)
+        self._shell_button.setAutoRaise(True)
+        self._shell_button.setText("Live shell")
+        self._shell_button.setToolTip("Show the live shell (Ctrl+`)")
+        self._shell_button.clicked.connect(self.focus_shell)
+        self.shell.unreadChanged.connect(self._on_shell_unread)
+        bar.addPermanentWidget(self._shell_button)
         bar.addPermanentWidget(self._cursor_label)
         bar.addPermanentWidget(self._latex_label)
         bar.addPermanentWidget(self._mem_label)
-        bar.addPermanentWidget(self._host_state_label)
+        bar.addPermanentWidget(self._status_chip)
         self.refresh_latex_indicator()
+
+    def _set_preview_state(self, **changes: Any) -> None:
+        """Feed one fact to the status chip; the chip is the only place the state shows."""
+        self._preview_state = replace(self._preview_state, **changes)
+        self._status_chip.show_summary(summarize(self._preview_state))
+
+    def _on_shell_unread(self, count: int) -> None:
+        self._shell_button.setText(f"Live shell · {count}" if count else "Live shell")
 
     def refresh_latex_indicator(self) -> None:
         from manim_studio.latex import latex_status
@@ -366,6 +465,13 @@ class MainWindow(QMainWindow):
                 self._start_preview()
 
     def _connect_signals(self) -> None:
+        self.welcome_panel.openRequested.connect(self.open_dialog)
+        self.welcome_panel.newRequested.connect(self.new_scene_dialog)
+        self.welcome_panel.recentRequested.connect(self.open_path)
+        self.preview_panel.errorGotoLineRequested.connect(self.editor.go_to_line)
+        self.preview_panel.errorReloadRequested.connect(self.reload_preview)
+        self.preview_panel.playToggleRequested.connect(self._toggle_play)
+        self.preview_panel.frameStepRequested.connect(self._on_transport_step)
         self.editor.saveRequested.connect(self.save_buffer)
         self.editor.fileDropped.connect(self.open_path)
         self.editor.cursorMoved.connect(self._on_cursor_moved)
@@ -383,10 +489,12 @@ class MainWindow(QMainWindow):
         self.timeline.blockStillRequested.connect(self._render_block_still)
         self.timeline.blockDeleteRequested.connect(self._delete_block)
         self.timeline.blockIterationEditRequested.connect(self._edit_block_iteration)
-        self.timeline.undoRequested.connect(self._undo_timing)
-        self.timeline.redoRequested.connect(self._redo_timing)
+        self.timeline.undoRequested.connect(self._undo_edit)
+        self.timeline.redoRequested.connect(self._redo_edit)
         self.transport_bar.playPauseRequested.connect(self._toggle_play)
-        self.transport_bar.editRequested.connect(self._on_transport_edit)
+        self.transport_bar.editRequested.connect(self._on_timeline_op)
+        self._timeline_ops.requested.connect(self._on_timeline_op)
+        self._timeline_ops.unavailable.connect(self._set_status)
         self.timeline.blockSelected.connect(self._on_block_selected)
         self.inspector.durationCommitted.connect(self._on_inspector_duration)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
@@ -395,11 +503,26 @@ class MainWindow(QMainWindow):
         self.transport_bar.speedChanged.connect(self._on_transport_speed)
         self.transport_bar.zoomRequested.connect(self._on_zoom_requested)
         self.controller.statusChanged.connect(self._on_host_status)
+        self.controller.stateChanged.connect(
+            lambda state: self._set_preview_state(host=_HOST_BY_STATE.get(state, OFF))
+        )
+        self.controller.statusChanged.connect(
+            lambda state, _message: self._set_preview_state(
+                activity=state if state in ("playing", "seeking") else "idle"
+            )
+        )
+        self.events.loadingStageChanged.connect(
+            lambda stage: self._set_preview_state(loading=stage)
+        )
+        self.events.errorChanged.connect(lambda text: self._set_preview_state(error=text))
         self.controller.stateChanged.connect(self._on_host_state_changed)
         self.controller.stoppedReceived.connect(self._on_stopped_loop)
         self.controller.logReceived.connect(self._on_trace_log)
         self.patches.patchesChanged.connect(self._on_patches_changed)
         self.patches.stateChanged.connect(self._refresh_edits_ui)
+        self.patches.recorded.connect(self._record_timeline_step)
+        self.editor.containerUndone.connect(self._on_timeline_step_undone)
+        self.editor.containerRedone.connect(self._on_timeline_step_redone)
         self.patches.message.connect(self._set_status)
         self._scene_combo.currentTextChanged.connect(self._on_scene_selected)
         self.controller.execResultReceived.connect(self.shell.append_exec_result)
@@ -407,25 +530,49 @@ class MainWindow(QMainWindow):
         self.controller.statsReceived.connect(self.stats.on_stats)
         self.stats.memoryLabelChanged.connect(self._mem_label.setText)
         self.stats.cacheStatusChanged.connect(self.preview_panel.set_cache_status)
-        self.controller.hostLogReceived.connect(self.shell.append)
+        self.controller.hostLogReceived.connect(self.shell.append_output)
         self.watcher.file_changed.connect(self._on_file_changed)
+        self._external_bar.keepRequested.connect(self._keep_my_edits)
+        self._external_bar.takeRequested.connect(self._take_external_version)
+        self._external_bar.diffRequested.connect(self._show_external_diff)
         self.watcher.file_missing.connect(lambda path: self._set_status(f"file missing: {path}"))
         self.transport.failed.connect(lambda message: self._set_status(f"preview video: {message}"))
         self.exports.statusChanged.connect(self._set_status)
-        self.exports.outputLine.connect(self.shell.append)
+        self.exports.outputLine.connect(self.shell.append_output)
         self.exports.previewVideoReady.connect(self._on_preview_video_ready)
         self.exports.previewVideoFailed.connect(self._on_preview_video_failed)
         self.exports.exportFinished.connect(self._on_export_finished)
         self.editor.completionsRequested.connect(self._on_completions_requested)
         self.editor.signaturesRequested.connect(self._on_signatures_requested)
+        self._refresh_edit_buttons()  # the timeline operations start in their true state
 
     # ------------------------------------------------------------------
     # Completion (Jedi worker)
     # ------------------------------------------------------------------
 
     def _on_cursor_moved(self, line: int, column: int) -> None:
-        """Mirror the caret in the status bar and highlight its timeline block."""
+        """Mirror the caret in the status bar; a caret that enters a call follows it."""
         self._cursor_label.setText(f"Ln {line}, Col {column}")
+        index = self.events.block_at_line(line)
+        if index is not None and index != self.timeline.active_block:
+            self._follow_caret_block(index)
+        self._refresh_caret_block(line)
+
+    def _follow_caret_block(self, index: int) -> None:
+        """A caret that enters a call selects its block and moves the playhead to it."""
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        self.timeline.set_selected_block(index)
+        if self._playback_active:
+            return  # never interrupt playback because the caret moved
+        if self._path is not None and self.controller.is_running and not self.video.active:
+            self.scrub_to_time(block.start)
+        else:
+            self.timeline.set_playhead(block.start)
+
+    def _refresh_caret_block(self, line: int) -> None:
+        """Highlight the block under the caret (the playhead does not move)."""
         self.timeline.set_active_block(self.events.block_at_line(line))
         self._refresh_inspector()
 
@@ -494,8 +641,36 @@ class MainWindow(QMainWindow):
     def focus_shell(self) -> None:
         self.shell.focus_prompt()
 
+    # Palette hooks: small read/act methods the command palette calls.
+
+    def open_command_palette(self, prefix: str = "") -> None:
+        self._palette.open_palette(prefix)
+
+    def has_scene(self) -> bool:
+        return self._path is not None
+
+    def scene_names(self) -> tuple[str, ...]:
+        return tuple(self._scene_combo.itemText(i) for i in range(self._scene_combo.count()))
+
+    def current_scene_name(self) -> str:
+        return self._scene_combo.currentText()
+
+    def select_scene(self, name: str) -> None:
+        index = self._scene_combo.findText(name)
+        if index >= 0:
+            self._scene_combo.setCurrentIndex(index)
+
+    def jump_to_block(self, index: int) -> None:
+        block = self.timeline.log.block_by_index(index)
+        if block is None:
+            return
+        self.timeline.set_selected_block(index)
+        self.scrub_to_time(block.start)
+        self._on_block_activated(index)
+
     def set_embedded(self, checked: bool) -> None:
         self._embedded = bool(checked)
+        self._session.remember_embedded(self._embedded)
         self.preview_panel.set_mode(embedded=self._embedded)
         if self._path is not None and self._auto_preview and self._auto_reload:
             self._start_preview()
@@ -515,27 +690,87 @@ class MainWindow(QMainWindow):
         if path:
             self.open_path(path)
 
-    def open_path(self, path: str | Path) -> bool:
-        """Load a scene file into the editor and (re)start the preview."""
+    def open_path(self, path: str | Path, *, edits_settled: bool = False) -> bool:
+        """Load a scene file into the editor and (re)start the preview.
+
+        ``edits_settled`` says the caller has already asked about the unsaved edits.
+        """
         target = Path(path)
         check = check_scene_file(target)
         if not check.ok:
             self._set_status(f"cannot open: {check.error}")
-            self.shell.append(f"open failed: {target}: {check.error}")
+            self.shell.append(f"open failed: {target}: {check.error}", reveal=True)
+            self._forget_recent(target)
+            return False
+        if not edits_settled and not self._confirm_discard("open another scene"):
             return False
         self.editor.load_file(target)
+        self._external_bar.dismiss()
         self._path = target.resolve()
         # Edits made on the timeline travel with the scene: the host loads its first
         # trace from argv, so the controller must know them before it starts.
         self.controller.patches = self.patches.open_scene(self._path)
         self.watcher.watch(self._path)
         self._refresh_scene_list(self._path)
+        self._restore_scene_choice(self._path)
         self._update_title()
+        self._autosave.set_path(self._path)
+        self._offer_recovery()
+        self._remember_recent(self._path)
+        self._session.remember_last_file(self._path)
+        self._right_stack.setCurrentWidget(self.preview_panel)
+        self._update_scene_actions()
         self._set_status(f"opened {self._path.name} ({len(check.scenes)} scene(s))")
         self._warm_up_completion()
         if self._auto_reload:
             self._start_preview()
         return True
+
+    # Recent files ------------------------------------------------------
+
+    def recent_files(self) -> list[str]:
+        """Remembered scenes, newest first, minus files that no longer exist."""
+        if not self._restore_settings:
+            return []
+        raw: object = self._settings.value("recent/files", [])
+        if isinstance(raw, str):
+            entries = [raw]
+        elif isinstance(raw, list):
+            entries = [str(entry) for entry in raw]
+        else:
+            entries = []
+        return recent.prune_recent(entries)
+
+    def _remember_recent(self, path: Path) -> None:
+        if not self._restore_settings:
+            return
+        self._settings.setValue("recent/files", recent.push_recent(self.recent_files(), path))
+
+    def _forget_recent(self, path: Path) -> None:
+        if not self._restore_settings:
+            return
+        key = str(path.resolve()).casefold()
+        kept = [e for e in self.recent_files() if str(Path(e).resolve()).casefold() != key]
+        self._settings.setValue("recent/files", kept)
+
+    def _populate_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        entries = self.recent_files()
+        for entry in entries:
+            action = self._recent_menu.addAction(Path(entry).name)
+            action.setToolTip(entry)
+            action.triggered.connect(lambda checked=False, p=entry: self.open_path(p))
+        if not entries:
+            self._recent_menu.addAction("(none)").setEnabled(False)
+
+    def _update_scene_actions(self) -> None:
+        """Enable scene-dependent actions only while a scene is open."""
+        has_scene = self._path is not None
+        self._set_preview_state(scene_open=has_scene)
+        for action in self._scene_actions:
+            action.setEnabled(has_scene)
+            tip = action.text().replace("&", "")
+            action.setToolTip(tip if has_scene else f"{tip} — open a scene first")
 
     def _refresh_scene_list(self, path: Path) -> tuple[str, ...]:
         """Repopulate the scene combo from the file without impersonating a user.
@@ -583,8 +818,11 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        # Settle unsaved edits before writing anything, so a cancel leaves no file behind.
+        if not self._confirm_discard("create a new scene"):
+            return
         target = self.create_scene_file(path, template_key, scene_name)
-        self.open_path(target)
+        self.open_path(target, edits_settled=True)
 
     def _prompt_scene_name(self, default: str) -> str | None:
         """Ask for the scene class name until it is a usable Python identifier.
@@ -619,6 +857,49 @@ class MainWindow(QMainWindow):
         """Write a scene template to ``path``, deriving the class name when omitted."""
         return scene_files.create_scene_file(path, template_key, scene_name)
 
+    def _restore_scene_choice(self, path: Path) -> None:
+        """Select the scene this file last used; not a user choice, so it saves nothing."""
+        saved = self._session.scene_for(path)
+        index = self._scene_combo.findText(saved) if saved else -1
+        if index >= 0 and index != self._scene_combo.currentIndex():
+            self._scene_combo.blockSignals(True)
+            try:
+                self._scene_combo.setCurrentIndex(index)
+            finally:
+                self._scene_combo.blockSignals(False)
+
+    def _offer_recovery(self) -> None:
+        """Offer the snapshot a crash left behind, when it holds code the disk does not."""
+        recovered = self._autosave.pending_recovery()
+        if recovered is None or self._path is None:
+            return
+        choice = ask_recovery(self, self._path.name)
+        self._autosave.release()
+        if choice == RECOVER:
+            self.editor.replace_text(recovered)
+            self._set_status("recovered unsaved changes — save to keep them")
+        elif choice == DISCARD_RECOVERY:
+            self._autosave.discard()
+
+    def _confirm_discard(self, action: str) -> bool:
+        """Before ``action`` replaces or closes the buffer: True when it may go ahead."""
+        if not scene_files.has_unsaved_changes(
+            self._path, self.editor.text(), self.editor.is_modified()
+        ):
+            return True
+        name = self._path.name if self._path is not None else "untitled scene"
+        choice = ask_discard(self, name, action)
+        if choice == CANCEL:
+            return False
+        if choice == SAVE:
+            self.save_buffer()
+            # Save As can be cancelled, which leaves the work unsaved: stay put then.
+            return not scene_files.has_unsaved_changes(
+                self._path, self.editor.text(), self.editor.is_modified()
+            )
+        self._autosave.discard()  # the edits are being thrown away
+        return True
+
     def save_buffer(self) -> None:
         if self._path is None:
             self.save_buffer_as()
@@ -632,6 +913,7 @@ class MainWindow(QMainWindow):
             self._set_status(f"no changes — {self._path.name} is up to date")
             return
         self.editor.save_file(self._path)
+        self._autosave.discard()
         self.watcher.note_save()
         self._update_title()
         self._set_status(f"saved {self._path.name}")
@@ -661,7 +943,6 @@ class MainWindow(QMainWindow):
         if self._path is None or not self._auto_preview:
             return
         self.timeline.set_log(TimelineLog(()))
-        self.preview_panel.set_status("starting")
         self.controller.start(
             self._path,
             self._scene_name(),
@@ -711,10 +992,11 @@ class MainWindow(QMainWindow):
     # Transport toolbar
     # ------------------------------------------------------------------
 
-    def _on_transport_step(self, direction: int) -> None:
+    def _on_transport_step(self, frames: int) -> None:
+        """Step the playhead by ``frames`` (negative = back): the buttons step one at a time."""
         if self._path is None or not self.controller.is_running:
             return
-        self.scrub_to_time(self.timeline.playhead_time + direction * self.timeline.frame_step)
+        self.scrub_to_time(self.timeline.playhead_time + frames * self.timeline.frame_step)
 
     def _on_transport_jump(self, where: str) -> None:
         if self._path is None or not self.controller.is_running:
@@ -745,6 +1027,7 @@ class MainWindow(QMainWindow):
             self._loop_paused = True  # never auto-replay after a crash/stop
             self._was_playing = False
             self._set_transport_playing(False)
+        self._refresh_edit_buttons()  # running or not decides which operations apply
 
     def _on_transport_loop(self, enabled: bool) -> None:
         self._loop = bool(enabled)
@@ -945,6 +1228,8 @@ class MainWindow(QMainWindow):
         self.transport_bar.set_playing(self._playback_active)
 
     def _on_scene_selected(self, name: str) -> None:
+        if self._path is not None and name:
+            self._session.remember_scene(self._path, name)
         if self._path is not None and name and self.controller.is_running:
             self.controller.load(self._path, name)
 
@@ -985,7 +1270,7 @@ class MainWindow(QMainWindow):
         """A fresh trace tells us which call each block came from and which edits failed."""
         self.patches.on_log(message)
         # A fresh trace means new call sites: re-highlight the caret's block.
-        self._on_cursor_moved(self.editor.current_line(), self.editor.current_column())
+        self._refresh_caret_block(self.editor.current_line())
 
     def _on_block_resized(
         self, index: int, duration: float, *, iteration_only: bool = False
@@ -1070,13 +1355,33 @@ class MainWindow(QMainWindow):
         else:
             self._set_status(f"block {index} has no known source line")
 
-    def _undo_timing(self) -> None:
+    def _undo_edit(self) -> None:
+        """Undo the latest change, to the code or to the timeline: there is one stack."""
+        self.editor.undo()
+        self.editor.settle_saved_state()
+        self._refresh_edit_buttons()
+
+    def _redo_edit(self) -> None:
+        self.editor.redo()
+        self.editor.settle_saved_state()
+        self._refresh_edit_buttons()
+
+    def _record_timeline_step(self) -> None:
+        """A timeline change joins the editor's undo stack, so one Ctrl+Z can reach it."""
+        self.editor.addUndoAction(0, 0)
+        self.editor.settle_saved_state()  # no text changed, so the file is still saved
+
+    def _on_timeline_step_undone(self) -> None:
         if self.patches.undo():
             self._set_status("timeline edit undone")
+        else:
+            self._set_status("timeline history out of step: nothing was undone")
 
-    def _redo_timing(self) -> None:
+    def _on_timeline_step_redone(self) -> None:
         if self.patches.redo():
             self._set_status("timeline edit redone")
+        else:
+            self._set_status("timeline history out of step: nothing was redone")
 
     # ------------------------------------------------------------------
     # Timeline edits: persistence, host sync and writing them into the source
@@ -1096,19 +1401,7 @@ class MainWindow(QMainWindow):
             {i: self.patches.iteration_count(i) for i in range(count)},
             [i for i in range(count) if self.patches.block_is_edited(i)],
         )
-        enabled = {
-            "Undo timeline edit": self.patches.can_undo,
-            "Redo timeline edit": self.patches.can_redo,
-            "Apply timeline edits to source": self.patches.edit_count > 0,
-            "Show timeline edits as diff…": self.patches.edit_count > 0,
-            "Discard orphaned edits": self.patches.orphan_count > 0,
-            "Discard all timeline edits": self.patches.edit_count > 0,
-        }
-        for text, state in enabled.items():
-            action = self._toolbar_actions.get(text)
-            if action is not None:
-                action.setEnabled(state)
-        self._refresh_inspector()
+        self._refresh_inspector()  # also enables the timeline operations that apply now
 
     def selected_block_index(self) -> int | None:
         """The block toolbar operations act on: clicked, else caret, else playhead."""
@@ -1124,29 +1417,31 @@ class MainWindow(QMainWindow):
         index = self.selected_block_index()
         running = self._path is not None and self.controller.is_running
         editable = running and index is not None and self.patches.block_ref(index) is not None
-        self.transport_bar.set_edit_state(
-            {
-                "undo": self.patches.can_undo,
-                "redo": self.patches.can_redo,
-                "delete": editable,
-                "reset": index is not None and self.patches.block_is_edited(index),
-                "jump": index is not None and self.events.call_line(index) is not None,
-                "hold": running and not self.timeline.log.is_empty,
-                "apply": self.patches.edit_count > 0,
-                "diff": self.patches.edit_count > 0,
-                "orphans": self.patches.orphan_count > 0,
-                "discard_orphans": self.patches.orphan_count > 0,
-                "discard_all": self.patches.edit_count > 0,
-            }
+        states = op_states(
+            TimelineFacts(
+                running=running,
+                scene_open=self._path is not None,
+                has_log=not self.timeline.log.is_empty,
+                block=index,
+                block_editable=editable,
+                block_has_line=index is not None and self.events.call_line(index) is not None,
+                block_edited=index is not None and self.patches.block_is_edited(index),
+                can_undo=self.editor.canUndo(),
+                can_redo=self.editor.canRedo(),
+                edit_count=self.patches.edit_count,
+                orphan_count=self.patches.orphan_count,
+            )
         )
+        self._timeline_ops.apply(states)
+        self.transport_bar.set_operation_states(states)
 
-    def _on_transport_edit(self, action_id: str) -> None:
-        """A timeline-operation button was pressed."""
+    def _on_timeline_op(self, action_id: str) -> None:
+        """Run a timeline operation (from its button, a menu, a shortcut or the palette)."""
         index = self.selected_block_index()
         if action_id == "undo":
-            self._undo_timing()
+            self._undo_edit()
         elif action_id == "redo":
-            self._redo_timing()
+            self._redo_edit()
         elif action_id == "delete" and index is not None:
             self._delete_block(index)
         elif action_id == "reset" and index is not None:
@@ -1230,13 +1525,18 @@ class MainWindow(QMainWindow):
             self._set_status("no timeline edit can be written to the source")
             return
         left_over = self.patches.edit_count - len(plan.applied)
-        self.editor.replace_text(plan.text)
-        self.editor.save_file(self._path)
-        self.watcher.note_save()
-        self._update_title()
-        # The edits are now code: drop them from the sidecar; the host reloads once
-        # (through patchesChanged) with the new source and whatever could not be baked.
-        self.patches.finish_apply(plan)
+        # One undo step: the text, the saved file and the timeline edits come back together.
+        self.editor.beginUndoAction()
+        try:
+            self.editor.replace_text(plan.text)
+            self.editor.save_file(self._path)
+            self.watcher.note_save()
+            self._update_title()
+            # The edits are now code: drop them from the sidecar; the host reloads once
+            # (through patchesChanged) with the new source and whatever could not be baked.
+            self.patches.finish_apply(plan)
+        finally:
+            self.editor.endUndoAction()
         note = f"applied {len(plan.applied)} timeline edit(s) to {self._path.name}"
         if left_over:
             note += f"; {left_over} could not be written and stay as timeline edits"
@@ -1347,12 +1647,18 @@ class MainWindow(QMainWindow):
         self._set_status(f"preview video ready: {output}")
 
     def _on_preview_video_failed(self, exit_code: int) -> None:
-        self._set_status(f"preview render failed (exit {exit_code})")
+        self._report_failure(f"preview render failed (exit {exit_code})")
 
     def _on_export_finished(self, exit_code: int) -> None:
-        self._set_status(
-            "export finished" if exit_code == 0 else f"export failed (exit {exit_code})"
-        )
+        if exit_code == 0:
+            self._set_status("export finished")
+        else:
+            self._report_failure(f"export failed (exit {exit_code})")
+
+    def _report_failure(self, text: str) -> None:
+        """A failed render or export must not be missed: name it and open the live shell."""
+        self._set_status(text)
+        self.shell.append(f"{text}; the lines above say why", reveal=True)
 
     # ------------------------------------------------------------------
     # Stats snapshot
@@ -1374,22 +1680,68 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_file_changed(self, path: str) -> None:
-        if self.editor.is_modified():
-            self._set_status("file changed on disk — save (Ctrl+S) to overwrite, or reopen")
-            return
         if scene_files.read_disk_text(Path(path)) == self.editor.text():
             # Rewritten with identical code (a touch, a no-op formatter, another
             # tool saving the same bytes): reloading would reset the cursor and
             # undo history, and re-render the scene, for nothing.
             self._set_status("file touched on disk — code unchanged")
             return
-        # External change with a clean buffer: refresh the editor text, the scene
-        # list (a class may have been renamed) and the preview, so all three agree.
-        self._set_status("file changed on disk — reloading editor and preview")
-        self.editor.load_file(path)
-        self._refresh_scene_list(Path(path))
+        decision = external_changes.decide(self._external_policy, self.editor.is_modified())
+        if decision is Decision.RELOAD:
+            self._take_external_version(keep_undo=False)
+        elif decision is Decision.RELOAD_OVER_EDITS:
+            self._take_external_version(keep_undo=True)
+        elif decision is Decision.ASK:
+            self._external_bar.show_change(Path(path).name)
+            self._set_status("file changed on disk — choose what to keep, above the code")
+        else:
+            self._set_status("file changed on disk — ignored (External changes: Ignore)")
+
+    def _take_external_version(self, *, keep_undo: bool = True) -> None:
+        """Show the file as it is on disk, then re-check the scene list and the preview."""
+        if self._path is None:
+            return
+        if keep_undo:
+            disk_text = scene_files.read_disk_text(self._path)
+            if disk_text is None:
+                self._set_status("cannot read the file on disk")
+                return
+            # Your edits stay on the undo stack: Ctrl+Z brings them back.
+            self.editor.reload_from_disk(disk_text)
+        else:
+            self.editor.load_file(self._path)
+        self._external_bar.dismiss()
+        # The file may have renamed a class, so the scene list and the preview follow it.
+        self._refresh_scene_list(self._path)
         self._warm_up_completion()
         self.reload_preview()
+        note = " (Ctrl+Z brings your edits back)" if keep_undo else ""
+        self._set_status(f"took the file from disk{note}")
+
+    def _keep_my_edits(self) -> None:
+        self._external_bar.dismiss()
+        self._set_status("kept your edits — saving (Ctrl+S) overwrites the file on disk")
+
+    def _show_external_diff(self) -> None:
+        if self._path is None:
+            return
+        disk_text = scene_files.read_disk_text(self._path)
+        if disk_text is None:
+            self._set_status("cannot read the file on disk")
+            return
+        notes = ["Taking the file from disk replaces the lines marked '-' with the '+' lines."]
+        dialog = EditsDiffDialog(
+            unified_diff(self.editor.text(), disk_text, self._path.name), notes, self
+        )
+        dialog.exec()
+
+    def _set_external_policy(self, policy: str) -> None:
+        self._external_policy = external_changes.parse_policy(policy)
+        self._external_actions[self._external_policy].setChecked(True)
+        self._session.remember_external_policy(self._external_policy)
+        self._set_status(
+            f"external changes: {external_changes.POLICY_LABELS[self._external_policy]}"
+        )
 
     # ------------------------------------------------------------------
     # Live shell
@@ -1513,7 +1865,13 @@ class MainWindow(QMainWindow):
     def _set_status(self, text: str) -> None:
         self.statusBar().showMessage(text)
 
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Only keys that no widget took arrive here: a shortcut that is off says why.
+        self._timeline_ops.explain_unavailable(QApplication.focusWidget(), event)
+        super().keyPressEvent(event)
+
     def _update_title(self) -> None:
+        self._set_preview_state(dirty=self.editor.is_modified())
         if self._path is None:
             self.setWindowTitle(APP_NAME)
             self.editor_pane.set_file(None)
@@ -1526,9 +1884,26 @@ class MainWindow(QMainWindow):
         geometry = self._settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
-        self._settings.setValue("window/embedded", self._embedded)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if not self._layout_restored:
+            # Splitters only take saved sizes once the window has its real size.
+            self._layout_restored = True
+            if self._session.restore_layout(horizontal=self._horizontal, vertical=self._vertical):
+                self.shell.show()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_discard("close the editor"):
+            event.ignore()
+            return
+        self._autosave.discard()
+        self._session.remember_layout(
+            horizontal=self._horizontal,
+            vertical=self._vertical,
+            shell_visible=not self.shell.isHidden(),
+        )
+        self._session.remember_embedded(self._embedded)
         self.watcher.stop()
         self.completions.stop()
         self.controller.shutdown()

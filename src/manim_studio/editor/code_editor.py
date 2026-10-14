@@ -86,6 +86,10 @@ INDIC_ERROR = 8
 BLOCK_HIGHLIGHT_MS = 3000
 BLOCK_TINT_ALPHA = 70
 SC_MOD_TEXT_CHANGED = 0x3  # SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT
+# A step the container put on the undo stack (addUndoAction) was undone or redone.
+SC_MOD_CONTAINER = 0x40000
+SC_PERFORMED_UNDO = 0x20
+SC_PERFORMED_REDO = 0x40
 
 _MONOSPACE_CANDIDATES = (
     "JetBrains Mono",
@@ -119,6 +123,9 @@ class CodeEditor(ScintillaEdit):
     fileDropped = Signal(str)
     cursorMoved = Signal(int, int)  # 1-based line, 1-based column
     modificationChanged = Signal(bool)
+    #: A timeline step on the undo stack was undone or redone; the window applies it.
+    containerUndone = Signal()
+    containerRedone = Signal()
     completionsRequested = Signal(str, int)  # source, caret offset
     signaturesRequested = Signal(str, int)  # source, caret offset
 
@@ -132,6 +139,7 @@ class CodeEditor(ScintillaEdit):
         self._block_timer.setInterval(BLOCK_HIGHLIGHT_MS)
         self._block_timer.timeout.connect(self.clear_block_highlight)
         self._last_modified = False
+        self._saved_text: str | None = None  # the text as it was last loaded or saved
         self._code_words: tuple[str, ...] = ()
         # Pygments lexes the whole buffer, so coalesce edits into one restyle
         # per event-loop turn instead of re-lexing on every keystroke.
@@ -266,6 +274,7 @@ class CodeEditor(ScintillaEdit):
 
     def _connect_signals(self) -> None:
         self.modified.connect(self._on_modified)
+        self.modified.connect(self._on_container_step)
         self.savePointChanged.connect(self._on_save_point)
         self.updateUi.connect(self._on_update_ui)
         self.charAdded.connect(self._on_char_added)
@@ -313,8 +322,20 @@ class CodeEditor(ScintillaEdit):
         self.set_text(target.read_text(encoding="utf-8"))
         self.emptyUndoBuffer()
         self.setSavePoint()
+        self._saved_text = self.text()
         self.go_to_line(1)
         self.clear_error_marker()
+        self._last_modified = False
+        self.modificationChanged.emit(False)
+
+    def reload_from_disk(self, text: str) -> None:
+        """Show ``text`` (the file as it is on disk) as the saved text, keeping the undo history.
+
+        The previous text stays on the undo stack as one step, so Ctrl+Z brings it back.
+        """
+        self.replace_text(text)
+        self.setSavePoint()
+        self._saved_text = self.text()
         self._last_modified = False
         self.modificationChanged.emit(False)
 
@@ -322,11 +343,32 @@ class CodeEditor(ScintillaEdit):
         """Write the buffer to ``path`` and mark the save point."""
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.text(), encoding="utf-8", newline="")
+        content = self.text()
+        target.write_text(content, encoding="utf-8", newline="")
         self.setSavePoint()
+        self._saved_text = content
         self._last_modified = False
         self.modificationChanged.emit(False)
         return target
+
+    def settle_saved_state(self) -> None:
+        """Make "modified" mean "the text differs from what was saved", after an undo or redo.
+
+        A timeline step sits on Scintilla's undo stack without changing the text, but
+        Scintilla counts moving off the save point as an edit.  Call this once an undo or
+        redo has returned: when the text is the saved text, the save point moves here.
+        """
+        if self._saved_text is not None and self.is_modified() and self.text() == self._saved_text:
+            self.setSavePoint()
+
+    def _on_container_step(self, kind: int, *_args: Any) -> None:
+        """Pass on undo/redo of a timeline step; Scintilla reports it inside undo()/redo()."""
+        if not kind & SC_MOD_CONTAINER:
+            return
+        if kind & SC_PERFORMED_UNDO:
+            self.containerUndone.emit()
+        elif kind & SC_PERFORMED_REDO:
+            self.containerRedone.emit()
 
     def is_modified(self) -> bool:
         try:
