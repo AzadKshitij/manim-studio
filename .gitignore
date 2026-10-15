@@ -43,3 +43,4 @@ desktop.ini
 
 # Agent session memory (keep project skills, exclude local memory)
 .opencode/memory/
+/.openchamber/screenshots

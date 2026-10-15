@@ -5,7 +5,7 @@ description = "Production-grade realtime editor for ManimGL scenes: live preview
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
-authors = [{ name = "Manim Studio Team" }]
+authors = [{ name = "Azad Kshitij" }]
 keywords = ["manim", "manimgl", "editor", "animation", "realtime"]
 classifiers = [
     "Development Status :: 4 - Beta",
