@@ -684,7 +684,7 @@ class FilmstripCrawler:
                 break
             self._cur_block = block
             self._frame = frame + 1
-            self._render()
+            self._render(boundary=frame > 0 and frame >= self._block_frame_count(block))
             rendered += 1
             if self._done:
                 break
@@ -730,7 +730,7 @@ class FilmstripCrawler:
                 engine.interpolate_paused(local, dt)
             else:
                 engine.advance_wait(dt)
-            self._render()
+            self._render(boundary=self._frame >= self._block_frame_count(block))
             self._frame += 1
             return 1
         self._complete_block(block)
@@ -770,10 +770,18 @@ class FilmstripCrawler:
         if close is not None:
             close()
 
-    def _render(self) -> None:
+    def _render(self, *, boundary: bool = False) -> None:
+        """Store the scene's current pose as a frame.
+
+        A block's end pose (``boundary``) is only a placeholder for the next block's first
+        frame.  When that frame is already cached (the next block was reused and shifted),
+        the cached frame must win, or the boundary would show this block's last pose.
+        """
         from manim_studio.ipc import encode_frame
 
         scene = self._engine.scene
+        if boundary and self._filmstrip.has(round(scene.time * self._fps)):
+            return
         timings = self._timings
         if timings is None:
             scene.camera.capture(*scene.render_groups)
