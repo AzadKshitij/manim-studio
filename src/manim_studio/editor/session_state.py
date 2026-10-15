@@ -22,6 +22,8 @@ __all__ = ["SessionState", "scene_key"]
 _HORIZONTAL = "layout/horizontal"
 _VERTICAL = "layout/vertical"
 _SHELL_VISIBLE = "layout/shell_visible"
+_LAYOUT_MODE = "layout/mode"
+_SCENE_DEFAULTS = "scene/defaults"
 _EMBEDDED = "window/embedded"
 _LAST_FILE = "session/last_file"
 _REOPEN_LAST = "session/reopen_last_file"
@@ -32,6 +34,13 @@ def scene_key(path: Path) -> str:
     """A settings key for ``path`` that does not depend on how the path is spelled."""
     digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
     return f"scene_selection/{digest[:20]}"
+
+
+def _layout_keys(preset: str) -> tuple[str, str]:
+    """Landscape keeps the original keys, so layouts saved before presets still restore."""
+    if preset == "landscape":
+        return _HORIZONTAL, _VERTICAL
+    return f"layout/{preset}/horizontal", f"layout/{preset}/vertical"
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -58,19 +67,28 @@ class SessionState:
     # ------------------------------------------------------------------
 
     def remember_layout(
-        self, *, horizontal: QSplitter, vertical: QSplitter, shell_visible: bool
+        self,
+        *,
+        horizontal: QSplitter,
+        vertical: QSplitter,
+        shell_visible: bool,
+        preset: str = "landscape",
     ) -> None:
         if not self._enabled:
             return
-        self._settings.setValue(_HORIZONTAL, horizontal.saveState())
-        self._settings.setValue(_VERTICAL, vertical.saveState())
+        horizontal_key, vertical_key = _layout_keys(preset)
+        self._settings.setValue(horizontal_key, horizontal.saveState())
+        self._settings.setValue(vertical_key, vertical.saveState())
         self._settings.setValue(_SHELL_VISIBLE, shell_visible)
 
-    def restore_layout(self, *, horizontal: QSplitter, vertical: QSplitter) -> bool | None:
+    def restore_layout(
+        self, *, horizontal: QSplitter, vertical: QSplitter, preset: str = "landscape"
+    ) -> bool | None:
         """Restore the splitter sizes; returns the remembered Live shell visibility, if any."""
         if not self._enabled:
             return None
-        for key, splitter in ((_HORIZONTAL, horizontal), (_VERTICAL, vertical)):
+        horizontal_key, vertical_key = _layout_keys(preset)
+        for key, splitter in ((horizontal_key, horizontal), (vertical_key, vertical)):
             state = self._settings.value(key)
             if isinstance(state, bytes):
                 state = QByteArray(state)
@@ -78,6 +96,36 @@ class SessionState:
                 splitter.restoreState(state)
         shell = self._settings.value(_SHELL_VISIBLE)
         return None if shell is None else _as_bool(shell, default=False)
+
+    def layout_mode(self) -> str | None:
+        """The remembered layout choice: ``auto``, ``landscape`` or ``portrait``."""
+        if not self._enabled:
+            return None
+        value = self._settings.value(_LAYOUT_MODE)
+        return str(value) if value else None
+
+    def remember_layout_mode(self, mode: str) -> None:
+        if self._enabled:
+            self._settings.setValue(_LAYOUT_MODE, mode)
+
+    # ------------------------------------------------------------------
+    # Defaults for new scenes
+    # ------------------------------------------------------------------
+
+    def scene_defaults_json(self) -> str | None:
+        """The app-wide scene settings new scenes start with, as stored JSON."""
+        if not self._enabled:
+            return None
+        value = self._settings.value(_SCENE_DEFAULTS)
+        return str(value) if value else None
+
+    def remember_scene_defaults_json(self, text: str | None) -> None:
+        if not self._enabled:
+            return
+        if text is None:
+            self._settings.remove(_SCENE_DEFAULTS)
+        else:
+            self._settings.setValue(_SCENE_DEFAULTS, text)
 
     # ------------------------------------------------------------------
     # Preview mode

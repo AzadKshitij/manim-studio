@@ -57,6 +57,13 @@ _RESOLUTIONS: tuple[tuple[str, str], ...] = (
 
 _KNOWN_SUFFIXES = {".mp4", ".gif", ".png"}
 _LAST_DIR_KEY = "export/last_dir"
+#: Pixel sizes of the quality presets, for scenes whose settings must yield to them.
+_PRESET_SIZES: dict[str, tuple[int, int]] = {
+    "low": (854, 480),
+    "medium": (1280, 720),
+    "high": (1920, 1080),
+    "4k": (3840, 2160),
+}
 
 
 class ExportDialog(QDialog):
@@ -75,8 +82,10 @@ class ExportDialog(QDialog):
         initial_range: tuple[int, int] | None = None,
         controller: ExportController | None = None,
         plan_builder: Callable[..., ExportPlan] = build_export_plan,
+        scene_has_settings: bool = False,
     ) -> None:
         super().__init__(parent)
+        self._scene_has_settings = scene_has_settings
         self.setWindowTitle("Export scene")
         self.resize(580, 520)
         self._scene_path = Path(scene_path)
@@ -124,10 +133,12 @@ class ExportDialog(QDialog):
 
         resolution_wrap = QVBoxLayout()
         self._resolution_combo = QComboBox(self)
+        if self._scene_has_settings:
+            self._resolution_combo.addItem("Scene settings", "scene")
         for label, key in _RESOLUTIONS:
             self._resolution_combo.addItem(label, key)
         self._resolution_combo.setCurrentIndex(
-            next(i for i, (_label, key) in enumerate(_RESOLUTIONS) if key == "high")
+            self._resolution_combo.findData("scene" if self._scene_has_settings else "high")
         )
         resolution_wrap.addWidget(self._resolution_combo)
         custom_row = QHBoxLayout()
@@ -282,12 +293,17 @@ class ExportDialog(QDialog):
 
     def _quality(self) -> str:
         key = str(self._resolution_combo.currentData())
-        return "high" if key == "custom" else key
+        return "high" if key in ("custom", "scene") else key
 
     def _resolution(self) -> tuple[int, int] | None:
-        if str(self._resolution_combo.currentData()) != "custom":
-            return None
-        return self._custom_width.value(), self._custom_height.value()
+        key = str(self._resolution_combo.currentData())
+        if key == "custom":
+            return self._custom_width.value(), self._custom_height.value()
+        if key in _PRESET_SIZES and self._scene_has_settings:
+            # A preset on a scene with settings sets only the size; the scene still
+            # supplies its background, palette and frame rate.
+            return _PRESET_SIZES[key]
+        return None
 
     def _fps(self) -> int | None:
         if self._is_still() or self._fps_spin.value() == 0:
