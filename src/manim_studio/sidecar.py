@@ -1,8 +1,9 @@
 """The timeline sidecar file and its undo stack (pure, stdlib only).
 
 Timeline edits live next to the scene as ``<scene>.studio.json`` until the user chooses
-"Apply to source".  The file holds only the anchored patches from
-:mod:`manim_studio.patches`; the scene source stays untouched.
+"Apply to source".  The file holds the anchored patches from :mod:`manim_studio.patches`
+and, per scene class, the render settings from :mod:`manim_studio.scene_settings`; the
+scene source stays untouched until the user applies them.
 
 :class:`PatchStack` is the in-memory edit history (undo/redo of whole patch sets) and
 replaces the old per-block ``TimingOverrides``.  Its :attr:`revision` increases on every
@@ -16,11 +17,13 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from manim_studio.patches import Patch, PatchError, parse_patch, with_patch
+from manim_studio.scene_settings import SceneSettings, SettingsError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -30,14 +33,20 @@ __all__ = [
     "SIDECAR_VERSION",
     "PatchStack",
     "SidecarError",
+    "load_scene_settings",
     "load_sidecar",
     "read_patch_file",
+    "read_settings_file",
+    "save_scene_settings",
     "save_sidecar",
     "sidecar_path",
     "write_patch_file",
+    "write_settings_file",
 ]
 
-SIDECAR_VERSION = 1
+SIDECAR_VERSION = 2
+# Version 1 held patches only; it is still read and is rewritten as version 2 on save.
+_READABLE_VERSIONS = (1, 2)
 SIDECAR_SUFFIX = ".studio.json"
 
 
@@ -51,17 +60,30 @@ def sidecar_path(scene_path: str | Path) -> Path:
     return path.with_name(path.stem + SIDECAR_SUFFIX)
 
 
-def load_sidecar(scene_path: str | Path) -> tuple[Patch, ...]:
-    """Read the patches stored for ``scene_path``; an absent file means no patches."""
+def load_document(scene_path: str | Path) -> tuple[tuple[Patch, ...], dict[str, SceneSettings]]:
+    """Patches and per-scene settings stored for ``scene_path``; absent means none."""
     path = sidecar_path(scene_path)
     if not path.exists():
-        return ()
-    return read_patch_file(path)
+        return (), {}
+    return _read_document(path)
+
+
+def load_sidecar(scene_path: str | Path) -> tuple[Patch, ...]:
+    """Read the patches stored for ``scene_path``; an absent file means no patches."""
+    return load_document(scene_path)[0]
+
+
+def load_scene_settings(scene_path: str | Path) -> dict[str, SceneSettings]:
+    """Settings per scene class name stored for ``scene_path``; absent means none."""
+    return load_document(scene_path)[1]
 
 
 def read_patch_file(path: str | Path) -> tuple[Patch, ...]:
     """Parse a sidecar-format JSON file; raises :class:`SidecarError` on any problem."""
-    path = Path(path)
+    return _read_document(Path(path))[0]
+
+
+def _read_document(path: Path) -> tuple[tuple[Patch, ...], dict[str, SceneSettings]]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -69,33 +91,70 @@ def read_patch_file(path: str | Path) -> tuple[Patch, ...]:
     if not isinstance(raw, dict):
         raise SidecarError(f"{path.name} must contain a JSON object")
     version = raw.get("version")
-    if version != SIDECAR_VERSION:
+    if version not in _READABLE_VERSIONS:
         raise SidecarError(f"{path.name} has unsupported version {version!r}")
     items = raw.get("patches")
     if not isinstance(items, list):
         raise SidecarError(f"{path.name} 'patches' must be a list")
     try:
-        return tuple(parse_patch(item) for item in items)
+        patches = tuple(parse_patch(item) for item in items)
     except PatchError as exc:
         raise SidecarError(f"{path.name}: {exc}") from exc
+    scenes_raw = raw.get("scenes", {})
+    if not isinstance(scenes_raw, dict):
+        raise SidecarError(f"{path.name} 'scenes' must be an object")
+    try:
+        scenes = {str(name): SceneSettings.from_dict(data) for name, data in scenes_raw.items()}
+    except SettingsError as exc:
+        raise SidecarError(f"{path.name}: {exc}") from exc
+    return patches, scenes
 
 
-def save_sidecar(scene_path: str | Path, patches: Iterable[Patch]) -> Path | None:
-    """Write the patches atomically; with no patches the sidecar file is removed.
+def _payload(items: list[dict[str, Any]], scenes: Mapping[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {"version": SIDECAR_VERSION, "patches": items}
+    if scenes:
+        payload["scenes"] = dict(scenes)
+    return payload
+
+
+def save_sidecar(
+    scene_path: str | Path,
+    patches: Iterable[Patch],
+    settings: Mapping[str, SceneSettings] | None = None,
+) -> Path | None:
+    """Write the sidecar atomically; with nothing left to store the file is removed.
+
+    ``settings`` replaces the per-scene settings.  When it is ``None`` the settings already
+    on disk are kept, so saving edits never drops render settings (and vice versa).
 
     Returns the path written, or ``None`` when the file was removed (or never existed).
     """
     path = sidecar_path(scene_path)
+    kept = _existing_settings(path) if settings is None else dict(settings)
     items = [patch.to_dict() for patch in patches]
-    if not items:
+    scenes = {name: value.to_dict() for name, value in kept.items()}
+    if not items and not scenes:
         with contextlib.suppress(FileNotFoundError):
             path.unlink()
         return None
-    payload = {"version": SIDECAR_VERSION, "patches": items}
     temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temp.write_text(json.dumps(_payload(items, scenes), indent=2) + "\n", encoding="utf-8")
     os.replace(temp, path)
     return path
+
+
+def save_scene_settings(
+    scene_path: str | Path, settings: Mapping[str, SceneSettings]
+) -> Path | None:
+    """Replace the per-scene settings, keeping the stored patches."""
+    return save_sidecar(scene_path, load_sidecar(scene_path), settings)
+
+
+def _existing_settings(path: Path) -> dict[str, SceneSettings]:
+    if not path.exists():
+        return {}
+    # An unreadable file is an error, not an empty one: overwriting it would lose data.
+    return _read_document(path)[1]
 
 
 def write_patch_file(patches: Iterable[Patch]) -> Path:
@@ -104,13 +163,30 @@ def write_patch_file(patches: Iterable[Patch]) -> Path:
     Handed to processes (the preview host, the export launcher) that must run
     exactly the edits the editor is showing, independent of what is on disk.
     """
-    content = json.dumps(
-        {"version": SIDECAR_VERSION, "patches": [patch.to_dict() for patch in patches]}
-    )
+    content = json.dumps(_payload([patch.to_dict() for patch in patches], {}))
+    return _write_temp("patches", content)
+
+
+def write_settings_file(settings: SceneSettings) -> Path:
+    """Write one scene's settings to a content-addressed temp file and return its path."""
+    return _write_temp("settings", json.dumps(settings.to_dict()))
+
+
+def read_settings_file(path: str | Path) -> SceneSettings:
+    """Read a file written by :func:`write_settings_file`."""
+    target = Path(path)
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+        return SceneSettings.from_dict(raw)
+    except (OSError, json.JSONDecodeError, SettingsError) as exc:
+        raise SidecarError(f"cannot read settings {target.name}: {exc}") from exc
+
+
+def _write_temp(kind: str, content: str) -> Path:
     digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:16]
     config_dir = Path(tempfile.gettempdir()) / "manim-studio"
     config_dir.mkdir(parents=True, exist_ok=True)
-    path = config_dir / f"patches_{digest}.json"
+    path = config_dir / f"{kind}_{digest}.json"
     if not path.exists() or path.read_text(encoding="utf-8") != content:
         path.write_text(content, encoding="utf-8")
     return path

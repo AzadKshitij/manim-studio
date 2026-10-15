@@ -17,7 +17,7 @@ from manim_studio.export import (
     run_export,
 )
 from manim_studio.patches import Anchor, SetDuration
-from manim_studio.sidecar import save_sidecar, sidecar_path
+from manim_studio.sidecar import SIDECAR_VERSION, save_sidecar, sidecar_path
 from manim_studio.site_index import index_source
 
 
@@ -145,7 +145,7 @@ class TestBuildExportPlan:
         assert plan.patches == (patch,)
         config = Path(argv[argv.index("--patch-file") + 1])
         assert json.loads(config.read_text(encoding="utf-8")) == {
-            "version": 1,
+            "version": SIDECAR_VERSION,
             "patches": [patch.to_dict()],
         }
 

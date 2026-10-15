@@ -19,7 +19,8 @@ from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
 from manim_studio import ipc, spawn
 from manim_studio.ipc import Channel, Command, Event, FrameParser
 from manim_studio.patches import parse_patch
-from manim_studio.sidecar import write_patch_file
+from manim_studio.scene_settings import SceneSettings
+from manim_studio.sidecar import write_patch_file, write_settings_file
 from manim_studio.stats import TimingStats
 
 __all__ = ["PreviewController"]
@@ -70,6 +71,8 @@ class PreviewController(QObject):
         self.scene_name: str | None = None
         #: Timeline edits (serialized patches) re-sent with every load/reload.
         self.patches: list[dict[str, Any]] = []
+        #: Render settings the scene runs with; applied on the next (re)start.
+        self.settings: SceneSettings | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -105,6 +108,8 @@ class PreviewController(QObject):
         ):
             raise RuntimeError(f"cannot listen on loopback: {self._server.errorString()}")
         port = self._server.serverPort()
+        if self.settings is not None:
+            size = (self.settings.width, self.settings.height)
         width, height = size
         args = [
             str(self.scene_path),
@@ -122,6 +127,8 @@ class PreviewController(QObject):
         if self.patches:
             # The host loads its first scene from argv, so hand it the current edits now.
             args += ["--patch-file", str(write_patch_file(parse_patch(p) for p in self.patches))]
+        if self.settings is not None:
+            args += ["--settings-file", str(write_settings_file(self.settings))]
         if fps is not None:
             args += ["--fps", str(fps)]
         # Frozen builds re-invoke our own exe instead of `python -m` (ADR 0005).

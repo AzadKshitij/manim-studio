@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from manim_studio.scene_settings import SceneSettings
 from manim_studio.tracer import TraceRecorder, TraceSnapshot
 
 if TYPE_CHECKING:
@@ -537,27 +538,54 @@ def load_scene_class(path: str | Path, scene_name: str | None = None) -> type:
 # ---------------------------------------------------------------------------
 
 
+def fit_camera_to_pixel_aspect(camera: Any) -> None:
+    """Correct manimgl's horizontal frame scale for this camera's pixel aspect ratio.
+
+    manimgl 1.7.2 builds ``frame_rescale_factors`` from the module-level 16:9 frame width,
+    so any other resolution is stretched sideways.  The correction is the same one the
+    managed scene block installs (``scene_settings._PIXEL_FIX``); for 16:9 it changes
+    nothing.
+    """
+    from manimlib.constants import FRAME_HEIGHT
+
+    draw_uniforms = camera.refresh_uniforms
+
+    def refresh_uniforms() -> None:
+        draw_uniforms()
+        factors = list(camera.uniforms["frame_rescale_factors"])
+        factors[0] = 2.0 / (FRAME_HEIGHT * camera.get_aspect_ratio())
+        camera.uniforms["frame_rescale_factors"] = tuple(factors)
+
+    camera.refresh_uniforms = refresh_uniforms
+
+
 def make_scene(
     scene_class: type,
     *,
     window: Any = None,
     resolution: tuple[int, int] = DEFAULT_TRACE_RESOLUTION,
     fps: int | None = None,
+    settings: SceneSettings | None = None,
     skip_animations: bool = True,
     start_at_animation_number: int | None = None,
     end_at_animation_number: int | None = None,
     preview_while_skipping: bool = False,
 ) -> Any:
-    """Instantiate a scene for headless execution with writing disabled."""
+    """Instantiate a scene for headless execution with writing disabled.
+
+    ``settings``, when given, win over ``resolution`` and ``fps`` and add the background.
+    """
     camera_config: dict[str, Any] = {"resolution": resolution}
     if fps is not None:
         camera_config["fps"] = fps
+    if settings is not None:
+        camera_config.update(settings.camera_config())
     file_writer_config = {
         "write_to_movie": False,
         "save_last_frame": False,
         "quiet": True,
     }
-    return scene_class(
+    scene = scene_class(
         window=window,
         camera_config=camera_config,
         file_writer_config=file_writer_config,
@@ -566,6 +594,9 @@ def make_scene(
         end_at_animation_number=end_at_animation_number,
         preview_while_skipping=preview_while_skipping,
     )
+    if settings is not None and settings.needs_pixel_fix:
+        fit_camera_to_pixel_aspect(scene.camera)
+    return scene
 
 
 def run_construct(scene: Any) -> None:

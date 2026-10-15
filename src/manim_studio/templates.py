@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from manim_studio.scene_settings import SceneSettings, apply_block
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -48,12 +50,18 @@ class Template:
     def is_scene(self) -> bool:
         return "{scene_name}" in self.code
 
-    def render(self, scene_name: str = "MyScene") -> str:
-        """Render the template, validating the scene name when used."""
+    def render(self, scene_name: str = "MyScene", settings: SceneSettings | None = None) -> str:
+        """Render the template, validating the scene name when used.
+
+        ``settings`` adds the managed scene-settings block to the new scene class.
+        """
         if self.is_scene:
             if not scene_name.isidentifier():
                 raise TemplateError(f"invalid scene name {scene_name!r}")
-            return self.code.replace("{scene_name}", scene_name)
+            text = self.code.replace("{scene_name}", scene_name)
+            if settings is not None:
+                text = apply_block(text, scene_name, settings)
+            return text
         return self.code
 
 
@@ -237,10 +245,10 @@ def find_template(key: str, *, kind: str | None = None) -> Template:
     raise TemplateError(f"unknown template {key!r}")
 
 
-def render_scene_template(key: str, scene_name: str) -> str:
+def render_scene_template(key: str, scene_name: str, settings: SceneSettings | None = None) -> str:
     """Render a complete scene file from a scene template."""
     template = find_template(key, kind="scene")
-    return template.render(scene_name)
+    return template.render(scene_name, settings)
 
 
 def snippet_titles() -> Sequence[tuple[str, str]]:
