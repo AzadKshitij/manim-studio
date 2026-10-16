@@ -17,7 +17,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from manim_studio.color_sites import literal_for
 from manim_studio.mobject_sites import CallRef, MobjectTarget, find_mobject_targets
 
 __all__ = [
@@ -75,10 +74,13 @@ Change = SetArgument | RemoveArgument | AddCall
 def format_colour(hex_value: str, original: str) -> str:
     """How to spell a picked colour in source, given the literal it replaces.
 
-    A manim constant is written by name (``BLUE``), anything else as a quoted hex string in the
-    original's quote style.  Delegates to :func:`manim_studio.color_sites.literal_for`.
+    Always a quoted hex string, in the quote style of the literal it replaces.  Manim constant
+    names (``BLUE``) are never written: a colour set from the inspector reads the same wherever
+    the source is moved.  A colour the user did not change keeps its original spelling; that is
+    decided by the caller, not here.
     """
-    return literal_for(hex_value, original)
+    quote = "'" if original.startswith("'") else '"'
+    return f"{quote}{hex_value.upper()}{quote}"
 
 
 def format_value(value: Any) -> str:

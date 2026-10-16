@@ -173,6 +173,8 @@ def test_format_value_refuses_non_finite_floats_and_objects() -> None:
         format_value(object())
 
 
-def test_format_colour_uses_manim_names_and_keeps_quote_style() -> None:
-    assert format_colour("#58C4DD", '"#000000"') == "BLUE"
+def test_format_colour_is_always_hex_and_keeps_the_quote_style() -> None:
+    # A manim constant name is never written, even when the hex matches one.
+    assert format_colour("#58C4DD", '"#000000"') == '"#58C4DD"'
+    assert format_colour("#58c4dd", "'#000000'") == "'#58C4DD'"
     assert format_colour("#123456", "'#000000'") == "'#123456'"

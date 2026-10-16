@@ -124,7 +124,7 @@ def test_a_gradient_gets_a_colour_list_and_plus_adds_one(
     assert gradient.editor.values() == ["#58C4DD", "#5CD0B3"]
     gradient.editor._on_add()
     changes = _applied(dock, qtbot)
-    assert changes == [SetArgument(1, "TEAL", position=2)]
+    assert changes == [SetArgument(1, '"#5CD0B3"', position=2)]
 
 
 def test_applied_changes_produce_the_intended_source(dock: MobjectInspector, qtbot: QtBot) -> None:
@@ -133,7 +133,8 @@ def test_applied_changes_produce_the_intended_source(dock: MobjectInspector, qtb
     gradient.editor._on_add()
     changes = _applied(dock, qtbot)
     out = apply_changes(TEXT, _target(TEXT, "t"), changes)
-    assert out.endswith("t.set_color_by_gradient(BLUE, TEAL, TEAL)\n")
+    # The untouched BLUE and TEAL keep their names; the colour added is written as hex.
+    assert out.endswith('t.set_color_by_gradient(BLUE, TEAL, "#5CD0B3")\n')
 
 
 def test_a_value_the_schema_cannot_edit_falls_back_to_the_expression(
@@ -273,9 +274,9 @@ def test_a_colour_map_is_edited_row_by_row_and_keeps_names(
     row.editor._on_add()
     row.editor._rows[1].key.setText("y")
     changes = _applied(dock, qtbot)
-    assert changes == [SetArgument(0, '{"x": BLUE, "y": WHITE}', keyword="t2c")]
+    assert changes == [SetArgument(0, '{"x": BLUE, "y": "#FFFFFF"}', keyword="t2c")]
     out = apply_changes(COLOUR_MAP, _target(COLOUR_MAP, "t"), changes)
-    assert 't = Text("x", t2c={"x": BLUE, "y": WHITE})' in out
+    assert 't = Text("x", t2c={"x": BLUE, "y": "#FFFFFF"})' in out
 
 
 def test_a_dict_with_computed_keys_stays_an_expression(dock: MobjectInspector) -> None:
