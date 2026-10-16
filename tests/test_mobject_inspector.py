@@ -190,12 +190,12 @@ def test_add_call_with_an_argument_appends_a_chained_call(
     dock._add_call.click()
     row = next(r for r in dock._rows if r.call == -1 and r.param.name == "scale_factor")
     row.check.setChecked(True)
-    row.editor.setText("2")
+    row.editor.setValue(2.0)
     changes = _applied(dock, qtbot)
-    assert changes == [AddCall("scale", (), (("scale_factor", "2"),))]
+    assert changes == [AddCall("scale", (), (("scale_factor", "2.0"),))]
     out = apply_changes(CIRCLE, _target(CIRCLE, "c"), changes)
     assert "c.shift(UP)" in out
-    assert "\nc = Circle(radius=1.5, color=BLUE).scale(scale_factor=2)\n" in out
+    assert "\nc = Circle(radius=1.5, color=BLUE).scale(scale_factor=2.0)\n" in out
 
 
 def test_add_call_with_no_arguments_writes_an_empty_call(
@@ -218,3 +218,66 @@ def test_set_in_code_only_hides_the_rows_the_code_does_not_set(dock: MobjectInsp
     dock._set_only.setChecked(True)
     assert width.isHidden()
     assert not radius.isHidden()
+
+
+def test_a_colour_with_no_default_is_a_colour_picker(dock: MobjectInspector, qtbot: QtBot) -> None:
+    dock.show_target(_target(CIRCLE, "c"))
+    fill = _row(dock, "fill_color")
+    assert fill.kind == "colour"
+    assert isinstance(fill.editor, ColorField)
+    fill.check.setChecked(True)
+    fill.editor.set_value("#112233")
+    assert _applied(dock, qtbot) == [SetArgument(0, '"#112233"', keyword="fill_color")]
+
+
+def test_an_array_default_is_three_number_boxes_written_as_a_list(
+    dock: MobjectInspector, qtbot: QtBot
+) -> None:
+    from manim_studio.editor.value_fields import VectorField
+
+    dock.show_target(_target(CIRCLE, "c"))
+    centre = _row(dock, "arc_center")
+    assert centre.kind == "vector"
+    assert isinstance(centre.editor, VectorField)
+    assert centre.editor.values() == [0.0, 0.0, 0.0]
+    centre.check.setChecked(True)
+    centre.editor._boxes[0].setValue(1.0)
+    assert _applied(dock, qtbot) == [SetArgument(0, "[1.0, 0.0, 0.0]", keyword="arc_center")]
+
+
+def test_a_tuple_in_source_stays_a_tuple_when_edited(dock: MobjectInspector, qtbot: QtBot) -> None:
+    source = "from manimlib import *\na = Axes(x_range=(-8, 8, 1))\n"
+    dock.show_target(_target(source, "a"))
+    axis = _row(dock, "x_range")
+    assert axis.kind == "vector"
+    axis.editor._boxes[0].setValue(-9.0)
+    assert _applied(dock, qtbot) == [SetArgument(0, "(-9.0, 8.0, 1.0)", keyword="x_range")]
+
+
+COLOUR_MAP = 'from manimlib import *\nt = Text("x", t2c={"x": BLUE})\n'
+
+
+def test_a_colour_map_is_edited_row_by_row_and_keeps_names(
+    dock: MobjectInspector, qtbot: QtBot
+) -> None:
+    from manim_studio.editor.value_fields import DictField
+
+    dock.show_target(_target(COLOUR_MAP, "t"))
+    row = _row(dock, "t2c")
+    assert row.kind == "colour_map"
+    assert isinstance(row.editor, DictField)
+    assert row.editor.entry_count() == 1
+    dock._apply.click()  # nothing was touched, so the source text is left exactly as it was
+    assert dock._status.text() == "Nothing to change."
+
+    row.editor._on_add()
+    row.editor._rows[1].key.setText("y")
+    changes = _applied(dock, qtbot)
+    assert changes == [SetArgument(0, '{"x": BLUE, "y": WHITE}', keyword="t2c")]
+    out = apply_changes(COLOUR_MAP, _target(COLOUR_MAP, "t"), changes)
+    assert 't = Text("x", t2c={"x": BLUE, "y": WHITE})' in out
+
+
+def test_a_dict_with_computed_keys_stays_an_expression(dock: MobjectInspector) -> None:
+    dock.show_target(_target('from manimlib import *\nt = Text("x", t2c={1: BLUE})\n', "t"))
+    assert _row(dock, "t2c").kind == "expr"

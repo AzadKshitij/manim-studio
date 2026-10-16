@@ -10,6 +10,7 @@ emits them; the window writes them into the buffer.  The panel never touches the
 
 from __future__ import annotations
 
+import ast
 import contextlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ from manim_studio.call_edits import (
 )
 from manim_studio.editor.color_field import ColorField, ColorListField
 from manim_studio.editor.elided_label import ElidedLabel
+from manim_studio.editor.value_fields import DictField, VectorField
 from manim_studio.mobject_schema import (
     MethodSchema,
     MobjectSchema,
@@ -52,6 +54,7 @@ from manim_studio.mobject_schema import (
     lookup,
     methods_for,
     resolve_colour,
+    split_dict,
     ui_kind,
 )
 from manim_studio.mobject_sites import ArgRef, CallRef, KeywordRef, MobjectTarget
@@ -60,6 +63,8 @@ from manim_studio.theme import Theme, current_theme
 __all__ = ["MobjectInspector", "order_changes"]
 
 _LIMIT = 1_000_000.0
+#: Kinds whose widget is fine without a default to show (it starts at a neutral value).
+_TYPED_KINDS = frozenset({"bool", "int", "float", "opacity", "text", "font", "colour", "vector"})
 #: ``call`` of the rows of a call the user is adding; it is not in the source yet.
 _PENDING = -1
 
@@ -105,7 +110,36 @@ def _matches(kind: str, value: Any) -> bool:
         return _is_number(value)
     if kind in ("text", "font", "colour"):
         return isinstance(value, str)
+    if kind == "vector":
+        return (
+            isinstance(value, list | tuple)
+            and 2 <= len(value) <= 4
+            and all(_is_number(item) for item in value)
+        )
     return False
+
+
+def _same_expression(first: str, second: str) -> bool:
+    """True when two source snippets parse to the same expression, whatever their spacing."""
+    try:
+        return ast.dump(ast.parse(first.strip(), mode="eval")) == ast.dump(
+            ast.parse(second.strip(), mode="eval")
+        )
+    except SyntaxError:
+        return False
+
+
+def _dict_entries(bound: ArgRef | KeywordRef | None, default: Any) -> list[tuple[str, str]]:
+    """The rows a dict field starts with: the source's entries, else the default's."""
+    if bound is not None:
+        return split_dict(bound.text) or []
+    if isinstance(default, dict):
+        entries: list[tuple[str, str]] = []
+        for key, value in default.items():
+            with contextlib.suppress(EditError):  # a value with no spelling is left out
+                entries.append((str(key), format_value(value)))
+        return entries
+    return []
 
 
 def _bound(
@@ -130,10 +164,17 @@ def _effective_kind(
 ) -> str:
     """The widget a row really gets: the schema's kind when the source value fits it, else an
     expression field.  An expression field always round-trips the source text, so nothing the
-    source says is ever lost."""
+    source says is ever lost.
+
+    A parameter with no usable default (``None``, or an object) still gets the widget its
+    annotation names, so ``fill_color: ManimColor = None`` is a colour picker, not a text box.
+    """
+    if kind in ("dict", "colour_map"):
+        # A dict with string keys is edited row by row; anything else stays an expression.
+        return "expr" if bound is not None and split_dict(bound.text) is None else kind
     if bound is None:
-        if not (param.has_default and param.default_literal):
-            return "expr"
+        if not (param.has_default and param.default_literal) or param.default is None:
+            return kind if kind in _TYPED_KINDS else "expr"
         value = param.default
     elif not bound.literal:
         return "colour" if kind == "colour" and resolve_colour(bound.text, colours) else "expr"
@@ -185,8 +226,12 @@ class _Row:
             return self._expr_text() == bound.text.strip()
         if self.kind == "colour":
             return resolve_colour(bound.text, self.colours) == self._hex()
+        if self.kind in ("dict", "colour_map"):
+            return _same_expression(self._dict_source(), bound.text)
         if not bound.literal:
             return False
+        if self.kind == "vector":
+            return list(bound.value) == self._python_value()  # a tuple in source still matches
         return bound.value == self._python_value()
 
     def _hex(self) -> str:
@@ -207,8 +252,15 @@ class _Row:
         if self.kind in ("float", "opacity"):
             assert isinstance(self.editor, QDoubleSpinBox)
             return self.editor.value()
+        if self.kind == "vector":
+            assert isinstance(self.editor, VectorField)
+            return self.editor.values()
         assert isinstance(self.editor, QLineEdit)
         return self.editor.text()
+
+    def _dict_source(self) -> str:
+        assert isinstance(self.editor, DictField)
+        return self.editor.source()
 
     def source_text(self) -> str:
         """The Python source this row's widget holds, as it would be written."""
@@ -220,6 +272,12 @@ class _Row:
             return format_colour(self._hex(), original)
         if self.kind == "expr":
             return self._expr_text()
+        if self.kind in ("dict", "colour_map"):
+            return self._dict_source()
+        if self.kind == "vector":
+            numbers = ", ".join(format_value(number) for number in self._python_value())
+            original = self.bound.text.lstrip() if self.bound is not None else "["
+            return f"({numbers})" if original.startswith("(") else f"[{numbers}]"
         return format_value(self._python_value())
 
     def _list_changes(self) -> list[Change]:
@@ -522,7 +580,7 @@ class MobjectInspector(QDockWidget):
             editor.valueChanged.connect(self._mark_dirty)
         elif isinstance(editor, QLineEdit):
             editor.textChanged.connect(self._mark_dirty)
-        elif isinstance(editor, ColorField | ColorListField):
+        elif isinstance(editor, ColorField | ColorListField | VectorField | DictField):
             editor.changed.connect(self._mark_dirty)
 
     def _make_editor(
@@ -556,13 +614,23 @@ class MobjectInspector(QDockWidget):
             else:
                 fspin.setRange(-_LIMIT, _LIMIT)
                 fspin.setSingleStep(0.1)
-            fspin.setValue(float(value) if _is_number(value) else 0.0)
+            unset = 1.0 if kind == "opacity" else 0.0
+            fspin.setValue(float(value) if _is_number(value) else unset)
             return fspin
         if kind in ("text", "font"):
             return QLineEdit(value if isinstance(value, str) else "", self._form_host)
         if kind == "colour":
             text = bound.text if bound is not None else str(value)
             return ColorField(resolve_colour(text, colours) or "#FFFFFF", self._form_host)
+        if kind == "vector":
+            return VectorField(value if _matches("vector", value) else [0.0, 0.0, 0.0])
+        if kind in ("dict", "colour_map"):
+            return DictField(
+                _dict_entries(bound, value),
+                colours,
+                colour_values=kind == "colour_map",
+                parent=self._form_host,
+            )
         line = QLineEdit(self._form_host)
         if bound is not None:
             line.setText(bound.text)
