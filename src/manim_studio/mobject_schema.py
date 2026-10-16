@@ -9,6 +9,7 @@ release changes the discovered schema, not this module.
 
 from __future__ import annotations
 
+import ast
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -25,9 +26,11 @@ __all__ = [
     "SchemaError",
     "fields_for",
     "lookup",
+    "member_types",
     "methods_for",
     "parse_schema",
     "resolve_colour",
+    "split_dict",
     "ui_kind",
 ]
 
@@ -41,10 +44,16 @@ UI_KINDS: tuple[str, ...] = (
     "font",
     "colour",
     "colour_list",
+    "vector",
+    "dict",
+    "colour_map",
     "expr",
 )
 
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
+#: Dict parameters whose values are colours (substring to colour), by name.
+_COLOUR_MAP_NAMES = frozenset({"t2c", "text2color", "tex_to_color_map"})
+_VECTOR_ANNOTATIONS = frozenset({"Vect2", "Vect3", "Vect4"})
 
 
 class SchemaError(ValueError):
@@ -63,6 +72,7 @@ class ParamSchema:
     default_literal: bool  #: the default can be written into source as it is
     default_repr: str | None
     owner: str  #: MRO key of the class that declares it
+    default_type: str = ""  #: Python type name of the default (``ndarray``, ``dict``, ...)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +117,7 @@ def _param(data: Mapping[str, Any]) -> ParamSchema:
         default_literal=bool(data.get("default_literal", False)),
         default_repr=data.get("default_repr"),
         owner=str(data["owner"]),
+        default_type=str(data.get("default_type", "")),
     )
 
 
@@ -197,17 +208,59 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
+def member_types(annotation: str) -> list[str]:
+    """The top-level members of a union annotation, without ``None``.
+
+    ``"float | None"`` gives ``["float"]``; ``"dict[str, ManimColor] | None"`` keeps its brackets
+    whole.  An empty annotation gives an empty list.
+    """
+    parts: list[str] = []
+    depth = 0
+    current = ""
+    for char in annotation:
+        if char in "[(":
+            depth += 1
+        elif char in "])":
+            depth -= 1
+        if char == "|" and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    parts.append(current.strip())
+    return [part for part in parts if part and part != "None"]
+
+
+def _is_vector(value: Any) -> bool:
+    return (
+        isinstance(value, list | tuple)
+        and 2 <= len(value) <= 4
+        and all(_is_number(item) for item in value)
+    )
+
+
 def ui_kind(param: ParamSchema) -> str:
     """The editor widget for ``param``, from its annotation, default and name.
 
-    Typed defaults and annotations decide first; a few name hints (``*opacity``, ``font``,
-    ``font_size``) refine them.  Anything not understood is ``expr``: a text field holding the
-    Python expression, which is always safe to show and to write back.
+    The annotation decides first and the default confirms it, so a parameter whose default is
+    ``None`` (``fill_color: ManimColor = None``) still gets the widget its type names.  A few
+    name hints (``*opacity``, ``font``, ``font_size``, ``t2c``) refine that.  Anything not
+    understood is ``expr``: a text field holding the Python expression, which is always safe to
+    show and to write back.
     """
     annotation = param.annotation
     name = param.name
+    members = member_types(annotation)
+    default = param.default if param.has_default and param.default_literal else None
     if param.kind == "var_positional":
         return "colour_list" if "Color" in annotation or name.endswith("colors") else "expr"
+    is_dict = (
+        param.default_type == "dict"
+        or isinstance(default, dict)
+        or (bool(members) and all(m.split("[")[0] in ("dict", "Dict") for m in members))
+    )
+    if is_dict:
+        return "colour_map" if "Color" in annotation or name in _COLOUR_MAP_NAMES else "dict"
     if "Color" in annotation or name.endswith("color"):
         return "colour"
     if name == "font":
@@ -216,17 +269,43 @@ def ui_kind(param: ParamSchema) -> str:
         return "float"
     if name.endswith("opacity"):
         return "opacity"
-    default = param.default if param.has_default else None
-    if annotation == "bool" or isinstance(default, bool):
+    if (bool(members) and all(m in _VECTOR_ANNOTATIONS for m in members)) or _is_vector(default):
+        return "vector"
+    if members == ["bool"] or isinstance(default, bool):
         return "bool"
-    is_int = annotation == "int" or (isinstance(default, int) and not isinstance(default, bool))
+    is_int = members == ["int"] or (isinstance(default, int) and not isinstance(default, bool))
     if is_int and "float" not in annotation:
         return "int"
     if "float" in annotation or isinstance(default, float):
         return "float"
-    if annotation == "str" or isinstance(default, str):
+    if members == ["str"] or isinstance(default, str):
         return "text"
     return "expr"
+
+
+def split_dict(text: str) -> list[tuple[str, str]] | None:
+    """The ``(key, value source)`` entries of a dict expression, or ``None`` if it is not one.
+
+    Only dicts whose keys are all string literals qualify (``{"x": BLUE}``); a ``**spread`` or a
+    computed key makes it an expression the panel leaves alone.  Values are returned as their
+    source text, so names such as ``BLUE`` survive.
+    """
+    source = text.strip()
+    try:
+        node = ast.parse(source, mode="eval").body
+    except SyntaxError:
+        return None
+    if not isinstance(node, ast.Dict):
+        return None
+    entries: list[tuple[str, str]] = []
+    for key, value in zip(node.keys, node.values, strict=True):
+        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+            return None
+        segment = ast.get_source_segment(source, value)
+        if segment is None:
+            return None
+        entries.append((key.value, segment))
+    return entries
 
 
 def resolve_colour(text: str, colours: Mapping[str, str]) -> str | None:

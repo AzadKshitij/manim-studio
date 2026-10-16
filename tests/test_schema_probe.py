@@ -27,7 +27,7 @@ def schema():  # type: ignore[no-untyped-def]
 
 def test_probe_output_is_json_and_versioned(schema) -> None:  # type: ignore[no-untyped-def]
     assert schema.manimlib_version != ""
-    assert SCHEMA_VERSION == 1
+    assert SCHEMA_VERSION == 2
 
 
 def test_every_exported_mobject_class_is_discovered(schema) -> None:  # type: ignore[no-untyped-def]
@@ -74,3 +74,22 @@ def test_every_discovered_field_maps_to_a_widget(schema) -> None:  # type: ignor
         cls = lookup(schema, name)
         for field in fields_for(schema, cls):
             assert ui_kind(field) in UI_KINDS, (name, field.name)
+
+
+def test_array_defaults_are_vectors_and_none_defaults_keep_their_type(schema) -> None:  # type: ignore[no-untyped-def]
+    circle = {f.name: f for f in fields_for(schema, lookup(schema, "Circle"))}
+    assert circle["arc_center"].default == [0.0, 0.0, 0.0]  # a numpy array, read as a list
+    assert circle["arc_center"].default_literal is True
+    assert ui_kind(circle["arc_center"]) == "vector"
+    assert ui_kind(circle["shading"]) == "vector"
+    assert ui_kind(circle["fill_color"]) == "colour"  # default None, annotation says colour
+    assert ui_kind(circle["color"]) == "colour"
+    assert ui_kind(circle["background_image_file"]) == "text"
+    text = {f.name: f for f in fields_for(schema, lookup(schema, "Text"))}
+    assert ui_kind(text["t2c"]) == "colour_map"
+
+
+def test_every_default_carries_its_type_name(schema) -> None:  # type: ignore[no-untyped-def]
+    circle = {f.name: f for f in fields_for(schema, lookup(schema, "Circle"))}
+    assert circle["radius"].default_type == "float"
+    assert circle["fill_color"].default_type == "NoneType"

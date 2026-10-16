@@ -26,7 +26,7 @@ from typing import Any
 __all__ = ["SCHEMA_VERSION", "main", "probe"]
 
 #: Bumped whenever the shape of the JSON changes; old caches are then rebuilt.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 
@@ -42,6 +42,10 @@ def _encode(value: Any) -> tuple[Any, bool]:
         encoded = {key: _encode(item) for key, item in value.items()}
         plain = {key: part for key, (part, _) in encoded.items()}
         return plain, all(ok for _, ok in encoded.values())
+    # A one-dimensional numpy array (a point or a vector) reads as a list of numbers.
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist) and getattr(value, "ndim", None) == 1:
+        return _encode(tolist())
     return None, False
 
 
@@ -63,6 +67,7 @@ def _param(param: inspect.Parameter, owner: str) -> dict[str, Any]:
         "has_default": has_default,
         "default": default,
         "default_literal": literal,
+        "default_type": type(param.default).__name__ if has_default else "",
         "default_repr": repr(param.default) if has_default else None,
         "owner": owner,
     }

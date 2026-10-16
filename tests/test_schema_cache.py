@@ -13,11 +13,12 @@ from pytestqt.qtbot import QtBot
 
 from manim_studio.editor import schema_cache
 from manim_studio.editor.schema_cache import SchemaLoader, read_cache, write_cache
+from manim_studio.schema_probe import SCHEMA_VERSION
 
 
 def _payload(version: str = "1.7.2") -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "manimlib_version": version,
         "exported": {"Circle": "m.Circle"},
         "colours": {"BLUE": "#58C4DD"},
