@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from manim_studio.editor.code_editor import CodeEditor
+from manim_studio.editor.inspector_gear import InspectorGears
 
 __all__ = ["EditorPane"]
 
@@ -18,6 +19,7 @@ class EditorPane(QWidget):
     def __init__(self, editor: CodeEditor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.editor = editor
+        self.inspector_gears = InspectorGears(editor)
         self._banner: QWidget | None = None
         self._file = QLabel("untitled", self)
         self._file.setObjectName("fileTab")
