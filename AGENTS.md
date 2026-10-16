@@ -65,6 +65,7 @@ explaining why not.
 | `manim_studio/editor/inspector_gear.py` | Gear markers beside mobject lines; a click emits the fresh target (ADR 0012) | PySide6, `mobject_sites` |
 | `manim_studio/editor/mobject_inspector.py` | The inspector dock: schema-driven rows, Apply emits the change list (ADR 0012) | PySide6, `call_edits`, `mobject_schema` |
 | `manim_studio/editor/color_field.py` | Colour chip, hex box and picker; colour lists with add and remove (ADR 0012) | PySide6 |
+| `manim_studio/editor/value_fields.py` | Vector number boxes and the row-by-row dict editor, with colour pickers for colour maps (ADR 0012) | PySide6, `call_edits`, `mobject_schema` |
 | `manim_studio/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
 | `manim_studio/export.py` | Video export via `manimgl -w` subprocess; bakes the sidecar's edits in | `subprocess`, `sidecar` |
 | `manim_studio/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |

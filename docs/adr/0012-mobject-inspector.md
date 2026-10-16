@@ -24,11 +24,14 @@
 3. **Flatten along the MRO.** A class's fields are its own parameters plus those of its
    bases, most derived first; a subclass's parameter shadows the base's of the same
    name, as `**kwargs` forwarding does at runtime. `**kwargs` entries are skipped.
-4. **Widgets are inferred, not tabulated.** `ui_kind` decides from the annotation and the
-   default (bool, int, float, colour, colour list for `*colors`, text), with name hints
-   for `*opacity`, `font` and `font_size`. Anything else, and any source value that does
-   not fit the widget, becomes an expression field showing the Python text, so nothing
-   the source says is lost.
+4. **Widgets are inferred, not tabulated.** `ui_kind` reads the annotation first (looking
+   through `| None`) and the default second: bool, int, float, colour, colour list for
+   `*colors`, text, vector (`Vect3` or a list of numbers, including numpy defaults, which
+   the probe reads as lists), dict, and colour map (`t2c`, or a dict of colours), with
+   name hints for `*opacity`, `font` and `font_size`. A parameter whose default is `None`
+   keeps the widget its type names. Anything else, and any source value that does not fit
+   the widget (a computed vector, a dict with computed keys), becomes an expression field
+   showing the Python text, so nothing the source says is lost.
 5. **Gears mark mobject lines.** A target is a constructor binding `name = Ctor(...)`
    plus the chained calls on it and the later `name.method(...)` statements in the same
    block. Each line of a target gets a gear (`inspector_gear.py`, replacing the swatch).
@@ -62,10 +65,9 @@
 - "Add call" picks any chainable method from the schema and writes it as one
   `.method(...)` appended to the assignment. "Set in code only" hides the rows the code
   does not set.
-- Not in this version: per-class collapsible sections, `t2c`/`t2g` colour-map rows,
-  `Vect3` x/y/z fields (vectors show as expressions), user subclasses that resolve to a
-  manimlib base only through the same file, palette sources in the colour field, inline
-  constructors in `play()`, and multi-line expressions. Each extends the same schema and
-  edit model.
+- Not in this version: per-class collapsible sections, `t2g` gradient maps (shown as a
+  plain dict), user subclasses that resolve to a manimlib base only through the same
+  file, palette sources in the colour field, inline constructors in `play()`, and
+  multi-line expressions. Each extends the same schema and edit model.
 - `api_index`, `color_sites` and the colour table remain for completion, the fingerprint
   and the offline fallback respectively.

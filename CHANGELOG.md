@@ -12,8 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mobject inspector** — a gear beside each line that configures a mobject
   (`circle = Circle(...)`, `circle.shift(UP)`) opens an inspector panel with every
   parameter ManimGL exposes for that class: radius, fill, stroke, position, font and font
-  size, gradients (with "+" to add colours). "Add call" appends any chained setter, such
-  as `.scale(...)`. Apply writes the change into the source as one undo step, saves and
+  size, gradients (with "+" to add colours), points as number boxes and `t2c` colour
+  maps row by row. Field types come from each parameter's annotation, so unset colours,
+  numbers and text get the right widget. "Add call" appends any chained setter, such as
+  `.scale(...)`. Apply writes the change into the source as one undo step, saves and
   refreshes the preview. The property list is discovered from the installed manimlib and
   cached per version (ADR 0012).
 - Colour literals keep their colour-blind timeline identity (ADR 0011): recolouring a
