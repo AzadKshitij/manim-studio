@@ -81,6 +81,10 @@ MARKER_ERROR = 0
 #: Whole-line tint and left-edge bar of the highlighted block (jump to code).
 MARKER_BLOCK = 1
 MARKER_BLOCK_EDGE = 2
+#: The mobject line the inspector is editing (ADR 0012): stays until the inspector lets go.
+MARKER_INSPECTED = 3
+MARKER_INSPECTED_EDGE = 4
+INSPECTED_TINT_ALPHA = 110
 INDIC_ERROR = 8
 #: How long a jump-to-code highlight stays before it fades out.
 BLOCK_HIGHLIGHT_MS = 3000
@@ -134,6 +138,7 @@ class CodeEditor(ScintillaEdit):
         self._completions: tuple[str, ...] = ()
         self._error_line: int | None = None
         self._block_highlight: tuple[int, int] | None = None
+        self._inspected_handle: int | None = None
         self._block_timer = QTimer(self)
         self._block_timer.setSingleShot(True)
         self._block_timer.setInterval(BLOCK_HIGHLIGHT_MS)
@@ -184,6 +189,8 @@ class CodeEditor(ScintillaEdit):
         self.markerDefine(MARKER_ERROR, Scintilla.MarkerSymbol.Bookmark)
         self.markerDefine(MARKER_BLOCK, Scintilla.MarkerSymbol.Background)
         self.markerDefine(MARKER_BLOCK_EDGE, Scintilla.MarkerSymbol.LeftRect)
+        self.markerDefine(MARKER_INSPECTED, Scintilla.MarkerSymbol.Background)
+        self.markerDefine(MARKER_INSPECTED_EDGE, Scintilla.MarkerSymbol.LeftRect)
         self.indicSetStyle(INDIC_ERROR, 1)  # INDIC_SQUIGGLE
         self.setZoom(0)
 
@@ -217,6 +224,9 @@ class CodeEditor(ScintillaEdit):
         self.markerSetBack(MARKER_BLOCK, _colorref(palette["block"]))
         self.markerSetAlpha(MARKER_BLOCK, BLOCK_TINT_ALPHA)
         self.markerSetBack(MARKER_BLOCK_EDGE, _colorref(palette["block"]))
+        self.markerSetBack(MARKER_INSPECTED, _colorref(palette["block"]))
+        self.markerSetAlpha(MARKER_INSPECTED, INSPECTED_TINT_ALPHA)
+        self.markerSetBack(MARKER_INSPECTED_EDGE, _colorref(palette["block"]))
         self.indicSetFore(INDIC_ERROR, _colorref(palette["error"]))
         # Line-number margin.
         self.styleSetFore(STYLE_LINENUMBER, _colorref(palette["line_number_fg"]))
@@ -305,6 +315,7 @@ class CodeEditor(ScintillaEdit):
         """
         normalised = text.replace("\r\n", "\n").replace("\r", "\n")
         line = self.current_line()
+        marked = self.inspected_line  # replacing the buffer drops markers; keep the mark
         self.autoCCancel()
         self.callTipCancel()
         self.beginUndoAction()
@@ -313,6 +324,7 @@ class CodeEditor(ScintillaEdit):
             self.replaceTarget(len(normalised.encode("utf-8")), normalised)
         finally:
             self.endUndoAction()
+        self.set_inspected_line(marked)
         self.restyle()
         self.go_to_line(line)
 
@@ -464,6 +476,29 @@ class CodeEditor(ScintillaEdit):
     def block_highlight(self) -> tuple[int, int] | None:
         """The highlighted ``(first, last)`` lines, or ``None``."""
         return self._block_highlight
+
+    def set_inspected_line(self, line: int | None) -> None:
+        """Mark ``line`` (1-based) as the mobject the inspector is editing, or clear the mark.
+
+        Unlike :meth:`highlight_lines` this does not fade and survives edits: the mark moves
+        with its line.  Replacing the whole buffer drops markers, so the caller sets it again
+        after such a replacement.
+        """
+        self.markerDeleteAll(MARKER_INSPECTED)
+        self.markerDeleteAll(MARKER_INSPECTED_EDGE)
+        self._inspected_handle = None
+        if line is None or not 1 <= line <= self.lineCount():
+            return
+        self._inspected_handle = self.markerAdd(line - 1, MARKER_INSPECTED)
+        self.markerAdd(line - 1, MARKER_INSPECTED_EDGE)
+
+    @property
+    def inspected_line(self) -> int | None:
+        """The line the inspector marks (1-based) as the text moves, or ``None``."""
+        if self._inspected_handle is None:
+            return None
+        line = self.markerLineFromHandle(self._inspected_handle)
+        return line + 1 if line >= 0 else None
 
     def clear_error_marker(self) -> None:
         self.markerDeleteAll(MARKER_ERROR)

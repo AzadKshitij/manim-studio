@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from pytestqt.qtbot import QtBot
 
+from manim_studio.editor.code_editor import MARKER_INSPECTED
 from manim_studio.editor.main_window import MainWindow
 
 SCENE = """from manimlib import *
@@ -103,3 +104,43 @@ def test_opening_another_file_moves_the_gears_to_its_mobjects(
     qtbot.waitUntil(
         lambda: [g.toolTip().split(" · ")[0] for g in gears.buttons] == ["sq"], timeout=5000
     )
+
+
+def _marked(window: MainWindow, line: int) -> bool:
+    return bool(window.editor.markerGet(line - 1) & (1 << MARKER_INSPECTED))
+
+
+def test_the_gear_line_stays_marked_while_the_inspector_is_open(
+    qtbot: QtBot, window: MainWindow
+) -> None:
+    gears = window.editor_pane.inspector_gears
+    qtbot.waitUntil(lambda: len(gears.buttons) == 2, timeout=60000)
+    gears.buttons[0].click()  # the circle's binding, line 6
+    assert window.editor.inspected_line == 6
+    assert _marked(window, 6)
+    assert not _marked(window, 7)
+
+
+def test_the_mark_survives_apply_and_moves_with_typed_lines(
+    qtbot: QtBot, window: MainWindow
+) -> None:
+    gears = window.editor_pane.inspector_gears
+    qtbot.waitUntil(lambda: len(gears.buttons) == 2, timeout=60000)
+    gears.buttons[0].click()
+    dock = window.inspector_dock
+    next(row for row in dock._rows if row.param.name == "radius").editor.setValue(2.5)
+    dock._apply.click()
+    assert window.editor.inspected_line == 6  # the replace keeps the mark on its line
+
+    window.editor.insertText(0, "# a new line above\n")
+    assert window.editor.inspected_line == 7  # the mark moves with its line
+
+
+def test_closing_the_inspector_removes_the_mark(qtbot: QtBot, window: MainWindow) -> None:
+    gears = window.editor_pane.inspector_gears
+    qtbot.waitUntil(lambda: len(gears.buttons) == 2, timeout=60000)
+    gears.buttons[0].click()
+    assert window.editor.inspected_line == 6
+    window.inspector_dock.hide()
+    assert window.editor.inspected_line is None
+    assert not _marked(window, 6)

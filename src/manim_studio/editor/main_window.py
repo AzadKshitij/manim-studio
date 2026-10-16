@@ -525,6 +525,7 @@ class MainWindow(QMainWindow):
         self.inspector_dock = MobjectInspector(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
         self.inspector_dock.hide()
+        self.inspector_dock.visibilityChanged.connect(self._on_inspector_visibility)
         self._view_menu.addAction(self.inspector_dock.toggleViewAction())
 
     def _build_status_bar(self) -> None:
@@ -829,6 +830,8 @@ class MainWindow(QMainWindow):
         if not edits_settled and not self._confirm_discard("open another scene"):
             return False
         self.editor.load_file(target)
+        # The inspector described the previous file; drop its target and its highlight.
+        self.inspector_dock.clear("Click a gear beside a mobject in the code to inspect it.")
         self._external_bar.dismiss()
         self._path = target.resolve()
         # Edits made on the timeline travel with the scene: the host loads its first
@@ -1971,10 +1974,16 @@ class MainWindow(QMainWindow):
         self.editor_pane.inspector_gears.set_schema(schema)
         self.inspector_dock.set_schema(schema)
 
-    def _open_inspector(self, target: MobjectTarget) -> None:
+    def _open_inspector(self, target: MobjectTarget, line: int) -> None:
+        self.editor.set_inspected_line(line)
         self.inspector_dock.show_target(target)
         self.inspector_dock.show()
         self.inspector_dock.raise_()
+
+    def _on_inspector_visibility(self, visible: bool) -> None:
+        """The highlight marks the inspected line only while the panel is open."""
+        if not visible:
+            self.editor.set_inspected_line(None)
 
     def _follow_inspector(self, line: int) -> None:
         """While the inspector is open with no edits pending, a caret on a mobject's line takes
@@ -1986,6 +1995,7 @@ class MainWindow(QMainWindow):
             (t for t in self.editor_pane.inspector_gears.targets if line in t.lines), None
         )
         if target is not None and (dock.target is None or dock.target.identity != target.identity):
+            self.editor.set_inspected_line(line)
             dock.show_target(target)
 
     def _apply_inspector(self, target: MobjectTarget, changes: list[Change]) -> None:
@@ -2037,12 +2047,16 @@ class MainWindow(QMainWindow):
         try:
             targets = find_mobject_targets(self.editor.text())
         except SyntaxError:
+            self.editor.set_inspected_line(None)
             dock.clear("The code no longer parses. Fix it to keep inspecting.")
             return
         fresh = next((t for t in targets if t.identity == target.identity), None)
         if fresh is None:
+            self.editor.set_inspected_line(None)
             dock.clear("This mobject is no longer bound in the code.")
             return
+        marked = self.editor.inspected_line  # kept across the replace; the target may have moved
+        self.editor.set_inspected_line(marked if marked in fresh.lines else fresh.lines[0])
         dock.show_target(fresh)
         dock.set_status(status)
 

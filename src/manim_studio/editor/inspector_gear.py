@@ -62,7 +62,8 @@ class GearButton(QWidget):
 class InspectorGears(QObject):
     """Owns the gears for one ``CodeEditor``."""
 
-    targetRequested = Signal(object)  #: a fresh :class:`MobjectTarget`
+    #: A fresh :class:`MobjectTarget` and the 1-based line its gear sits on.
+    targetRequested = Signal(object, int)
 
     def __init__(self, editor: CodeEditor) -> None:
         super().__init__(editor)
@@ -118,11 +119,11 @@ class InspectorGears(QObject):
         for button in self._buttons:
             button.deleteLater()
         self._buttons = []
-        for target, _line in self._entries:
+        for target, line in self._entries:
             tooltip = f"{target.var} · {target.cls}: open the inspector"
             button = GearButton(tooltip, self._editor)
             button.setAccessibleName(f"Inspect {target.var}")
-            button.clicked.connect(lambda t=target: self._request(t))
+            button.clicked.connect(lambda t=target, n=line: self._request(t, n))
             button.show()
             self._buttons.append(button)
         self._reposition()
@@ -150,8 +151,9 @@ class InspectorGears(QObject):
         # Scrolling and caret moves do not change the source, so only positions are updated.
         self._reposition()
 
-    def _request(self, target: MobjectTarget) -> None:
-        """Emit the target as it reads now; a click on a stale gear rescans instead."""
+    def _request(self, target: MobjectTarget, line: int) -> None:
+        """Emit the target as it reads now, with the line the gear sits on; a click on a stale
+        gear rescans instead."""
         if self._schema is None:
             return
         try:
@@ -162,4 +164,4 @@ class InspectorGears(QObject):
         if fresh is None:
             self.rescan()
             return
-        self.targetRequested.emit(fresh)
+        self.targetRequested.emit(fresh, line if line in fresh.lines else fresh.lines[0])

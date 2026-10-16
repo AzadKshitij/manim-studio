@@ -71,22 +71,23 @@ def test_broken_source_shows_no_gears(gears: InspectorGears) -> None:
     assert gears.buttons == ()
 
 
-def test_clicking_a_gear_emits_the_fresh_target(gears: InspectorGears) -> None:
-    received: list[object] = []
-    gears.targetRequested.connect(received.append)
+def test_clicking_a_gear_emits_the_fresh_target_and_its_line(gears: InspectorGears) -> None:
+    received: list[tuple[object, int]] = []
+    gears.targetRequested.connect(lambda target, line: received.append((target, line)))
     gears.buttons[0].click()
     assert len(received) == 1
-    target = received[0]
+    target, line = received[0]
     assert target.var == "circle"
     assert target.cls == "Circle"
+    assert line == 6  # the gear sits on the binding line, where the target was written
 
 
 def test_a_stale_click_rescans_instead_of_opening_a_gone_target(gears: InspectorGears) -> None:
-    received: list[object] = []
-    gears.targetRequested.connect(received.append)
+    received: list[tuple[object, int]] = []
+    gears.targetRequested.connect(lambda target, line: received.append((target, line)))
     old = next(iter(find_mobject_targets(SOURCE)))
     gears.editor.set_text("class Demo(Scene):\n    pass\n")
-    gears._request(old)
+    gears._request(old, 6)
     assert received == []
     assert gears.buttons == ()
 
