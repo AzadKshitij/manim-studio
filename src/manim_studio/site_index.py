@@ -7,7 +7,8 @@ that (inserting one ``play()`` shifts every later index), so every call gets a
 *duration* removed, plus an ordinal that separates textually identical calls.
 
 Because the duration is excluded from the hash, retiming a call (by hand or through
-the timeline) never changes its identity; editing its animations does.
+the timeline) never changes its identity; editing its animations does. Colour values
+are excluded for the same reason, so recolouring a call keeps its timeline edits (ADR 0011).
 
 Spans are character based (``ast`` reports UTF-8 byte columns, which are converted)
 so the patch engine can splice text directly.  This module must stay free of Qt,
@@ -21,6 +22,8 @@ import hashlib
 import re
 from dataclasses import dataclass
 from typing import Literal
+
+from manim_studio.color_sites import neutralise_colors
 
 __all__ = [
     "CallSite",
@@ -210,11 +213,15 @@ def _split_duration(
 def _fingerprint_payload(
     call: ast.Call, keyword: ast.keyword | None, positional: int | None
 ) -> str:
-    """``ast.dump`` of the call with the duration removed (stable under retiming)."""
+    """``ast.dump`` of the call with the duration and colour values removed.
+
+    Stable under retiming (ADR 0007) and under recolouring (ADR 0011).
+    """
     args = [arg for i, arg in enumerate(call.args) if i != positional]
     keywords = [kw for kw in call.keywords if kw is not keyword]
     stripped = ast.Call(func=call.func, args=args, keywords=keywords)
-    return ast.dump(stripped, annotate_fields=True, include_attributes=False)
+    neutral = neutralise_colors(stripped)
+    return ast.dump(neutral, annotate_fields=True, include_attributes=False)
 
 
 class _Collector(ast.NodeVisitor):

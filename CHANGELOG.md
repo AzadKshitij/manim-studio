@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Colour swatches** — each colour literal in a scene (`color=BLUE`,
+  `fill_color="#FF6B6B"`, `set_color(GREEN)`) shows a square beside its line. Clicking
+  it opens a colour picker that writes the new colour into the source as one undo step.
+  Recolouring keeps the call's timeline edits (ADR 0011).
+
 ## [1.1.0] - 2026-10-10
 
 ### Added

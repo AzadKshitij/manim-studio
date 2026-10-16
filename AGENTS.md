@@ -56,6 +56,7 @@ explaining why not.
 | `manim_studio/templates.py` | Scene + prefab templates | stdlib, `scene_settings` |
 | `manim_studio/timeline_ops.py` | Timeline operations: names, shortcuts, scope and when each is available | stdlib only |
 | `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
+| `manim_studio/color_sites.py` | Colour literals in scene source (UTF-8 spans, manim colour names), spelling a picked colour, and the colour-blind timeline fingerprint payload (ADR 0011) | stdlib only |
 | `manim_studio/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
 | `manim_studio/export.py` | Video export via `manimgl -w` subprocess; bakes the sidecar's edits in | `subprocess`, `sidecar` |
 | `manim_studio/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |
@@ -77,7 +78,7 @@ Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
    `scene_settings`, `palettes`, `layout_presets`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`) must never import Qt,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`, `color_sites`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.
