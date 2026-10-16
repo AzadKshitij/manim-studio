@@ -82,3 +82,16 @@ class TestClassifyInvocation:
 
         assert spawn.PREVIEW_HOST_FLAG not in CLI_SUBCOMMANDS
         assert spawn.MANIMGL_EXPORT_FLAG not in CLI_SUBCOMMANDS
+
+
+class TestSchemaProbeCommand:
+    def test_uses_module_switch_in_development(self) -> None:
+        executable, args = spawn.schema_probe_command()
+        assert executable == sys.executable
+        assert list(args) == ["-m", "manim_studio.schema_probe"]
+
+    def test_uses_flag_when_frozen(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        _, command = spawn.schema_probe_command()
+        assert list(command) == [spawn.SCHEMA_PROBE_FLAG]
+        assert spawn.classify_invocation(command) == ("schema_probe", ())

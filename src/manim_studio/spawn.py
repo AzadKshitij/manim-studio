@@ -25,22 +25,27 @@ from typing import Literal
 __all__ = [
     "MANIMGL_EXPORT_FLAG",
     "PREVIEW_HOST_FLAG",
+    "SCHEMA_PROBE_FLAG",
     "LaunchTarget",
     "classify_invocation",
     "frozen",
     "manimgl_export_command",
     "preview_host_command",
+    "schema_probe_command",
 ]
 
 #: Internal flag: run the preview host with the remaining arguments.
 PREVIEW_HOST_FLAG = "--preview-host"
 #: Internal flag: render with manimgl using the remaining arguments.
 MANIMGL_EXPORT_FLAG = "--manimgl-export"
+#: Internal flag: print the manimlib mobject schema as JSON (ADR 0012).
+SCHEMA_PROBE_FLAG = "--schema-probe"
 
 _PREVIEW_HOST_MODULE = "manim_studio.preview_host"
 _MANIMGL_EXPORT_MODULE = "manim_studio.manimgl_launcher"
+_SCHEMA_PROBE_MODULE = "manim_studio.schema_probe"
 
-LaunchTarget = Literal["preview_host", "manimgl_export", "cli"]
+LaunchTarget = Literal["preview_host", "manimgl_export", "schema_probe", "cli"]
 
 
 def frozen() -> bool:
@@ -70,6 +75,13 @@ def manimgl_export_command(args: Sequence[str]) -> tuple[str, tuple[str, ...]]:
     return sys.executable, ("-m", _MANIMGL_EXPORT_MODULE, *args)
 
 
+def schema_probe_command() -> tuple[str, tuple[str, ...]]:
+    """Return ``(executable, argv[1:])`` that prints the manimlib mobject schema as JSON."""
+    if frozen():
+        return sys.executable, (SCHEMA_PROBE_FLAG,)
+    return sys.executable, ("-m", _SCHEMA_PROBE_MODULE)
+
+
 def classify_invocation(argv: Sequence[str]) -> tuple[LaunchTarget, tuple[str, ...]]:
     """Split a full command tail into ``(target, remaining arguments)``.
 
@@ -82,4 +94,6 @@ def classify_invocation(argv: Sequence[str]) -> tuple[LaunchTarget, tuple[str, .
         return "preview_host", tuple(argv[1:])
     if head == (MANIMGL_EXPORT_FLAG,):
         return "manimgl_export", tuple(argv[1:])
+    if head == (SCHEMA_PROBE_FLAG,):
+        return "schema_probe", tuple(argv[1:])
     return "cli", tuple(argv)

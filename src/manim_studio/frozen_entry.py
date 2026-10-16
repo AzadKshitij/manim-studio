@@ -70,6 +70,10 @@ def _run_target(target: LaunchTarget, rest: Sequence[str]) -> int:
         from manim_studio.preview_host import main as host_main
 
         return int(host_main(list(rest)))
+    if target == "schema_probe":
+        from manim_studio.schema_probe import main as probe_main
+
+        return int(probe_main())
     if target == "manimgl_export":
         from manim_studio.manimgl_launcher import main as export_main
 
