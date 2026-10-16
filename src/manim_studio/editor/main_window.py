@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from manim_studio import APP_NAME, external_changes, recent
+from manim_studio.call_edits import Change, EditError, apply_changes
 from manim_studio.editor import api_cache, scene_files
 from manim_studio.editor.autosave_controller import AutosaveController
 from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
@@ -59,6 +60,7 @@ from manim_studio.editor.external_change_bar import ExternalChangeBar
 from manim_studio.editor.file_watcher import FileWatcher
 from manim_studio.editor.glyphs import glyph, refresh_glyphs
 from manim_studio.editor.icon import load_icon
+from manim_studio.editor.mobject_inspector import MobjectInspector
 from manim_studio.editor.palette_dialog import CommandPalette
 from manim_studio.editor.palette_sources import build_items as palette_items
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
@@ -67,6 +69,7 @@ from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.editor.preview_panel import PreviewPanel
 from manim_studio.editor.scene_settings_dialog import SceneSettingsDialog
 from manim_studio.editor.scene_settings_store import SceneSettingsStore
+from manim_studio.editor.schema_cache import SchemaLoader
 from manim_studio.editor.session_state import SessionState
 from manim_studio.editor.shell_panel import ShellPanel
 from manim_studio.editor.stats_controller import StatsController
@@ -88,6 +91,8 @@ from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.editor.welcome_panel import WelcomePanel
 from manim_studio.external_changes import Decision
 from manim_studio.layout_presets import LANDSCAPE, PORTRAIT, preset_for, suggest_layout
+from manim_studio.mobject_schema import MobjectSchema
+from manim_studio.mobject_sites import MobjectTarget, find_mobject_targets
 from manim_studio.palettes import (
     BUILTIN_PALETTES,
     Palette,
@@ -220,6 +225,7 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._build_actions()
         self._build_shell_dock()
+        self._build_inspector_dock()
         self._build_status_bar()
         self._update_scene_actions()
         self.video = VideoModeController(
@@ -243,6 +249,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._connect_signals()
+        self._start_schema_loader()
         self._palette = CommandPalette(self, lambda: palette_items(self))
 
         self.editor.set_completions(self._api_names)
@@ -444,6 +451,7 @@ class MainWindow(QMainWindow):
                 timeline_menu.addSeparator()
             timeline_menu.addActions([operations.action(key) for key in group])
         view_menu = menu_bar.addMenu("&View")
+        self._view_menu = view_menu
         self._add_action(view_menu, "Command palette…", self.open_command_palette, "Ctrl+Shift+P")
         view_menu.addSeparator()
         self._embedded_action = QAction("Embedded preview", self, checkable=True)
@@ -511,6 +519,13 @@ class MainWindow(QMainWindow):
         self.shell = ShellPanel(self)
         self.shell.lineSubmitted.connect(self._on_shell_line)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.shell)
+
+    def _build_inspector_dock(self) -> None:
+        """The mobject inspector (ADR 0012): hidden until a gear opens it, toggled in View."""
+        self.inspector_dock = MobjectInspector(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+        self.inspector_dock.hide()
+        self._view_menu.addAction(self.inspector_dock.toggleViewAction())
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
@@ -603,6 +618,8 @@ class MainWindow(QMainWindow):
         self._timeline_ops.unavailable.connect(self._set_status)
         self.timeline.blockSelected.connect(self._on_block_selected)
         self.inspector.durationCommitted.connect(self._on_inspector_duration)
+        self.editor_pane.inspector_gears.targetRequested.connect(self._open_inspector)
+        self.inspector_dock.applyRequested.connect(self._apply_inspector)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
         self.transport_bar.jumpRequested.connect(self._on_transport_jump)
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
@@ -663,6 +680,7 @@ class MainWindow(QMainWindow):
         if index is not None and index != self.timeline.active_block:
             self._follow_caret_block(index)
         self._refresh_caret_block(line)
+        self._follow_inspector(line)
 
     def _follow_caret_block(self, index: int) -> None:
         """A caret that enters a call selects its block and moves the playhead to it."""
@@ -1940,6 +1958,94 @@ class MainWindow(QMainWindow):
         """The inspector's duration field was committed."""
         self._on_block_resized(index, seconds, iteration_only=iteration_only)
 
+    # Mobject inspector (ADR 0012) -----------------------------------------
+
+    def _start_schema_loader(self) -> None:
+        """Load the manimlib properties in the background; gears and the inspector wait for it."""
+        self.schema_loader = SchemaLoader(self)
+        self.schema_loader.ready.connect(self._on_schema_ready)
+        self.schema_loader.failed.connect(self._set_status)
+        self.schema_loader.start()
+
+    def _on_schema_ready(self, schema: MobjectSchema) -> None:
+        self.editor_pane.inspector_gears.set_schema(schema)
+        self.inspector_dock.set_schema(schema)
+
+    def _open_inspector(self, target: MobjectTarget) -> None:
+        self.inspector_dock.show_target(target)
+        self.inspector_dock.show()
+        self.inspector_dock.raise_()
+
+    def _follow_inspector(self, line: int) -> None:
+        """While the inspector is open with no edits pending, a caret on a mobject's line takes
+        it over."""
+        dock = self.inspector_dock
+        if not dock.isVisible() or dock.has_pending_changes():
+            return
+        target = next(
+            (t for t in self.editor_pane.inspector_gears.targets if line in t.lines), None
+        )
+        if target is not None and (dock.target is None or dock.target.identity != target.identity):
+            dock.show_target(target)
+
+    def _apply_inspector(self, target: MobjectTarget, changes: list[Change]) -> None:
+        """Write the inspector's edits into the scene code as one undo step, then refresh."""
+        dock = self.inspector_dock
+        if self._path is None:
+            dock.set_status("Open a scene file first.")
+            return
+        source = self.editor.text()
+        try:
+            targets = find_mobject_targets(source)
+        except SyntaxError:
+            dock.set_status("The code does not parse, so nothing was written.")
+            return
+        current = next((t for t in targets if t.identity == target.identity), None)
+        if current is None or current.calls != target.calls:
+            dock.set_status(
+                "The code changed since the inspector read it. Reopen it from the gear."
+            )
+            return
+        try:
+            text = apply_changes(source, target, changes)
+        except EditError as error:
+            dock.set_status(f"Not applied: {error}")
+            return
+        unsaved = self.editor.is_modified()
+        self.editor.beginUndoAction()
+        try:
+            self.editor.replace_text(text)
+            if not unsaved:
+                self.editor.save_file(self._path)
+                self.watcher.note_save()
+                self._autosave.discard()
+            self._update_title()
+        finally:
+            self.editor.endUndoAction()
+        if unsaved:
+            status = (
+                "Applied in the editor. Save (Ctrl+S) to write the file and refresh the preview."
+            )
+        else:
+            if self.controller.is_running:
+                self.reload_preview()
+            status = f"Applied and saved to {self._path.name}."
+        self._refresh_inspector_target(target, status)
+
+    def _refresh_inspector_target(self, target: MobjectTarget, status: str) -> None:
+        dock = self.inspector_dock
+        try:
+            targets = find_mobject_targets(self.editor.text())
+        except SyntaxError:
+            dock.clear("The code no longer parses. Fix it to keep inspecting.")
+            return
+        fresh = next((t for t in targets if t.identity == target.identity), None)
+        if fresh is None:
+            dock.clear("This mobject is no longer bound in the code.")
+            return
+        dock.show_target(fresh)
+        dock.set_status(status)
+
     def apply_edits_to_source(self) -> None:
         """Write the timeline edits into the scene file (one undoable editor edit)."""
         if self._path is None:
@@ -2222,6 +2328,7 @@ class MainWindow(QMainWindow):
         self.editor.apply_theme(theme)
         self.preview_panel.apply_theme(theme)
         self.inspector.apply_theme()
+        self.inspector_dock.apply_theme()
         refresh_glyphs(self)
         self.timeline.update()
         if self._restore_settings:
