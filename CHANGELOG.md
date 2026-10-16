@@ -9,10 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Colour swatches** — each colour literal in a scene (`color=BLUE`,
-  `fill_color="#FF6B6B"`, `set_color(GREEN)`) shows a square beside its line. Clicking
-  it opens a colour picker that writes the new colour into the source as one undo step.
-  Recolouring keeps the call's timeline edits (ADR 0011).
+- **Mobject inspector** — a gear beside each line that configures a mobject
+  (`circle = Circle(...)`, `circle.shift(UP)`) opens an inspector panel with every
+  parameter ManimGL exposes for that class: radius, fill, stroke, position, font and font
+  size, gradients (with "+" to add colours). "Add call" appends any chained setter, such
+  as `.scale(...)`. Apply writes the change into the source as one undo step, saves and
+  refreshes the preview. The property list is discovered from the installed manimlib and
+  cached per version (ADR 0012).
+- Colour literals keep their colour-blind timeline identity (ADR 0011): recolouring a
+  call keeps its timeline edits. The colour swatches of ADR 0011 are replaced by the
+  gears above.
 
 ## [1.1.0] - 2026-10-10
 

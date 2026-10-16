@@ -1,6 +1,7 @@
 # ADR 0011 — Colour swatches and a picker write colours back into the source
 
-- Status: accepted (2026-10-16)
+- Status: accepted (2026-10-16). Decision 4 (the swatch UI) is superseded by ADR 0012,
+  which replaces swatches with gears and an inspector. Decisions 1-3 and 5 stand.
 - Context: Changing a colour meant finding the literal in the code and typing a new
   value. Every colour literal in a scene (`color=BLUE`, `fill_color="#FF6B6B"`,
   `set_color(GREEN)`) can be shown as a square beside its line and edited by clicking
