@@ -133,7 +133,9 @@ def _extras() -> tuple[list[str], list[tuple[str, str]], list[tuple[str, str]]]:
         *collect_submodules("jedi"),  # shell completions via entry points
         *collect_submodules("parso"),
         *collect_submodules("manimlib"),  # defensive: scene API surface
-        *collect_submodules("mcp"),  # agent surface: `manim-studio mcp` (ADR 0013)
+        # Agent surface: `manim-studio mcp` (ADR 0013). mcp.cli is the SDK's own command-line
+        # extra and needs typer, which the bundle does not use.
+        *collect_submodules("mcp", filter=lambda name: not name.startswith("mcp.cli")),
         *collect_submodules("mcp_types"),
     ]
     binaries: list[tuple[str, str]] = []

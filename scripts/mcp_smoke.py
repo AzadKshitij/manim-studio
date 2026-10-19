@@ -14,6 +14,7 @@ Run from the repository root:  uv run python scripts/mcp_smoke.py
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import base64
 import io
@@ -67,10 +68,15 @@ def _image_blocks(result: Any) -> list[Any]:
     return [block for block in result.content if getattr(block, "type", "") == "image"]
 
 
-async def _loop(root: Path) -> None:
+async def _loop(root: Path, exe: str | None) -> None:
+    # A frozen build is started as its console exe; a checkout runs the package as a module.
+    if exe is None:
+        command, prefix = sys.executable, ["-m", "manim_studio"]
+    else:
+        command, prefix = exe, []
     params = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "manim_studio", "mcp", "--root", str(root)],
+        command=command,
+        args=[*prefix, "mcp", "--root", str(root)],
     )
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
         await session.initialize()
@@ -120,10 +126,17 @@ async def _loop(root: Path) -> None:
         print(f"ok    export wrote {output.name} inside the root")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run the agent loop over real stdio.")
+    parser.add_argument(
+        "--exe",
+        default=None,
+        help="run a frozen manim-studio.exe instead of the checkout (packaging smoke test)",
+    )
+    args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="manim-studio-smoke-") as tmp:
         try:
-            asyncio.run(_loop(Path(tmp)))
+            asyncio.run(_loop(Path(tmp), args.exe))
         except SmokeFailure as exc:
             print(f"FAIL  {exc}")
             return 1

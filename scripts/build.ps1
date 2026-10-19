@@ -95,6 +95,15 @@ try {
     # … and route the internal host flag instead of opening the editor.
     Invoke-Smoke -Label "gui host dispatch" -Exe $guiExe `
         -Arguments @("--preview-host", "--help") -ExpectOutput "port"
+    # Agent surface: the planner runs in the frozen bundle and writes nothing on a dry run.
+    $probeProject = Join-Path ([System.IO.Path]::GetTempPath()) "manim-studio-frozen-probe"
+    Invoke-Smoke -Label "cli agent-init dry run" -Exe $cliExe `
+        -Arguments @("agent-init", $probeProject, "--dry-run") -ExpectOutput "would create"
+    # The full agent loop over stdio against the frozen console exe: write, check, trace,
+    # contact sheet, frame, export. Covers the frozen mcp, frame and export paths end to end.
+    Write-Host "  smoke: agent loop over stdio (frozen manim-studio.exe)"
+    uv run python scripts\mcp_smoke.py --exe $cliExe
+    if ($LASTEXITCODE -ne 0) { throw "frozen agent loop failed (see the FAIL line above)" }
 
     # -- 5. Portable zip (folder name inside the archive is ManimStudio/) --
     $zipPath = Join-Path (Get-Location) "dist\ManimStudio-$version-portable.zip"
