@@ -41,11 +41,12 @@
    Without them, a client with no file access could not complete the loop. Both stay inside
    the root (decision 6).
 9. **`agent-init` writes a managed block, not a takeover.** It writes an AGENTS.md block
-   between markers, a Claude Code skill, a Cursor rule and MCP config (`.mcp.json` and
-   `.cursor/mcp.json`). Its own files are replaced only with `--force`. MCP config keeps other
-   servers, and an invalid file is skipped, never overwritten. Codex and opencode are not
-   written: their configuration lives outside the project, and the command prints the generic
-   registration instead.
+   between markers, a Claude Code skill, a Cursor rule and MCP config (`.mcp.json`,
+   `.cursor/mcp.json` and opencode's `opencode.json`). Its own files are replaced only with
+   `--force`. MCP config keeps other servers, and an invalid file is skipped, never overwritten.
+   Codex keeps its server list per user (`~/.codex/config.toml`), so it is not written into the
+   project; the command prints `codex mcp add manim-studio -- manim-studio mcp` instead. The
+   Claude Code, Codex and opencode syntax was checked against each tool's documentation.
 
 ## Consequences
 

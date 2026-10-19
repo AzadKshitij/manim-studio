@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import shlex
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,16 +37,18 @@ __all__ = [
     "manual_instructions",
     "merge_agents_md",
     "merge_mcp_json",
+    "merge_opencode_json",
     "plan_init",
     "render_skill",
 ]
 
-TARGETS = ("claude", "cursor", "agents", "mcp")
+TARGETS = ("claude", "cursor", "agents", "mcp", "opencode")
 
 SKILL_PATH = f".claude/skills/{SKILL_NAME}/SKILL.md"
 CURSOR_RULE_PATH = ".cursor/rules/manim-studio.mdc"
 CURSOR_MCP_PATH = ".cursor/mcp.json"
 CLAUDE_MCP_PATH = ".mcp.json"
+OPENCODE_PATH = "opencode.json"
 AGENTS_PATH = "AGENTS.md"
 
 
@@ -80,23 +82,42 @@ def cursor_rule(command: str) -> str:
         "alwaysApply: false\n"
         "---\n\n"
         f"{SKILL_BODY}\n"
-        f"The MCP server starts with `{command} mcp --root .` (see `.cursor/mcp.json`).\n"
+        f"The MCP server starts with `{command} mcp` (see `.cursor/mcp.json`).\n"
     )
 
 
 def manual_instructions(command: str) -> str:
-    """How to register the server with a client that this tool does not configure."""
+    """How to register the server with a client whose configuration is per user, not per project.
+
+    Codex keeps its server list in ``~/.codex/config.toml``, so this tool prints the command
+    rather than writing a file outside the project.
+    """
     return (
-        "Codex and opencode are not configured automatically. Register an stdio MCP server with "
-        f"the command `{command} mcp` (add `--root <project>` to pin the workspace)."
+        "Codex keeps its server list per user, so it is not written into the project. "
+        f"Register it with:\n  codex mcp add {MCP_SERVER_NAME} -- {command} mcp"
     )
 
 
-def _server_entry(command: str) -> dict[str, Any]:
-    parts = shlex.split(command)
-    if not parts:
+def _command_words(command: str) -> list[str]:
+    words = shlex.split(command)
+    if not words:
         raise ValueError("the command must not be empty")
-    return {"command": parts[0], "args": [*parts[1:], "mcp"]}
+    return words
+
+
+def _server_entry(command: str) -> dict[str, Any]:
+    """The ``mcpServers`` entry used by ``.mcp.json`` and ``.cursor/mcp.json``."""
+    words = _command_words(command)
+    return {"command": words[0], "args": [*words[1:], "mcp"]}
+
+
+def _load_object(existing: str | None) -> dict[str, Any]:
+    if existing is None or not existing.strip():
+        return {}
+    loaded = json.loads(existing)
+    if not isinstance(loaded, dict):
+        raise ValueError("the file does not hold a JSON object")
+    return loaded
 
 
 def merge_mcp_json(existing: str | None, command: str) -> str:
@@ -104,17 +125,27 @@ def merge_mcp_json(existing: str | None, command: str) -> str:
 
     Raises :class:`ValueError` when ``existing`` is not a JSON object.
     """
-    data: dict[str, Any] = {}
-    if existing is not None and existing.strip():
-        loaded = json.loads(existing)
-        if not isinstance(loaded, dict):
-            raise ValueError("the file does not hold a JSON object")
-        data = loaded
+    data = _load_object(existing)
     servers = data.get("mcpServers")
     if not isinstance(servers, dict):
         servers = {}
     servers[MCP_SERVER_NAME] = _server_entry(command)
     data["mcpServers"] = servers
+    return json.dumps(data, indent=2) + "\n"
+
+
+def merge_opencode_json(existing: str | None, command: str) -> str:
+    """``opencode.json`` with the ``manim-studio`` server under ``mcp``, other keys kept.
+
+    opencode takes a local server as ``{"type": "local", "command": [program, args...]}``.
+    Raises :class:`ValueError` when ``existing`` is not a JSON object.
+    """
+    data = _load_object(existing)
+    servers = data.get("mcp")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers[MCP_SERVER_NAME] = {"type": "local", "command": [*_command_words(command), "mcp"]}
+    data["mcp"] = servers
     return json.dumps(data, indent=2) + "\n"
 
 
@@ -162,11 +193,17 @@ def _plan_agents(project: Path) -> PlannedFile:
     return PlannedFile(AGENTS_PATH, content, "update", "managed block refreshed")
 
 
-def _plan_json(project: Path, relpath: str, command: str) -> PlannedFile:
+def _plan_config(
+    project: Path,
+    relpath: str,
+    command: str,
+    merge: Callable[[str | None, str], str],
+) -> PlannedFile:
     current = _read(project, relpath)
     try:
-        content = merge_mcp_json(current, command)
+        content = merge(current, command)
     except ValueError as exc:
+        # Invalid or foreign content is reported and left alone; it is never overwritten.
         return PlannedFile(relpath, current or "", "skip", f"not valid MCP config: {exc}")
     if current is None:
         return PlannedFile(relpath, content, "create")
@@ -198,12 +235,14 @@ def plan_init(
             add(_plan_owned(project, SKILL_PATH, render_skill(), force))
         elif target == "cursor":
             add(_plan_owned(project, CURSOR_RULE_PATH, cursor_rule(command), force))
-            add(_plan_json(project, CURSOR_MCP_PATH, command))
+            add(_plan_config(project, CURSOR_MCP_PATH, command, merge_mcp_json))
         elif target == "agents":
             add(_plan_agents(project))
         elif target == "mcp":
-            add(_plan_json(project, CLAUDE_MCP_PATH, command))
-            add(_plan_json(project, CURSOR_MCP_PATH, command))
+            add(_plan_config(project, CLAUDE_MCP_PATH, command, merge_mcp_json))
+            add(_plan_config(project, CURSOR_MCP_PATH, command, merge_mcp_json))
+        elif target == "opencode":
+            add(_plan_config(project, OPENCODE_PATH, command, merge_opencode_json))
     return tuple(planned.values())
 
 

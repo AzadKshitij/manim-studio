@@ -657,7 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--target",
         default="all",
-        help="comma-separated: claude, cursor, agents, mcp (default: all)",
+        help="comma-separated: claude, cursor, agents, mcp, opencode (default: all)",
     )
     init.add_argument(
         "--command",

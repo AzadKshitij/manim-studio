@@ -124,13 +124,17 @@ Manim Studio has no built-in AI. Bring the agent you already use.
    ```
 
    This writes a Claude Code skill (`.claude/skills/manim-scene-authoring/SKILL.md`), a Cursor
-   rule, a managed block in `AGENTS.md`, and `.mcp.json`. Add `--dry-run` to see the plan first.
-   A file you have edited is kept unless you pass `--force`.
+   rule, a managed block in `AGENTS.md`, and the MCP config for Claude Code (`.mcp.json`), Cursor
+   (`.cursor/mcp.json`) and opencode (`opencode.json`). Add `--dry-run` to see the plan first. A
+   file you have edited is kept unless you pass `--force`.
 
-2. Register the server, if you did not use `agent-init` for it:
-   - Claude Code: `claude mcp add manim-studio -- manim-studio mcp --root .`
-   - Cursor: `.cursor/mcp.json` (written by `agent-init`).
-   - Other clients: register a stdio server with the command `manim-studio mcp`.
+2. Register the server yourself only if you did not use `agent-init` for that client:
+   - Claude Code: `claude mcp add --scope project manim-studio -- manim-studio mcp --root .`
+     (`--scope project` writes `.mcp.json`; without it the server is private to your user).
+   - Codex: `codex mcp add manim-studio -- manim-studio mcp --root .` (Codex keeps its list per
+     user, in `~/.codex/config.toml`).
+   - opencode and Cursor: written by `agent-init` (`opencode.json`, `.cursor/mcp.json`).
+   - Any other MCP client: a stdio server started with the command `manim-studio mcp --root .`.
 
 The server works whether or not the editor is open. Every path an agent gives must stay inside
 the `--root` folder.

@@ -31,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It works whether or not the editor is open. There is no AI inside the app; the agent is
   yours.
 - **`agent-init`** writes agent instructions into a project: a Claude Code skill, a Cursor
-  rule, a managed block in `AGENTS.md`, and MCP config. Files you have edited are kept unless
-  you pass `--force`.
+  rule, a managed block in `AGENTS.md`, and MCP config for Claude Code, Cursor and opencode.
+  Files you have edited are kept unless you pass `--force`.
 
 ## [1.1.0] - 2026-10-10
 

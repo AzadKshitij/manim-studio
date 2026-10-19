@@ -13,8 +13,11 @@ from manim_studio.agent_docs import AGENTS_BEGIN, AGENTS_END, SKILL_BODY
 from manim_studio.agent_init import (
     PlannedFile,
     apply_plan,
+    cursor_rule,
+    manual_instructions,
     merge_agents_md,
     merge_mcp_json,
+    merge_opencode_json,
     plan_init,
     render_skill,
 )
@@ -31,6 +34,7 @@ ALL_FILES = {
     "AGENTS.md",
     ".mcp.json",
     ".cursor/mcp.json",
+    "opencode.json",
 }
 
 
@@ -101,6 +105,60 @@ class TestMergeMcpJson:
     def test_non_object_json_is_refused(self) -> None:
         with pytest.raises(ValueError):
             merge_mcp_json("[1, 2]", "manim-studio")
+
+
+class TestMergeOpencodeJson:
+    def test_absent_file_gets_a_local_server_with_a_command_array(self) -> None:
+        data = json.loads(merge_opencode_json(None, "manim-studio"))
+        assert data == {
+            "mcp": {"manim-studio": {"type": "local", "command": ["manim-studio", "mcp"]}}
+        }
+
+    def test_command_with_leading_words_is_split_into_the_array(self) -> None:
+        data = json.loads(merge_opencode_json(None, "uv run --directory repo manim-studio"))
+        assert data["mcp"]["manim-studio"]["command"] == [
+            "uv",
+            "run",
+            "--directory",
+            "repo",
+            "manim-studio",
+            "mcp",
+        ]
+
+    def test_other_keys_and_servers_are_kept(self) -> None:
+        existing = json.dumps(
+            {
+                "model": "provider/model",
+                "mcp": {"github": {"type": "local", "command": ["gh-mcp"]}},
+            }
+        )
+        data = json.loads(merge_opencode_json(existing, "manim-studio"))
+        assert data["model"] == "provider/model"
+        assert set(data["mcp"]) == {"github", "manim-studio"}
+
+    def test_merging_twice_equals_merging_once(self) -> None:
+        once = merge_opencode_json(None, "manim-studio")
+        assert merge_opencode_json(once, "manim-studio") == once
+
+    def test_invalid_json_is_refused(self) -> None:
+        with pytest.raises(ValueError):
+            merge_opencode_json("// comment\n{}", "manim-studio")
+
+
+class TestRegistrationText:
+    def test_cursor_rule_names_the_command_the_config_runs(self) -> None:
+        # The rule must describe the server entry that .cursor/mcp.json actually holds.
+        assert "`manim-studio mcp`" in cursor_rule("manim-studio")
+        assert "--root" not in cursor_rule("manim-studio")
+
+    def test_codex_is_given_the_exact_registration_command(self) -> None:
+        text = manual_instructions("uv run --directory repo manim-studio")
+        assert "codex mcp add manim-studio -- uv run --directory repo manim-studio mcp" in text
+
+    def test_opencode_is_written_not_just_described(self, tmp_path: Path) -> None:
+        plan = plan_init(tmp_path, ["opencode"])
+        assert [entry.relpath for entry in plan] == ["opencode.json"]
+        assert plan[0].action == "create"
 
 
 class TestPlanAndApply:
