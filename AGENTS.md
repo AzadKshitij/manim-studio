@@ -32,6 +32,7 @@ explaining why not.
 | Module | Responsibility | May import |
 | --- | --- | --- |
 | `manim_studio/timeline_model.py` | Pure data model for trace blocks, px/time math, JSON (de)serialization | stdlib only |
+| `manim_studio/contact_sheet.py` | Contact-sheet time sampling, block lookup, label text and grid geometry (no pixels) | stdlib, `timeline_model` |
 | `manim_studio/site_index.py` | Static index of `self.play()`/`self.wait()` call sites with stable fingerprints | stdlib only |
 | `manim_studio/patches.py` | Anchored timeline edits (`SetDuration`, `Delete`) and the text-splice engine that applies them | stdlib, `site_index` |
 | `manim_studio/patch_runtime.py` | `__studio__` helper for per-iteration (loop) edits | stdlib only |
@@ -87,7 +88,7 @@ Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
    `scene_settings`, `palettes`, `layout_presets`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`, `color_sites`, `mobject_schema`, `mobject_sites`, `call_edits`) must never import Qt,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`, `color_sites`, `mobject_schema`, `mobject_sites`, `call_edits`, `contact_sheet`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.
