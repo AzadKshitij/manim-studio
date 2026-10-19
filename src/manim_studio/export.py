@@ -37,6 +37,9 @@ __all__ = [
     "ExportPlan",
     "ExportResult",
     "build_export_plan",
+    "effective_settings",
+    "resolve_patches",
+    "resolve_settings",
     "run_export",
 ]
 
@@ -144,9 +147,9 @@ def build_export_plan(
         start, end = (int(value) for value in animation_range)
         if not 0 <= start <= end:
             raise ExportError(f"invalid animation range {animation_range!r}; expected start <= end")
-    chosen_patches = _resolve_patches(scene_file, patches, use_sidecar)
-    effective = _effective_settings(
-        _resolve_settings(scene_file, scene_name, settings, use_sidecar), resolution, fps
+    chosen_patches = resolve_patches(scene_file, patches, use_sidecar)
+    effective = effective_settings(
+        resolve_settings(scene_file, scene_name, settings, use_sidecar), resolution, fps
     )
 
     requested = Path(output) if output is not None else None
@@ -216,7 +219,7 @@ def build_export_plan(
     )
 
 
-def _resolve_patches(
+def resolve_patches(
     scene_file: Path, patches: Sequence[Patch] | None, use_sidecar: bool
 ) -> tuple[Patch, ...]:
     if patches is not None:
@@ -229,7 +232,7 @@ def _resolve_patches(
         raise ExportError(str(exc)) from exc
 
 
-def _resolve_settings(
+def resolve_settings(
     scene_file: Path,
     scene_name: str | None,
     settings: SceneSettings | None,
@@ -250,7 +253,7 @@ def _resolve_settings(
     return next(iter(stored.values())) if len(stored) == 1 else None
 
 
-def _effective_settings(
+def effective_settings(
     settings: SceneSettings | None,
     resolution: tuple[int, int] | None,
     fps: int | None,
