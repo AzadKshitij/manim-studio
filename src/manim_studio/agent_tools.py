@@ -25,6 +25,7 @@ from typing import Any
 from manim_studio import mobject_schema, schema_store, spawn
 from manim_studio.api_index import build_index
 from manim_studio.export import ExportError, build_export_plan, run_export
+from manim_studio.ffmpeg_install import ffmpeg_status
 from manim_studio.latex import latex_status
 from manim_studio.scene_runner import check_scene_file
 from manim_studio.templates import (
@@ -184,6 +185,7 @@ def check(root: Path, file: str) -> dict[str, Any]:
     path = resolve_in_root(root, file)
     payload = check_scene_file(path).to_dict()
     payload["latex"] = latex_status().to_dict()
+    payload["ffmpeg"] = ffmpeg_status().to_dict()
     return payload
 
 

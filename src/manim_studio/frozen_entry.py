@@ -31,6 +31,7 @@ CLI_SUBCOMMANDS = frozenset(
         "check",
         "contact-sheet",
         "export",
+        "ffmpeg",
         "frame",
         "gui",
         "latex",

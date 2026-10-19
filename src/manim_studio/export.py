@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from manim_studio import spawn
+from manim_studio.ffmpeg_install import ffmpeg_status, install_guidance
 from manim_studio.sidecar import (
     SidecarError,
     load_scene_settings,
@@ -137,6 +138,9 @@ def build_export_plan(
         raise ExportError("fps is not applicable when exporting a still")
     if still and gif:
         raise ExportError("gif and still are mutually exclusive")
+    if not still and not ffmpeg_status().found:
+        # manimgl encodes video through ffmpeg; without it the render only fails later.
+        raise ExportError(f"video export needs ffmpeg, which was not found; {install_guidance()}")
     if fps is not None and not 1 <= int(fps) <= 240:
         raise ExportError(f"fps {fps!r} out of range (1..240)")
     if resolution is not None:

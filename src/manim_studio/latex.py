@@ -440,8 +440,25 @@ def download_cache_dir(target: str | Path | None = None) -> Path:
     return install_dir(target).parent / "downloads"
 
 
+def _ffmpeg_bin_dirs() -> list[str]:
+    """The app's own ffmpeg folder when one is installed (imported lazily: no import cycle)."""
+    from manim_studio.ffmpeg_install import bundled_bin_dir
+
+    found = bundled_bin_dir()
+    return [str(found)] if found is not None else []
+
+
+def _prepend_to_path(path: str, directories: list[str]) -> str:
+    """``path`` with each directory not already present put in front, in the given order."""
+    present = path.split(os.pathsep) if path else []
+    missing = [directory for directory in directories if directory and directory not in present]
+    if not missing:
+        return path
+    return os.pathsep.join([*missing, path] if path else missing)
+
+
 def runtime_env(base: dict[str, str] | None = None) -> dict[str, str]:
-    """Environment with the bundled LaTeX ``bin/`` prepended to ``PATH``."""
+    """Environment with the bundled LaTeX and ffmpeg ``bin/`` folders prepended to ``PATH``."""
     import copy
 
     if base is None:
@@ -449,28 +466,23 @@ def runtime_env(base: dict[str, str] | None = None) -> dict[str, str]:
         env = dict(os.environ)
     else:
         env = copy.deepcopy(base)
-    directory = str(bin_dir())
-    path = env.get("PATH", "")
-    if directory and directory not in path.split(os.pathsep):
-        env["PATH"] = directory + os.pathsep + path if path else directory
+    directories = [str(bin_dir()), *_ffmpeg_bin_dirs()]
+    env["PATH"] = _prepend_to_path(env.get("PATH", ""), directories)
     return env
 
 
 def apply_runtime_path() -> bool:
-    """Prepend the bundled LaTeX ``bin/`` to this process's ``PATH``.
+    """Prepend the bundled LaTeX and ffmpeg ``bin/`` folders to this process's ``PATH``.
 
-    Idempotent; returns True when a bundled install directory exists and was
-    applied.  Safe to call on every CLI/preview/export entry point.
+    Idempotent; returns True when a bundled LaTeX install directory exists and was applied.
+    Safe to call on every CLI/preview/export entry point.
     """
     normalize_temp_dir()
-    directory = bin_dir()
-    if not directory.is_dir():
-        return False
-    path = os.environ.get("PATH", "")
-    if str(directory) in path.split(os.pathsep):
-        return True
-    os.environ["PATH"] = str(directory) + os.pathsep + path if path else str(directory)
-    return True
+    latex = bin_dir()
+    directories = [str(latex)] if latex.is_dir() else []
+    directories += _ffmpeg_bin_dirs()
+    os.environ["PATH"] = _prepend_to_path(os.environ.get("PATH", ""), directories)
+    return latex.is_dir()
 
 
 def is_latex_error(exc: BaseException) -> bool:

@@ -438,6 +438,52 @@ def cmd_agent_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ffmpeg(args: argparse.Namespace) -> int:
+    from manim_studio import ffmpeg_install
+
+    status = ffmpeg_install.ffmpeg_status()
+    if args.action == "status":
+        if args.json:
+            _print_json(status.to_dict())
+        elif status.found:
+            print(f"ffmpeg: {status.path} ({status.source})")
+        else:
+            print(f"ffmpeg: not found; {ffmpeg_install.install_guidance()}")
+        return 0 if status.found else 1
+
+    if status.found:
+        print(f"ffmpeg is already available: {status.path} ({status.source})")
+        return 0
+    if sys.platform != "win32":
+        print(
+            f"error: automatic install is for Windows only; {ffmpeg_install.install_guidance()}",
+            file=sys.stderr,
+        )
+        return 1
+    size = ffmpeg_install.APPROX_DOWNLOAD_MB
+    if not args.yes:
+        interactive = sys.stdin is not None and sys.stdin.isatty()
+        if not interactive:
+            print(
+                f"error: installing ffmpeg downloads about {size} MB from "
+                f"{ffmpeg_install.PUBLISHER_BASE_URL}; re-run with --yes to confirm",
+                file=sys.stderr,
+            )
+            return 2
+        answer = input(f"Download about {size} MB from gyan.dev and install ffmpeg for you? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("cancelled; nothing was downloaded")
+            return 1
+    print(f"downloading ffmpeg (about {size} MB)...")
+    try:
+        executable = ffmpeg_install.install_ffmpeg()
+    except ffmpeg_install.FfmpegInstallError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"installed ffmpeg: {executable}")
+    return 0
+
+
 def cmd_latex(args: argparse.Namespace) -> int:
     from manim_studio import latex_install
     from manim_studio.latex import install_dir, latex_status, probe_compile
@@ -668,6 +714,14 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--dry-run", action="store_true", help="show the plan and write nothing")
     init.add_argument("--json", action="store_true")
     init.set_defaults(func=cmd_agent_init)
+
+    ffmpeg = subparsers.add_parser(
+        "ffmpeg", help="check for ffmpeg, or install a verified copy (needed to export video)"
+    )
+    ffmpeg.add_argument("action", choices=("status", "install"))
+    ffmpeg.add_argument("--yes", action="store_true", help="confirm the download without asking")
+    ffmpeg.add_argument("--json", action="store_true")
+    ffmpeg.set_defaults(func=cmd_ffmpeg)
 
     preview = subparsers.add_parser("preview", help="run the standalone preview host")
     preview.add_argument("file", type=Path)
