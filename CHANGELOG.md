@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call keeps its timeline edits. The colour swatches of ADR 0011 are replaced by the
   gears above.
 
+- **Agent surface** (ADR 0013). `manim-studio frame FILE --at SECONDS` renders a scene at any
+  time to a PNG. `manim-studio contact-sheet FILE` tiles frames into one image, each labelled
+  with its time and block name. Both honour the timeline edits saved in `<scene>.studio.json`.
+- **MCP server** — `manim-studio mcp --root DIR` serves ten tools over stdio: `check`, `trace`,
+  `frame`, `contact_sheet`, `export`, `list_templates`, `api_index`, `describe_mobject`,
+  `new_scene` and `write_scene`. Every path must stay inside the root. Images come back inline.
+  It works whether or not the editor is open. There is no AI inside the app; the agent is
+  yours.
+- **`agent-init`** writes agent instructions into a project: a Claude Code skill, a Cursor
+  rule, a managed block in `AGENTS.md`, and MCP config. Files you have edited are kept unless
+  you pass `--force`.
+
 ## [1.1.0] - 2026-10-10
 
 ### Added

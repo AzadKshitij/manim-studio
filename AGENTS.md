@@ -66,6 +66,8 @@ explaining why not.
 | `manim_studio/schema_store.py` | Mobject schema without Qt: disk cache keyed by manimlib version, the headless `load_schema` that runs the probe on a miss (ADR 0013) | stdlib, `mobject_schema`, `spawn` |
 | `manim_studio/agent_docs.py` | Text `agent-init` writes: the manim-scene-authoring skill and the managed AGENTS.md block | stdlib only |
 | `manim_studio/agent_init.py` | Plans and writes agent instructions and MCP config for a project; never overwrites edited or invalid files without `--force` | stdlib, `agent_docs` |
+| `manim_studio/agent_tools.py` | Logic behind the MCP tools: workspace-root sandbox, child-process runs for `trace`, `frame` and `contact-sheet`, export, lookup, scene writes. No MCP imports | stdlib, `schema_store`, `mobject_schema`, `api_index`, `export`, `latex`, `scene_runner`, `templates`, `spawn` |
+| `manim_studio/mcp_server.py` | Stdio MCP server (`manim-studio mcp`): dispatches to `agent_tools`; writes nothing to stdout; never imports manimlib, moderngl or Qt | `agent_tools`, `mcp` (lazily) |
 | `manim_studio/editor/schema_cache.py` | Editor side of the schema: the background probe (`QProcess`) and Qt cache location; cache helpers come from `schema_store` | PySide6, `schema_store`, `mobject_schema`, `spawn` |
 | `manim_studio/editor/inspector_gear.py` | Gear markers beside mobject lines; a click emits the fresh target (ADR 0012) | PySide6, `mobject_sites` |
 | `manim_studio/editor/mobject_inspector.py` | The inspector dock: schema-driven rows, Apply emits the change list (ADR 0012) | PySide6, `call_edits`, `mobject_schema` |
@@ -212,11 +214,18 @@ uv run manim-studio export scenes/foo.py -o out.mp4 --quality low   # honours fo
 uv run manim-studio export scenes/foo.py --no-sidecar               # render the source as written
 uv run manim-studio new scenes/foo.py --template circle_to_square
 uv run manim-studio preview scenes/foo.py           # standalone GL preview window
+uv run manim-studio frame scenes/foo.py --at 1.5 -o frame.png --json   # one frame at a time
+uv run manim-studio contact-sheet scenes/foo.py --every 0.5 -o sheet.png --json  # tiled, labelled
+uv run manim-studio mcp --root .                    # stdio MCP server (ten tools, ADR 0013)
+uv run manim-studio agent-init . --dry-run          # plan the agent instructions for a project
 ```
 
 The CLI emits machine-readable JSON on stdout when `--json` is passed. Exit codes:
 `0` success, `1` user/scene error, `2` usage error. `manim-studio check` is the fastest
 way to validate generated scenes before opening the editor.
+
+No AI runs inside the app. The CLI and the MCP server (`manim-studio mcp`, ADR 0013) are tools
+for an external agent; do not add an LLM client, keys or prompts to the product.
 
 To author a scene, load the `manim-scene-authoring` skill (or read
 `.opencode/skills/manim-scene-authoring/SKILL.md`); it documents the CLI loop,

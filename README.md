@@ -104,10 +104,59 @@ manim-studio new FILE --template K   scaffold a scene (--list to see templates)
 manim-studio preview FILE            standalone GL preview host
 manim-studio templates --json        scene + insertable snippet templates
 manim-studio api-index --json        offline scan of the installed manimlib API
+manim-studio frame FILE --at SECONDS render the scene at one time (PNG, --json)
+manim-studio contact-sheet FILE      tile frames with timestamps and block names
+manim-studio agent-init [DIR]        write agent instructions and MCP config
+manim-studio mcp --root DIR          stdio MCP server for AI agents
 ```
 
 Exit codes: `0` success, `1` user/scene error, `2` usage error. JSON goes to stdout;
 scene output is captured so it can never corrupt structured output.
+
+## Use it with your AI agent
+
+Manim Studio has no built-in AI. Bring the agent you already use.
+
+1. Write the agent instructions and MCP config into your project:
+
+   ```bash
+   manim-studio agent-init .
+   ```
+
+   This writes a Claude Code skill (`.claude/skills/manim-scene-authoring/SKILL.md`), a Cursor
+   rule, a managed block in `AGENTS.md`, and `.mcp.json`. Add `--dry-run` to see the plan first.
+   A file you have edited is kept unless you pass `--force`.
+
+2. Register the server, if you did not use `agent-init` for it:
+   - Claude Code: `claude mcp add manim-studio -- manim-studio mcp --root .`
+   - Cursor: `.cursor/mcp.json` (written by `agent-init`).
+   - Other clients: register a stdio server with the command `manim-studio mcp`.
+
+The server works whether or not the editor is open. Every path an agent gives must stay inside
+the `--root` folder.
+
+| Tool | What it does |
+|------|--------------|
+| `check` | syntax and scene discovery, plus LaTeX status (renders nothing) |
+| `trace` | blocks with their start times and durations |
+| `frame` | one frame at a time, as an image with metadata |
+| `contact_sheet` | one image of many frames, each labelled with its time and block |
+| `export` | render a video, still or GIF (slow) |
+| `list_templates` | scene and snippet templates |
+| `api_index` | search the public manimlib names |
+| `describe_mobject` | a class's constructor parameters and methods |
+| `new_scene` | create a scene file from a template |
+| `write_scene` | write a scene's source and check it at once |
+
+A typical session, as the agent works it out:
+
+```text
+you:    make a scene where a circle becomes a square, and export it
+agent:  new_scene, then check, then trace (confirms the blocks)
+agent:  contact_sheet (looks at the tiles and sees the square arrives too early)
+agent:  write_scene with a longer run_time, then check, then contact_sheet again
+agent:  export with quality low; the video is written next to the scene
+```
 
 ## How it works
 
