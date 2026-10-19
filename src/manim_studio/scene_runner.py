@@ -680,6 +680,9 @@ def render_still(
         scene_class = load_scene_class(path, scene_name)
         scene = make_scene(scene_class, resolution=resolution, skip_animations=True)
         run_construct(scene)
+        # get_image() reads the framebuffer as it is. Nothing has drawn the final state yet in
+        # skip mode, so without this the PNG is fully transparent (see docs/adr/0013).
+        scene.update_frame(dt=0, force_draw=True)
         image = scene.get_image()
         destination = (
             Path(output)

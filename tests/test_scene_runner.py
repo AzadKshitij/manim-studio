@@ -12,7 +12,10 @@ from manim_studio.scene_runner import (
     check_scene_file,
     discover_scenes,
     load_scene_class,
+    make_scene,
+    manimlib_argv_guard,
     render_still,
+    run_construct,
     run_trace,
 )
 from manim_studio.timeline_model import load_log, save_log
@@ -262,6 +265,35 @@ class TestRenderStill:
 
         with Image.open(target) as image:
             assert image.size == (320, 180)
+
+    def test_still_shows_the_final_frame_not_a_transparent_canvas(self, tmp_path: Path) -> None:
+        # Regression: the still used to read the framebuffer before anything drew it, giving a
+        # fully transparent PNG (docs/adr/0013). It must match a construct followed by a draw.
+        from PIL import Image, ImageChops, ImageStat
+
+        from manim_studio.latex import apply_runtime_path
+        from manim_studio.scrub import read_upright_rgba
+
+        target = tmp_path / "showcase.png"
+        try:
+            render_still(SCENE_FILE, output=target, resolution=(320, 180))
+            apply_runtime_path()
+            with manimlib_argv_guard():
+                scene = make_scene(
+                    load_scene_class(SCENE_FILE), resolution=(320, 180), skip_animations=True
+                )
+                run_construct(scene)
+                scene.update_frame(dt=0, force_draw=True)
+                rgba, width, height = read_upright_rgba(scene.camera)
+        except Exception as exc:  # environment probe: skip when manimgl/GL unavailable
+            pytest.skip(f"manimgl runtime unavailable: {type(exc).__name__}: {exc}")
+
+        with Image.open(target) as still:
+            still_rgba = still.convert("RGBA")
+        assert still_rgba.getchannel("A").getextrema()[1] == 255
+        reference = Image.frombytes("RGBA", (width, height), rgba)
+        difference = ImageChops.difference(still_rgba.convert("RGB"), reference.convert("RGB"))
+        assert all(mean < 8 for mean in ImageStat.Stat(difference).mean)
 
 
 class TestPatchedSourceLoading:
