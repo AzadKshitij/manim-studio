@@ -26,6 +26,7 @@ __all__ = ["CLI_SUBCOMMANDS", "cli_entry", "ensure_standard_streams", "gui_entry
 #: so the two can never drift.
 CLI_SUBCOMMANDS = frozenset(
     {
+        "agent-init",
         "api-index",
         "check",
         "contact-sheet",

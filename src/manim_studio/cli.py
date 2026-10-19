@@ -371,6 +371,73 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return serve(root)
 
 
+_AGENT_INIT_VERBS = {
+    "create": "created",
+    "update": "updated",
+    "unchanged": "unchanged",
+    "skip": "skipped",
+}
+_AGENT_INIT_DRY_RUN_LABELS = {
+    "create": "would create",
+    "update": "would update",
+    "unchanged": "unchanged",
+    "skip": "would skip",
+}
+
+
+def cmd_agent_init(args: argparse.Namespace) -> int:
+    import shlex
+
+    from manim_studio import agent_init
+
+    if args.target.strip().lower() == "all":
+        targets: tuple[str, ...] = agent_init.TARGETS
+    else:
+        targets = tuple(part.strip() for part in args.target.split(",") if part.strip())
+    if not targets or not shlex.split(args.command):
+        print("error: --target and --command must not be empty", file=sys.stderr)
+        return 2
+    project = Path(args.dir)
+    if project.exists() and not project.is_dir():
+        print(f"error: not a directory: {project}", file=sys.stderr)
+        return 2
+    try:
+        plan = agent_init.plan_init(project, targets, command=args.command, force=args.force)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if not args.dry_run:
+        agent_init.apply_plan(project, plan)
+    manual = agent_init.manual_instructions(args.command)
+    if args.json:
+        _print_json(
+            {
+                "project": str(project.resolve()),
+                "dry_run": args.dry_run,
+                "files": [
+                    {
+                        "path": entry.relpath,
+                        "action": _AGENT_INIT_VERBS[entry.action],
+                        "reason": entry.reason,
+                    }
+                    for entry in plan
+                ],
+                "manual": manual,
+            }
+        )
+        return 0
+    for entry in plan:
+        label = (
+            _AGENT_INIT_DRY_RUN_LABELS[entry.action]
+            if args.dry_run
+            else _AGENT_INIT_VERBS[entry.action]
+        )
+        suffix = f"  ({entry.reason})" if entry.reason else ""
+        print(f"{label:<14}{entry.relpath}{suffix}")
+    print(manual)
+    return 0
+
+
 def cmd_latex(args: argparse.Namespace) -> int:
     from manim_studio import latex_install
     from manim_studio.latex import install_dir, latex_status, probe_compile
@@ -582,6 +649,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="workspace root every path must stay inside (default: $MANIM_STUDIO_ROOT or cwd)",
     )
     mcp.set_defaults(func=cmd_mcp)
+
+    init = subparsers.add_parser(
+        "agent-init", help="write agent instructions and MCP config into a project"
+    )
+    init.add_argument("dir", nargs="?", type=Path, default=Path("."))
+    init.add_argument(
+        "--target",
+        default="all",
+        help="comma-separated: claude, cursor, agents, mcp (default: all)",
+    )
+    init.add_argument(
+        "--command",
+        default="manim-studio",
+        help="command that starts the CLI, e.g. 'uv run --directory <repo> manim-studio'",
+    )
+    init.add_argument("--force", action="store_true", help="replace edited skill and rule files")
+    init.add_argument("--dry-run", action="store_true", help="show the plan and write nothing")
+    init.add_argument("--json", action="store_true")
+    init.set_defaults(func=cmd_agent_init)
 
     preview = subparsers.add_parser("preview", help="run the standalone preview host")
     preview.add_argument("file", type=Path)

@@ -64,6 +64,8 @@ explaining why not.
 | `manim_studio/mobject_sites.py` | Mobject targets in scene source: a constructor binding and the chained calls on it, as UTF-8 byte spans (ADR 0012) | stdlib only |
 | `manim_studio/call_edits.py` | Minimal source splices that set, remove or add call arguments, checked by parsing (ADR 0012) | stdlib, `color_sites`, `mobject_sites` |
 | `manim_studio/schema_store.py` | Mobject schema without Qt: disk cache keyed by manimlib version, the headless `load_schema` that runs the probe on a miss (ADR 0013) | stdlib, `mobject_schema`, `spawn` |
+| `manim_studio/agent_docs.py` | Text `agent-init` writes: the manim-scene-authoring skill and the managed AGENTS.md block | stdlib only |
+| `manim_studio/agent_init.py` | Plans and writes agent instructions and MCP config for a project; never overwrites edited or invalid files without `--force` | stdlib, `agent_docs` |
 | `manim_studio/editor/schema_cache.py` | Editor side of the schema: the background probe (`QProcess`) and Qt cache location; cache helpers come from `schema_store` | PySide6, `schema_store`, `mobject_schema`, `spawn` |
 | `manim_studio/editor/inspector_gear.py` | Gear markers beside mobject lines; a click emits the fresh target (ADR 0012) | PySide6, `mobject_sites` |
 | `manim_studio/editor/mobject_inspector.py` | The inspector dock: schema-driven rows, Apply emits the change list (ADR 0012) | PySide6, `call_edits`, `mobject_schema` |
@@ -90,7 +92,7 @@ Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
    `scene_settings`, `palettes`, `layout_presets`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`, `color_sites`, `mobject_schema`, `mobject_sites`, `call_edits`, `contact_sheet`, `schema_store`) must never import Qt,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`, `color_sites`, `mobject_schema`, `mobject_sites`, `call_edits`, `contact_sheet`, `schema_store`, `agent_docs`, `agent_init`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.
