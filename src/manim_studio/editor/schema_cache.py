@@ -9,15 +9,20 @@ stay quiet.
 
 from __future__ import annotations
 
-import importlib.metadata
+# Kept importable from here: the editor's tests patch the metadata lookup through this module.
+import importlib.metadata  # noqa: F401
 import json
-import logging
 from pathlib import Path
-from typing import Any
 
 from PySide6.QtCore import QObject, QProcess, QStandardPaths, QTimer, Signal
 
 from manim_studio.mobject_schema import MobjectSchema, SchemaError, parse_schema
+from manim_studio.schema_store import (
+    CACHE_NAME,
+    installed_manimlib_version,
+    read_cache,
+    write_cache,
+)
 from manim_studio.spawn import schema_probe_command
 
 __all__ = [
@@ -29,10 +34,6 @@ __all__ = [
     "write_cache",
 ]
 
-log = logging.getLogger(__name__)
-
-CACHE_NAME = "mobject_schema.json"
-
 
 def schema_cache_path() -> Path:
     """Where the schema is cached (home-dir fallback for odd platforms)."""
@@ -41,40 +42,6 @@ def schema_cache_path() -> Path:
         return Path(location) / CACHE_NAME
     except Exception:  # pragma: no cover - platform fallback
         return Path.home() / ".manim-studio" / CACHE_NAME
-
-
-def installed_manimlib_version() -> str:
-    """The installed ManimGL version, read without importing manimlib.
-
-    ``"unknown"`` when the package metadata is missing (some frozen builds drop it).  The probe
-    still decides whether manimlib imports, so a bundled manimlib works either way.
-    """
-    try:
-        return importlib.metadata.version("manimgl")
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
-
-
-def read_cache(path: Path, version: str) -> MobjectSchema | None:
-    """The cached schema when it is valid and was made for ``version``; otherwise ``None``."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        schema = parse_schema(data)
-    except (OSError, ValueError, SchemaError):
-        return None
-    return schema if schema.manimlib_version == version else None
-
-
-def write_cache(path: Path, data: dict[str, Any]) -> None:
-    """Persist the probe's JSON.  Written beside the target and renamed, so a crash never leaves
-    half a file behind."""
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(".tmp")
-        temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        temp.replace(path)
-    except OSError:
-        log.debug("could not persist the mobject schema to %s", path)
 
 
 class SchemaLoader(QObject):
