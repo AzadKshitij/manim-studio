@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
 # Qt tests must never require a display server; offscreen works on all platforms.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# manimlib parses sys.argv when it is first imported. Pytest flags such as -m or -p are not
+# manimgl options, so the first test to import it would fail to start. Import it once here,
+# with a clean argv, before any test module runs.
+_pytest_argv = sys.argv
+sys.argv = [_pytest_argv[0]]
+try:
+    import manimlib  # noqa: F401
+except ImportError:
+    pass
+finally:
+    sys.argv = _pytest_argv
 
 
 @pytest.fixture(autouse=True)
