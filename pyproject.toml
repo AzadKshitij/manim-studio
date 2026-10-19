@@ -48,6 +48,7 @@ dependencies = [
     # Composes contact sheets and writes frame PNGs (see manim_studio.frames). manimgl already
     # pulls Pillow in; it is declared here because the agent surface imports it directly.
     "pillow>=10.1",
+    "mcp>=2.3,<3",
 ]
 
 [project.urls]

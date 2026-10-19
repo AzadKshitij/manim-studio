@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import math
+import os
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -360,6 +361,16 @@ def cmd_contact_sheet(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    root = Path(args.root or os.environ.get("MANIM_STUDIO_ROOT") or Path.cwd()).resolve()
+    if not root.is_dir():
+        print(f"error: workspace root is not a directory: {root}", file=sys.stderr)
+        return 2
+    from manim_studio.mcp_server import serve
+
+    return serve(root)
+
+
 def cmd_latex(args: argparse.Namespace) -> int:
     from manim_studio import latex_install
     from manim_studio.latex import install_dir, latex_status, probe_compile
@@ -562,6 +573,15 @@ def build_parser() -> argparse.ArgumentParser:
     sheet.add_argument("--no-sidecar", action="store_true", help="ignore <scene>.studio.json")
     sheet.add_argument("--json", action="store_true")
     sheet.set_defaults(func=cmd_contact_sheet)
+
+    mcp = subparsers.add_parser("mcp", help="run the stdio MCP server for AI agents")
+    mcp.add_argument(
+        "--root",
+        default=None,
+        metavar="DIR",
+        help="workspace root every path must stay inside (default: $MANIM_STUDIO_ROOT or cwd)",
+    )
+    mcp.set_defaults(func=cmd_mcp)
 
     preview = subparsers.add_parser("preview", help="run the standalone preview host")
     preview.add_argument("file", type=Path)

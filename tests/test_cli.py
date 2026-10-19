@@ -275,6 +275,29 @@ class TestFrameCommandsGL:
         assert len(payload["frames"]) >= 2
 
 
+class TestMcpCommand:
+    def test_root_must_be_a_directory(self, tmp_path: Path, capsys) -> None:
+        assert main(["mcp", "--root", str(tmp_path / "missing")]) == 2
+        assert "not a directory" in capsys.readouterr().err
+
+    def test_root_flag_is_passed_to_the_server(self, tmp_path: Path, monkeypatch) -> None:
+        import manim_studio.mcp_server as mcp_server
+
+        seen: list[Path] = []
+        monkeypatch.setattr(mcp_server, "serve", lambda root: seen.append(root) or 0)
+        assert main(["mcp", "--root", str(tmp_path)]) == 0
+        assert seen == [tmp_path.resolve()]
+
+    def test_environment_root_is_used_without_the_flag(self, tmp_path: Path, monkeypatch) -> None:
+        import manim_studio.mcp_server as mcp_server
+
+        seen: list[Path] = []
+        monkeypatch.setattr(mcp_server, "serve", lambda root: seen.append(root) or 0)
+        monkeypatch.setenv("MANIM_STUDIO_ROOT", str(tmp_path))
+        assert main(["mcp"]) == 0
+        assert seen == [tmp_path.resolve()]
+
+
 @pytest.mark.manim
 class TestTraceCommand:
     @pytest.mark.gl

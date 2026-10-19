@@ -33,6 +33,7 @@ CLI_SUBCOMMANDS = frozenset(
         "frame",
         "gui",
         "latex",
+        "mcp",
         "new",
         "preview",
         "still",

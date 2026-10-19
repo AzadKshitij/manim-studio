@@ -133,6 +133,8 @@ def _extras() -> tuple[list[str], list[tuple[str, str]], list[tuple[str, str]]]:
         *collect_submodules("jedi"),  # shell completions via entry points
         *collect_submodules("parso"),
         *collect_submodules("manimlib"),  # defensive: scene API surface
+        *collect_submodules("mcp"),  # agent surface: `manim-studio mcp` (ADR 0013)
+        *collect_submodules("mcp_types"),
     ]
     binaries: list[tuple[str, str]] = []
     datas: list[tuple[str, str]] = []
