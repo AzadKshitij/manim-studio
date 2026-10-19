@@ -224,7 +224,8 @@ def prepare_scene(
         scene_name=scene_class.__name__,
         scene_path=scene_path,
         blocks=blocks,
-        total_duration=max((block.end for block in blocks), default=0.0),
+        # Block ends are sums of floats; round so the reported duration reads as written.
+        total_duration=round(max((block.end for block in blocks), default=0.0), 6),
         fps=int(scene.camera.fps),
         resolution=size,
         settings=settings,
