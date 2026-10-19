@@ -23,6 +23,7 @@ __all__ = [
     "parse_times",
     "plan_sheet",
     "sample_times",
+    "split_times",
     "truncate_label",
 ]
 
@@ -117,18 +118,25 @@ def normalize_times(values: Iterable[float], total: float) -> tuple[float, ...]:
     return tuple(sorted(rounded))
 
 
-def parse_times(text: str, total: float) -> tuple[float, ...]:
-    """Parse ``"0, 1.5 ,3"`` into sorted, de-duplicated times clamped to ``[0, total]``."""
+def split_times(text: str) -> tuple[float, ...]:
+    """Parse ``"0, 1.5 ,3"`` into floats, in order and not yet clamped (see ``normalize_times``)."""
     if not text.strip():
         raise SheetError("times must not be empty")
     values: list[float] = []
     for part in text.split(","):
         token = part.strip()
         try:
-            values.append(float(token))
+            value = float(token)
         except ValueError:
             raise SheetError(f"not a number in times: {token!r}") from None
-    return normalize_times(values, total)
+        _finite(value, "time")
+        values.append(value)
+    return tuple(values)
+
+
+def parse_times(text: str, total: float) -> tuple[float, ...]:
+    """Parse ``"0, 1.5 ,3"`` into sorted, de-duplicated times clamped to ``[0, total]``."""
+    return normalize_times(split_times(text), total)
 
 
 def block_at_time(blocks: Sequence[TimelineBlock], time: float) -> TimelineBlock | None:

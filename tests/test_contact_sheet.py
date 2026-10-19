@@ -12,9 +12,11 @@ from manim_studio.contact_sheet import (
     SheetLayout,
     block_at_time,
     format_label,
+    normalize_times,
     parse_times,
     plan_sheet,
     sample_times,
+    split_times,
     truncate_label,
 )
 from manim_studio.timeline_model import TimelineBlock
@@ -102,6 +104,23 @@ class TestParseTimes:
     def test_rejects_empty_and_non_numbers(self, text: str) -> None:
         with pytest.raises(SheetError):
             parse_times(text, 5.0)
+
+
+class TestSplitAndNormalizeTimes:
+    def test_split_keeps_order_and_does_not_clamp(self) -> None:
+        assert split_times("3, -1 ,99") == (3.0, -1.0, 99.0)
+
+    @pytest.mark.parametrize("text", ["", "  ", "abc", "1,,2", "nan", "1,inf"])
+    def test_split_rejects_bad_input(self, text: str) -> None:
+        with pytest.raises(SheetError):
+            split_times(text)
+
+    def test_normalize_clamps_sorts_and_drops_duplicates(self) -> None:
+        assert normalize_times([2.0, 0.0, 99.0, 2.0], 2.0) == (0.0, 2.0)
+
+    def test_normalize_rejects_an_empty_list(self) -> None:
+        with pytest.raises(SheetError):
+            normalize_times([], 2.0)
 
 
 class TestBlockAtTime:

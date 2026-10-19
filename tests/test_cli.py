@@ -152,6 +152,129 @@ class TestExportOptionParsing:
         assert _parse_range("a,b") is None
 
 
+class TestFrameCommands:
+    """``frame`` and ``contact-sheet``: argument handling and output shape, with fake frames."""
+
+    @pytest.fixture
+    def fake_frames(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from PIL import Image
+
+        from manim_studio import frames
+        from manim_studio.frames import PreparedScene
+        from manim_studio.timeline_model import TimelineBlock
+
+        prepared = PreparedScene(
+            scene_class=type("Fake", (), {}),
+            scene_name="Fake",
+            scene_path=Path("fake.py"),
+            blocks=(
+                TimelineBlock(index=0, name="Create", start=0.0, duration=1.0),
+                TimelineBlock(index=1, name="Wait", start=1.0, duration=2.0),
+            ),
+            total_duration=3.0,
+            fps=30,
+            resolution=(64, 36),
+            settings=None,
+            patches_applied=0,
+            patches_orphaned=0,
+        )
+        monkeypatch.setattr(frames, "prepare_scene", lambda *args, **kwargs: prepared)
+        monkeypatch.setattr(
+            frames,
+            "render_frames",
+            lambda prep, times: [Image.new("RGBA", prep.resolution, "#336699") for _ in times],
+        )
+
+    def test_frame_needs_a_time(self) -> None:
+        with pytest.raises(SystemExit) as info:
+            main(["frame", str(SCENE_FILE)])
+        assert info.value.code == 2
+
+    def test_frame_negative_time_is_usage_error(self, fake_frames, capsys) -> None:
+        assert main(["frame", str(SCENE_FILE), "--at", "-1"]) == 2
+        assert "non-negative" in capsys.readouterr().err
+
+    def test_frame_writes_png_and_json(self, fake_frames, tmp_path: Path, capsys) -> None:
+        from PIL import Image
+
+        target = tmp_path / "out" / "frame.png"
+        assert main(["frame", str(SCENE_FILE), "--at", "1.5", "-o", str(target), "--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["output"] == str(target.resolve())
+        assert payload["block_name"] == "Wait"
+        assert payload["clamped"] is False
+        with Image.open(target) as image:
+            assert image.size == (64, 36)
+
+    def test_frame_plain_output_is_only_the_path(self, fake_frames, tmp_path: Path, capsys) -> None:
+        target = tmp_path / "frame.png"
+        assert main(["frame", str(SCENE_FILE), "--at", "99", "-o", str(target)]) == 0
+        assert capsys.readouterr().out.strip() == str(target.resolve())
+
+    def test_frame_default_output_is_a_named_temp_png(self, fake_frames, capsys) -> None:
+        assert main(["frame", str(SCENE_FILE), "--at", "0.5", "--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert Path(payload["output"]).is_file()
+        assert Path(payload["output"]).name == "Fake_t0.50.png"
+
+    def test_broken_scene_is_a_scene_error(self, tmp_path: Path, capsys) -> None:
+        broken = tmp_path / "broken.py"
+        broken.write_text("def broken(:\n", encoding="utf-8")
+        assert main(["frame", str(broken), "--at", "1"]) == 1
+        assert "error" in capsys.readouterr().err
+
+    def test_contact_sheet_json_lists_every_tile(self, fake_frames, tmp_path: Path, capsys) -> None:
+        target = tmp_path / "sheet.png"
+        argv = ["contact-sheet", str(SCENE_FILE), "--every", "1", "-o", str(target), "--json"]
+        assert main(argv) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert [frame["time"] for frame in payload["frames"]] == [0.0, 1.0, 2.0, 3.0]
+        assert payload["output"] == str(target.resolve())
+        assert target.is_file()
+
+    def test_contact_sheet_explicit_times(self, fake_frames, capsys) -> None:
+        assert main(["contact-sheet", str(SCENE_FILE), "--times", "2.5,0", "--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert [frame["time"] for frame in payload["frames"]] == [0.0, 2.5]
+        assert payload["step"] is None
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["contact-sheet", "x.py", "--every", "0"],
+            ["contact-sheet", "x.py", "--times", "abc"],
+            ["contact-sheet", "x.py", "--times", "1,,2"],
+        ],
+    )
+    def test_bad_sampling_is_usage_error(self, argv: list[str]) -> None:
+        assert main(argv) == 2
+
+    def test_every_and_times_are_exclusive(self) -> None:
+        with pytest.raises(SystemExit) as info:
+            main(["contact-sheet", str(SCENE_FILE), "--every", "1", "--times", "0"])
+        assert info.value.code == 2
+
+
+@pytest.mark.manim
+class TestFrameCommandsGL:
+    @pytest.mark.gl
+    def test_frame_renders_the_real_scene_at_the_requested_size(self, tmp_path: Path) -> None:
+        from PIL import Image
+
+        target = tmp_path / "frame.png"
+        argv = ["frame", str(SCENE_FILE), "--at", "0.5", "-o", str(target)]
+        assert main([*argv, "--resolution", "160", "90"]) == 0
+        with Image.open(target) as image:
+            assert image.size == (160, 90)
+
+    @pytest.mark.gl
+    def test_contact_sheet_json_on_the_real_scene(self, capsys) -> None:
+        argv = ["contact-sheet", str(SCENE_FILE), "--every", "1", "--json"]
+        assert main([*argv, "--resolution", "160", "90"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert len(payload["frames"]) >= 2
+
+
 @pytest.mark.manim
 class TestTraceCommand:
     @pytest.mark.gl

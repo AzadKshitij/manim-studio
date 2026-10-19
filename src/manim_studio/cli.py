@@ -11,13 +11,16 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import sys
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from manim_studio import __version__
 from manim_studio.api_index import build_index, index_names
+from manim_studio.contact_sheet import SheetError, split_times
 from manim_studio.export import ExportError, build_export_plan, run_export
 from manim_studio.scene_runner import (
     SceneLoadError,
@@ -270,6 +273,93 @@ def cmd_still(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scratch_png(name: str) -> Path:
+    """A PNG path in a fresh temp folder, used when ``-o`` is not given."""
+    return Path(tempfile.mkdtemp(prefix="manim-studio-")) / name
+
+
+def _write_png(image: Any, output: Path) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output)
+    return output.resolve()
+
+
+def cmd_frame(args: argparse.Namespace) -> int:
+    from manim_studio.frames import FrameError, render_frame
+
+    if not math.isfinite(args.at) or args.at < 0:
+        print("error: --at must be a non-negative number of seconds", file=sys.stderr)
+        return 2
+    try:
+        with _capture_scene_output():
+            result = render_frame(
+                args.file,
+                args.at,
+                args.scene,
+                resolution=tuple(args.resolution) if args.resolution else None,
+                use_sidecar=not args.no_sidecar,
+            )
+    except (SceneLoadError, FrameError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # scene code can raise anything
+        print(f"scene failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    name = f"{result.prepared.scene_name}_t{result.time:.2f}.png"
+    output = _write_png(result.image, args.output or _scratch_png(name))
+    if args.json:
+        _print_json({"output": str(output), **result.to_dict()})
+    else:
+        print(str(output))
+    return 0
+
+
+def cmd_contact_sheet(args: argparse.Namespace) -> int:
+    from manim_studio.frames import FrameError, render_contact_sheet
+
+    try:
+        times = split_times(args.times) if args.times is not None else None
+    except SheetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    every = None if times is not None else (args.every if args.every is not None else 0.5)
+    if every is not None and not (math.isfinite(every) and every > 0):
+        print("error: --every must be a positive number of seconds", file=sys.stderr)
+        return 2
+    try:
+        with _capture_scene_output():
+            result = render_contact_sheet(
+                args.file,
+                args.scene,
+                every=every,
+                times=times,
+                start=args.start,
+                end=args.end,
+                columns=args.columns,
+                max_frames=args.max_frames,
+                sheet_width=args.sheet_width,
+                resolution=tuple(args.resolution) if args.resolution else None,
+                use_sidecar=not args.no_sidecar,
+            )
+    except SheetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except (SceneLoadError, FrameError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # scene code can raise anything
+        print(f"scene failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    output = _write_png(
+        result.image, args.output or _scratch_png(f"{result.prepared.scene_name}_sheet.png")
+    )
+    if args.json:
+        _print_json({"output": str(output), **result.to_dict()})
+    else:
+        print(str(output))
+    return 0
+
+
 def cmd_latex(args: argparse.Namespace) -> int:
     from manim_studio import latex_install
     from manim_studio.latex import install_dir, latex_status, probe_compile
@@ -441,6 +531,37 @@ def build_parser() -> argparse.ArgumentParser:
     still.add_argument("-o", "--output", type=Path, default=None)
     still.add_argument("--resolution", type=int, nargs=2, metavar=("W", "H"), default=(854, 480))
     still.set_defaults(func=cmd_still)
+
+    frame = subparsers.add_parser("frame", help="render the scene at an exact time to a PNG")
+    frame.add_argument("file", type=Path)
+    frame.add_argument("--at", type=float, required=True, metavar="SECONDS", help="scene time")
+    frame.add_argument("--scene", default=None)
+    frame.add_argument("-o", "--output", type=Path, default=None)
+    frame.add_argument("--resolution", type=int, nargs=2, metavar=("W", "H"), default=None)
+    frame.add_argument("--no-sidecar", action="store_true", help="ignore <scene>.studio.json")
+    frame.add_argument("--json", action="store_true")
+    frame.set_defaults(func=cmd_frame)
+
+    sheet = subparsers.add_parser(
+        "contact-sheet", help="tile frames with timestamps and block names into one PNG"
+    )
+    sheet.add_argument("file", type=Path)
+    when = sheet.add_mutually_exclusive_group()
+    when.add_argument(
+        "--every", type=float, default=None, metavar="SECONDS", help="sample spacing (default 0.5)"
+    )
+    when.add_argument("--times", default=None, metavar="0,1.5,3", help="explicit times")
+    sheet.add_argument("--from", dest="start", type=float, default=0.0, metavar="SECONDS")
+    sheet.add_argument("--to", dest="end", type=float, default=None, metavar="SECONDS")
+    sheet.add_argument("-o", "--output", type=Path, default=None)
+    sheet.add_argument("--scene", default=None)
+    sheet.add_argument("--columns", type=int, default=None)
+    sheet.add_argument("--max-frames", type=int, default=48)
+    sheet.add_argument("--width", dest="sheet_width", type=int, default=1600, metavar="PX")
+    sheet.add_argument("--resolution", type=int, nargs=2, metavar=("W", "H"), default=None)
+    sheet.add_argument("--no-sidecar", action="store_true", help="ignore <scene>.studio.json")
+    sheet.add_argument("--json", action="store_true")
+    sheet.set_defaults(func=cmd_contact_sheet)
 
     preview = subparsers.add_parser("preview", help="run the standalone preview host")
     preview.add_argument("file", type=Path)

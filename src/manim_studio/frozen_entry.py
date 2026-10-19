@@ -28,7 +28,9 @@ CLI_SUBCOMMANDS = frozenset(
     {
         "api-index",
         "check",
+        "contact-sheet",
         "export",
+        "frame",
         "gui",
         "latex",
         "new",

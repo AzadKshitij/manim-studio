@@ -28,6 +28,7 @@ __all__ = [
     "SCHEMA_PROBE_FLAG",
     "LaunchTarget",
     "classify_invocation",
+    "cli_command",
     "frozen",
     "manimgl_export_command",
     "preview_host_command",
@@ -73,6 +74,16 @@ def manimgl_export_command(args: Sequence[str]) -> tuple[str, tuple[str, ...]]:
     if frozen():
         return sys.executable, (MANIMGL_EXPORT_FLAG, *args)
     return sys.executable, ("-m", _MANIMGL_EXPORT_MODULE, *args)
+
+
+def cli_command(args: Sequence[str]) -> tuple[str, tuple[str, ...]]:
+    """Return ``(executable, argv[1:])`` that runs ``manim-studio <args>`` as a child process.
+
+    Frozen builds re-invoke the console exe; ``frozen_entry`` routes the known subcommands.
+    """
+    if frozen():
+        return sys.executable, tuple(args)
+    return sys.executable, ("-m", "manim_studio", *args)
 
 
 def schema_probe_command() -> tuple[str, tuple[str, ...]]:

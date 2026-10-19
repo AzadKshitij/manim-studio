@@ -84,6 +84,22 @@ class TestClassifyInvocation:
         assert spawn.MANIMGL_EXPORT_FLAG not in CLI_SUBCOMMANDS
 
 
+class TestCliCommand:
+    def test_uses_module_switch_in_development(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        command = spawn.cli_command(["frame", "x.py"])
+        assert command == (sys.executable, ("-m", "manim_studio", "frame", "x.py"))
+
+    def test_runs_the_console_exe_when_frozen(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        assert spawn.cli_command(["frame", "x.py"]) == (sys.executable, ("frame", "x.py"))
+
+    def test_frozen_command_round_trips_to_the_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        _, command = spawn.cli_command(["contact-sheet", "x.py"])
+        assert spawn.classify_invocation(command) == ("cli", ("contact-sheet", "x.py"))
+
+
 class TestSchemaProbeCommand:
     def test_uses_module_switch_in_development(self) -> None:
         executable, args = spawn.schema_probe_command()
