@@ -7,7 +7,7 @@ each tile goes on the sheet (pure geometry, no Qt, no manimlib, no pixels).
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from manim_studio.timeline_model import TimelineBlock
@@ -19,6 +19,7 @@ __all__ = [
     "SheetLayout",
     "block_at_time",
     "format_label",
+    "normalize_times",
     "parse_times",
     "plan_sheet",
     "sample_times",
@@ -105,6 +106,17 @@ def sample_times(
     return Sampling(tuple(raw), every, False)
 
 
+def normalize_times(values: Iterable[float], total: float) -> tuple[float, ...]:
+    """Clamp ``values`` into ``[0, total]``, then sort and drop duplicates (to microseconds)."""
+    rounded: set[float] = set()
+    for value in values:
+        _finite(value, "time")
+        rounded.add(round(min(max(value, 0.0), total), _TIME_DECIMALS))
+    if not rounded:
+        raise SheetError("times must not be empty")
+    return tuple(sorted(rounded))
+
+
 def parse_times(text: str, total: float) -> tuple[float, ...]:
     """Parse ``"0, 1.5 ,3"`` into sorted, de-duplicated times clamped to ``[0, total]``."""
     if not text.strip():
@@ -113,16 +125,10 @@ def parse_times(text: str, total: float) -> tuple[float, ...]:
     for part in text.split(","):
         token = part.strip()
         try:
-            value = float(token)
+            values.append(float(token))
         except ValueError:
             raise SheetError(f"not a number in times: {token!r}") from None
-        _finite(value, "time")
-        values.append(round(min(max(value, 0.0), total), _TIME_DECIMALS))
-    unique: list[float] = []
-    for value in sorted(values):
-        if not unique or value != unique[-1]:
-            unique.append(value)
-    return tuple(unique)
+    return normalize_times(values, total)
 
 
 def block_at_time(blocks: Sequence[TimelineBlock], time: float) -> TimelineBlock | None:

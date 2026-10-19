@@ -48,6 +48,7 @@ explaining why not.
 | `manim_studio/filmstrip.py` | Bounded LRU cache of encoded scrub frames | stdlib only |
 | `manim_studio/scrub.py` | Replay posing (`ScrubEngine`) + single-pass filmstrip crawler (construct() suspended on a greenlet, same GL thread) | `manimlib`, `greenlet` lazily |
 | `manim_studio/reuse.py` | Which cached filmstrip blocks survive an edit (ADR 0009) | stdlib only |
+| `manim_studio/frames.py` | Render a scene at any time (`ScrubEngine` pose, sidecar applied) and compose contact-sheet images with Pillow; no window | `manimlib`, `scrub`, `scene_runner`, `export`, `contact_sheet`, PIL |
 | `manim_studio/recent.py` | Recent-files ordering/pruning rules | stdlib only |
 | `manim_studio/command_palette.py` | Palette entries, query scopes (`>` `@` `?`), fuzzy ranking and recency | stdlib only |
 | `manim_studio/autosave.py` | Autosave snapshot naming and recovery offer rules | stdlib only |
