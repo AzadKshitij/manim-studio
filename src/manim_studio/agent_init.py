@@ -99,8 +99,13 @@ def manual_instructions(command: str) -> str:
 
 
 def _command_words(command: str) -> list[str]:
-    words = shlex.split(command)
-    if not words:
+    """Split a command line into words. Quotes group words; backslashes are kept literally, so a
+    Windows path such as ``C:\\Apps\\manim-studio.exe`` survives intact."""
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""
+    words = list(lexer)
+    if not words or not words[0]:
         raise ValueError("the command must not be empty")
     return words
 

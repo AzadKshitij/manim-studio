@@ -107,6 +107,31 @@ class TestMergeMcpJson:
             merge_mcp_json("[1, 2]", "manim-studio")
 
 
+class TestWindowsCommandPaths:
+    """An agent-init --command that is a Windows path must reach the config intact."""
+
+    PATH = r"C:\Users\me\AppData\Local\Programs\ManimStudio\manim-studio.exe"
+
+    def test_mcp_json_keeps_backslashes(self) -> None:
+        data = json.loads(merge_mcp_json(None, self.PATH))
+        assert data["mcpServers"]["manim-studio"]["command"] == self.PATH
+
+    def test_opencode_json_keeps_backslashes(self) -> None:
+        data = json.loads(merge_opencode_json(None, self.PATH))
+        assert data["mcp"]["manim-studio"]["command"] == [self.PATH, "mcp"]
+
+    def test_quoted_path_with_spaces_is_one_word(self) -> None:
+        command = '"C:\\Program Files\\ManimStudio\\manim-studio.exe"'
+        data = json.loads(merge_mcp_json(None, command))
+        assert data["mcpServers"]["manim-studio"]["command"] == (
+            "C:\\Program Files\\ManimStudio\\manim-studio.exe"
+        )
+
+    def test_empty_command_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            merge_mcp_json(None, '  ""  ')
+
+
 class TestMergeOpencodeJson:
     def test_absent_file_gets_a_local_server_with_a_command_array(self) -> None:
         data = json.loads(merge_opencode_json(None, "manim-studio"))
