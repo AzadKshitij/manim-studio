@@ -104,8 +104,16 @@ try {
     Write-Host "  smoke: agent loop over stdio (frozen manim-studio.exe)"
     uv run python scripts\mcp_smoke.py --exe $cliExe
     if ($LASTEXITCODE -ne 0) { throw "frozen agent loop failed (see the FAIL line above)" }
+    # The ffmpeg command must ship; `status` may legitimately exit 1 when ffmpeg is absent,
+    # so check the help text instead.
+    Invoke-Smoke -Label "cli ffmpeg help" -Exe $cliExe -Arguments @("ffmpeg", "--help") `
+        -ExpectOutput "install"
 
     # -- 5. Portable zip (folder name inside the archive is ManimStudio/) --
+    # The new-user guide travels with the app, so it is read from the same unzipped folder.
+    $guide = Join-Path (Get-Location) "docs\AI_AGENT_GUIDE.md"
+    if (-not (Test-Path $guide)) { throw "missing new-user guide: $guide" }
+    Copy-Item -Path $guide -Destination (Join-Path $bundleDir "AI_AGENT_GUIDE.md") -Force
     $zipPath = Join-Path (Get-Location) "dist\ManimStudio-$version-portable.zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
     Compress-Archive -Path $bundleDir -DestinationPath $zipPath
