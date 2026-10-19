@@ -25,7 +25,7 @@ import socket
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -67,6 +67,7 @@ from manim_studio.scene_runner import (
     select_scene_class,
     user_module_signature,
 )
+from manim_studio.scene_settings import SceneSettings
 from manim_studio.scrub import (
     FilmstripCrawler,
     ScrubEngine,
@@ -261,12 +262,20 @@ class HostConfig:
     fail_fast: bool = False
     #: Timeline edits the very first load runs with (the editor re-sends later ones).
     patches: tuple[Patch, ...] = ()
+    #: Render settings for the scene; when set they decide the size, fps and background.
+    settings: SceneSettings | None = None
 
 
 class SceneHost:
     """Owns the window, the scene lifecycle, playback and the IPC connections."""
 
     def __init__(self, config: HostConfig, logger: logging.Logger = log) -> None:
+        if config.settings is not None:
+            config = replace(
+                config,
+                size=(config.settings.width, config.settings.height),
+                fps=config.settings.fps,
+            )
         self.config = config
         self.log = logger
         self.stop_event = threading.Event()
@@ -462,6 +471,7 @@ class SceneHost:
             window=self.window,
             resolution=self.config.size,
             fps=self.config.fps,
+            settings=self.config.settings,
             skip_animations=skip_animations,
             start_at_animation_number=start,
             end_at_animation_number=end,
@@ -592,7 +602,12 @@ class SceneHost:
             sites=snapshot.block_sites,
             dynamic=snapshot.block_dynamic,
             no_user_modules=not user_modules,
-            signature=(tuple(self.config.size), self.config.fps, user_modules),
+            signature=(
+                tuple(self.config.size),
+                self.config.fps,
+                self.config.settings,
+                user_modules,
+            ),
             time_independent=not user_modules and not source_is_time_dependent(patch_result.text),
         )
         timing_only = self._is_timing_only_edit(base_text, patch_result.applied)
@@ -1476,6 +1491,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="sidecar-format JSON of timeline edits to run the scene with",
     )
+    parser.add_argument(
+        "--settings-file",
+        type=Path,
+        default=None,
+        help="scene settings JSON (size, fps, background) to run the scene with",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -1491,6 +1512,19 @@ def _read_patches(path: Path | None) -> tuple[Patch, ...]:
     except SidecarError as exc:
         log.error("ignoring --patch-file: %s", exc)
         return ()
+
+
+def _read_settings(path: Path | None) -> SceneSettings | None:
+    """Settings from ``--settings-file``; an unreadable file is logged and ignored."""
+    if path is None:
+        return None
+    from manim_studio.sidecar import SidecarError, read_settings_file
+
+    try:
+        return read_settings_file(path)
+    except SidecarError as exc:
+        log.error("ignoring --settings-file: %s", exc)
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1511,6 +1545,7 @@ def main(argv: list[str] | None = None) -> int:
         fps=args.fps,
         fail_fast=args.fail_fast,
         patches=_read_patches(args.patch_file),
+        settings=_read_settings(args.settings_file),
     )
     # manimgl parses sys.argv at import time; hide our arguments from it.
     from manim_studio.scene_runner import manimlib_argv_guard

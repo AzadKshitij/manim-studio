@@ -55,6 +55,34 @@ PALETTE = [BLUE, TEAL, GREEN, YELLOW, ORANGE, RED, PINK, PURPLE]
 
 
 class Welcome(InteractiveScene):
+
+    # --- manim-studio:scene-settings (managed; edit via Scene > Scene Settings) ---
+    def __init__(self, **kwargs) -> None:
+        # Scene settings from Manim Studio (managed block; change them in the Scene menu).
+        kwargs["camera_config"] = {
+            "resolution": (854, 480),
+            "fps": 30,
+            "background_color": "#0B0B0B",
+            "background_opacity": 1.0,
+            "frame_config": {"frame_shape": (14.233333, 8.0)},
+            **kwargs.get("camera_config", {}),
+        }
+        super().__init__(**kwargs)
+
+        # manimgl scales x by the 16:9 frame width; use this resolution's aspect ratio.
+        from manimlib.constants import FRAME_HEIGHT
+        camera = self.camera
+        draw_uniforms = camera.refresh_uniforms
+
+        def refresh_uniforms() -> None:
+            draw_uniforms()
+            factors = list(camera.uniforms["frame_rescale_factors"])
+            factors[0] = 2.0 / (FRAME_HEIGHT * camera.get_aspect_ratio())
+            camera.uniforms["frame_rescale_factors"] = tuple(factors)
+
+        camera.refresh_uniforms = refresh_uniforms
+    # --- end manim-studio:scene-settings ---
+
     def construct(self) -> None:
         # --- 1. Title ---------------------------------------------------------
         title = Text("Welcome to Manim Studio", font_size=64)
@@ -65,11 +93,12 @@ class Welcome(InteractiveScene):
         title2 =  Text("Welcome to Manim Studio", font_size=44)
         
         
+        
         group = VGroup(title1, title2).arrange(RIGHT, buff=0.5)
         self.play(group.animate.to_edge(DOWN))
         
 
-        # --- 2. A ring of dots spins up around the title ---------------------
+        # ------------------------- 2. A ring of dots spins up around the title ---------------------
         ring = VGroup(
             *(
                 Dot(
@@ -110,7 +139,7 @@ class Welcome(InteractiveScene):
 
         wave = always_redraw(make_wave)
         self.play(ShowCreation(wave), run_time=1.5)
-        self.play(phase.animate.set_value(TAU), run_time=1.5, rate_func=linear)
+        self.play(phase.animate.set_value(TAU), run_time=2.033, rate_func=linear)
         self.play(FadeOut(wave), run_time=1.833)
 
         # --- 5. Lissajous curve drawn by a moving dot ------------------------
@@ -162,6 +191,8 @@ class Welcome(InteractiveScene):
         self.play(Write(hint), run_time=1.5)
         self.play(FadeIn(hint2, shift=UP * 0.3))
         self.wait(0.956)
+
+
 
 class Intro(InteractiveScene):
     def construct(self) -> None:

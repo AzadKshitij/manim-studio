@@ -58,6 +58,10 @@ _GLYPHS: dict[str, str] = {
     f'<path d="M15 9l-6 6M9 9l6 6" {_STROKE}/>',
     "orphans": f'<path d="M12 3l10 18H2zM12 10v5M12 18.5v.5" {_STROKE}/>',
     "snap": f'<path d="M6 3v7a6 6 0 0 0 12 0V3M6 6.5h3.5M14.5 6.5H18" {_STROKE}/>',
+    # inspector ---------------------------------------------------------------
+    "gear": f'<circle cx="12" cy="12" r="3" {_STROKE}/>'
+    f'<path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1'
+    f'M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" {_STROKE}/>',
     # app ---------------------------------------------------------------------
     "render": f'<rect x="2" y="5" width="20" height="14" rx="2" {_STROKE}/>'
     f'<path d="M7 5v14M17 5v14M2 12h20" {_STROKE}/>',

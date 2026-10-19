@@ -35,7 +35,10 @@ explaining why not.
 | `manim_studio/site_index.py` | Static index of `self.play()`/`self.wait()` call sites with stable fingerprints | stdlib only |
 | `manim_studio/patches.py` | Anchored timeline edits (`SetDuration`, `Delete`) and the text-splice engine that applies them | stdlib, `site_index` |
 | `manim_studio/patch_runtime.py` | `__studio__` helper for per-iteration (loop) edits | stdlib only |
-| `manim_studio/sidecar.py` | `<scene>.studio.json` IO, patch temp files and the `PatchStack` undo history | stdlib, `patches` |
+| `manim_studio/sidecar.py` | `<scene>.studio.json` IO (patches and per-scene settings), temp files and the `PatchStack` undo history | stdlib, `patches`, `scene_settings` |
+| `manim_studio/scene_settings.py` | Per-scene render settings (size, fps, background, palette), camera config and the managed scene-source block (ADR 0010) | stdlib only |
+| `manim_studio/palettes.py` | Scene colour palettes and their WCAG contrast checks | stdlib, `scene_settings` |
+| `manim_studio/layout_presets.py` | Landscape and portrait editor arrangements (weights only) | stdlib only |
 | `manim_studio/tracer.py` | Runtime tracer wrapping `play()`/`wait()` and scene API calls; tags blocks with their call site | stdlib, `timeline_model` |
 | `manim_studio/python_highlight.py` | Pygments-powered Python token spans for the code editor | stdlib, `pygments` |
 | `manim_studio/python_completion.py` | Jedi-backed completion candidates and call signatures | stdlib, `jedi` |
@@ -50,9 +53,19 @@ explaining why not.
 | `manim_studio/preview_status.py` | The preview's one status (word, tone, detail) from host, load, error and edit facts | stdlib only |
 | `manim_studio/loading.py` | Preview loading stages from host events, caption text and the minimum-visible rule | stdlib only |
 | `manim_studio/theme.py` | Colour themes: model, built-ins, JSON theme files, derived colours (ADR 0008) | stdlib only |
-| `manim_studio/templates.py` | Scene + prefab templates | stdlib only |
+| `manim_studio/templates.py` | Scene + prefab templates | stdlib, `scene_settings` |
 | `manim_studio/timeline_ops.py` | Timeline operations: names, shortcuts, scope and when each is available | stdlib only |
 | `manim_studio/api_index.py` | Offline AST scan of installed `manimlib` for autocomplete | stdlib only |
+| `manim_studio/color_sites.py` | Colour literals in scene source (UTF-8 spans, manim colour names), spelling a picked colour, and the colour-blind timeline fingerprint payload (ADR 0011) | stdlib only |
+| `manim_studio/schema_probe.py` | Discovers ManimGL's mobject API (constructor parameters with real defaults, chainable methods, colour constants) and prints it as JSON; runs in its own process (ADR 0012) | `manimlib` lazily (argv stripped before import) |
+| `manim_studio/mobject_schema.py` | The discovered schema: MRO flattening, widget kind per parameter, colour resolution (ADR 0012) | stdlib, `schema_probe` (version constant) |
+| `manim_studio/mobject_sites.py` | Mobject targets in scene source: a constructor binding and the chained calls on it, as UTF-8 byte spans (ADR 0012) | stdlib only |
+| `manim_studio/call_edits.py` | Minimal source splices that set, remove or add call arguments, checked by parsing (ADR 0012) | stdlib, `color_sites`, `mobject_sites` |
+| `manim_studio/editor/schema_cache.py` | Schema disk cache keyed by manimlib version, and the background probe (`QProcess`) | PySide6, `mobject_schema`, `spawn` |
+| `manim_studio/editor/inspector_gear.py` | Gear markers beside mobject lines; a click emits the fresh target (ADR 0012) | PySide6, `mobject_sites` |
+| `manim_studio/editor/mobject_inspector.py` | The inspector dock: schema-driven rows, Apply emits the change list (ADR 0012) | PySide6, `call_edits`, `mobject_schema` |
+| `manim_studio/editor/color_field.py` | Colour chip, hex box and picker; colour lists with add and remove (ADR 0012) | PySide6 |
+| `manim_studio/editor/value_fields.py` | Vector number boxes and the row-by-row dict editor, with colour pickers for colour maps (ADR 0012) | PySide6, `call_edits`, `mobject_schema` |
 | `manim_studio/scene_runner.py` | Discover/trace/validate scenes, headless execution | `manimlib` lazily |
 | `manim_studio/export.py` | Video export via `manimgl -w` subprocess; bakes the sidecar's edits in | `subprocess`, `sidecar` |
 | `manim_studio/preview_host.py` | Owns the **only** OpenGL context; renders and streams frames | `manimlib`, moderngl |
@@ -73,7 +86,8 @@ wire protocol and `docs/adr/` for architectural decisions.
 Hard dependency rules:
 
 1. Pure modules (`timeline_model`, `site_index`, `patches`, `patch_runtime`, `sidecar`,
-   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`) must never import Qt,
+   `scene_settings`, `palettes`, `layout_presets`,
+   `tracer`, `ipc`, `filmstrip`, `templates`, `api_index`, `theme`, `reuse`, `recent`, `loading`, `command_palette`, `autosave`, `preview_status`, `timeline_ops`, `color_sites`, `mobject_schema`, `mobject_sites`, `call_edits`) must never import Qt,
    `manimlib`, or `moderngl`. They are the fully-tested core.
 2. `editor/*` must not import `manimlib`/`moderngl` at module import time. The editor
    talks to the preview host via IPC only.

@@ -12,17 +12,24 @@ from __future__ import annotations
 import subprocess
 import tempfile
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from manim_studio import spawn
-from manim_studio.sidecar import SidecarError, load_sidecar, write_patch_file
+from manim_studio.sidecar import (
+    SidecarError,
+    load_scene_settings,
+    load_sidecar,
+    write_patch_file,
+    write_settings_file,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from manim_studio.patches import Patch
+    from manim_studio.scene_settings import SceneSettings
 
 __all__ = [
     "QUALITY_FLAGS",
@@ -93,6 +100,7 @@ def build_export_plan(
     resolution: tuple[int, int] | None = None,
     animation_range: tuple[int, int] | None = None,
     patches: Sequence[Patch] | None = None,
+    settings: SceneSettings | None = None,
     use_sidecar: bool = True,
     extra_args: Sequence[str] = (),
 ) -> ExportPlan:
@@ -137,6 +145,9 @@ def build_export_plan(
         if not 0 <= start <= end:
             raise ExportError(f"invalid animation range {animation_range!r}; expected start <= end")
     chosen_patches = _resolve_patches(scene_file, patches, use_sidecar)
+    effective = _effective_settings(
+        _resolve_settings(scene_file, scene_name, settings, use_sidecar), resolution, fps
+    )
 
     requested = Path(output) if output is not None else None
     if requested is not None:
@@ -158,9 +169,15 @@ def build_export_plan(
         file_name = stem
         output_path = output_dir / f"{stem}{extension}"
 
-    quality_flags: tuple[str, ...] = () if resolution is not None else QUALITY_FLAGS[quality]
+    # Scene settings decide the size and fps when present, so the preset flags would only
+    # be overridden; an explicit resolution still wins, through the settings.
+    quality_flags: tuple[str, ...] = (
+        () if (resolution is not None or effective is not None) else QUALITY_FLAGS[quality]
+    )
     resolution_flags: tuple[str, ...] = (
-        ("-r", f"{int(resolution[0])}x{int(resolution[1])}") if resolution is not None else ()
+        ("-r", f"{int(resolution[0])}x{int(resolution[1])}")
+        if resolution is not None and effective is None
+        else ()
     )
     module_args: list[str] = [
         str(scene_file),
@@ -179,7 +196,9 @@ def build_export_plan(
     if chosen_patches:
         module_args.extend(["--patch-file", str(write_patch_file(chosen_patches))])
     module_args.extend(["--video_dir", str(output_dir), "--file_name", file_name])
-    if fps is not None:
+    if effective is not None:
+        module_args.extend(["--settings-file", str(write_settings_file(effective))])
+    elif fps is not None:
         module_args.extend(["--config_file", str(_fps_config_path(int(fps)))])
     module_args.extend(extra_args)
     executable, tail = spawn.manimgl_export_command(module_args)
@@ -208,6 +227,42 @@ def _resolve_patches(
         return load_sidecar(scene_file)
     except SidecarError as exc:
         raise ExportError(str(exc)) from exc
+
+
+def _resolve_settings(
+    scene_file: Path,
+    scene_name: str | None,
+    settings: SceneSettings | None,
+    use_sidecar: bool,
+) -> SceneSettings | None:
+    """The settings to render with: explicit, else the sidecar's for this scene."""
+    if settings is not None:
+        return settings
+    if not use_sidecar:
+        return None
+    try:
+        stored = load_scene_settings(scene_file)
+    except SidecarError as exc:
+        raise ExportError(str(exc)) from exc
+    if scene_name is not None:
+        return stored.get(scene_name)
+    # Without a name, settings are only unambiguous when the file stores one scene's.
+    return next(iter(stored.values())) if len(stored) == 1 else None
+
+
+def _effective_settings(
+    settings: SceneSettings | None,
+    resolution: tuple[int, int] | None,
+    fps: int | None,
+) -> SceneSettings | None:
+    """Apply the caller's explicit resolution and fps on top of the scene's settings."""
+    if settings is None:
+        return None
+    if resolution is not None:
+        settings = replace(settings, width=int(resolution[0]), height=int(resolution[1]))
+    if fps is not None:
+        settings = replace(settings, fps=int(fps))
+    return settings
 
 
 def _fps_config_path(fps: int) -> Path:

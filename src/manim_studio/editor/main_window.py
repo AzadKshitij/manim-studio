@@ -6,15 +6,28 @@ the file watcher and the rendered-preview transport, and routes every event.
 
 from __future__ import annotations
 
+import json
+import logging
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, QSize, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeyEvent, QKeySequence, QShowEvent
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QColor,
+    QKeyEvent,
+    QKeySequence,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QComboBox,
+    QDialog,
     QFileDialog,
     QInputDialog,
     QLabel,
@@ -33,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from manim_studio import APP_NAME, external_changes, recent
+from manim_studio.call_edits import Change, EditError, apply_changes
 from manim_studio.editor import api_cache, scene_files
 from manim_studio.editor.autosave_controller import AutosaveController
 from manim_studio.editor.block_inspector import BlockInfo, BlockInspector, describe_clips
@@ -46,12 +60,16 @@ from manim_studio.editor.external_change_bar import ExternalChangeBar
 from manim_studio.editor.file_watcher import FileWatcher
 from manim_studio.editor.glyphs import glyph, refresh_glyphs
 from manim_studio.editor.icon import load_icon
+from manim_studio.editor.mobject_inspector import MobjectInspector
 from manim_studio.editor.palette_dialog import CommandPalette
 from manim_studio.editor.palette_sources import build_items as palette_items
 from manim_studio.editor.patch_controller import MIN_DURATION, PatchController
 from manim_studio.editor.preview_controller import PreviewController
 from manim_studio.editor.preview_events import PreviewEvents
 from manim_studio.editor.preview_panel import PreviewPanel
+from manim_studio.editor.scene_settings_dialog import SceneSettingsDialog
+from manim_studio.editor.scene_settings_store import SceneSettingsStore
+from manim_studio.editor.schema_cache import SchemaLoader
 from manim_studio.editor.session_state import SessionState
 from manim_studio.editor.shell_panel import ShellPanel
 from manim_studio.editor.stats_controller import StatsController
@@ -72,8 +90,28 @@ from manim_studio.editor.unsaved import (
 from manim_studio.editor.video_mode import VideoModeController
 from manim_studio.editor.welcome_panel import WelcomePanel
 from manim_studio.external_changes import Decision
+from manim_studio.layout_presets import LANDSCAPE, PORTRAIT, preset_for, suggest_layout
+from manim_studio.mobject_schema import MobjectSchema
+from manim_studio.mobject_sites import MobjectTarget, find_mobject_targets
+from manim_studio.palettes import (
+    BUILTIN_PALETTES,
+    Palette,
+    PaletteError,
+    load_palette_file,
+    user_palettes_dir,
+)
 from manim_studio.preview_status import CRASHED, OFF, RUNNING, PreviewStatus, summarize
 from manim_studio.scene_runner import check_scene_file
+from manim_studio.scene_settings import (
+    RESOLUTION_PRESETS,
+    SceneSettings,
+    SettingsError,
+    apply_block,
+    normalize_hex,
+    remove_class_block,
+    resolution_preset_for,
+)
+from manim_studio.sidecar import SidecarError, save_scene_settings
 from manim_studio.site_index import block_line_range
 from manim_studio.stats import TimingStats, process_rss_bytes
 from manim_studio.templates import SCENE_TEMPLATES, SNIPPET_TEMPLATES, find_template
@@ -94,10 +132,24 @@ from manim_studio.timeline_ops import TimelineFacts, op_states
 __all__ = ["MainWindow"]
 
 _HOST_BY_STATE = {"starting": RUNNING, "stopped": OFF, "crashed": CRASHED}
+_LOG = logging.getLogger(__name__)
+_AUTO_LAYOUT = "auto"
+
+
+def _format_label(size: tuple[int, int], settings: SceneSettings | None) -> str:
+    """The preview header's size chip, for example ``1080x1920 · 9:16``."""
+    width, height = size
+    if settings is None:
+        return f"{width}x{height}"
+    return f"{width}x{height} · {settings.aspect_label}"
 
 
 class MainWindow(QMainWindow):
     """The application shell."""
+
+    # The splitters of the arrangement on screen; set by _arrange.
+    _horizontal: QSplitter
+    _vertical: QSplitter
 
     def __init__(
         self,
@@ -157,10 +209,23 @@ class MainWindow(QMainWindow):
         )
         self.transport = MediaTransport(self)
         self.watcher = FileWatcher(parent=self)
+        # Scene settings (size, fps, background, palette) of the open file's scenes.
+        self._scene_settings = SceneSettingsStore()
+        self._layout_mode = self._session.layout_mode() or _AUTO_LAYOUT
+        if self._layout_mode not in (_AUTO_LAYOUT, LANDSCAPE, PORTRAIT):
+            self._layout_mode = _AUTO_LAYOUT
+        self._layout_root: QWidget | None = None
+        self._layout_key = LANDSCAPE
+        self._layout_actions: dict[str, QAction] = {}
+        self._resolution_actions: dict[str, QAction] = {}
+        self._palette_actions: dict[str, QAction] = {}
+        # The settings the preview host was last started with.
+        self._running_settings: SceneSettings | None = None
 
         self._build_layout()
         self._build_actions()
         self._build_shell_dock()
+        self._build_inspector_dock()
         self._build_status_bar()
         self._update_scene_actions()
         self.video = VideoModeController(
@@ -184,6 +249,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._connect_signals()
+        self._start_schema_loader()
         self._palette = CommandPalette(self, lambda: palette_items(self))
 
         self.editor.set_completions(self._api_names)
@@ -203,21 +269,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_layout(self) -> None:
-        horizontal = QSplitter(Qt.Orientation.Horizontal, self)
         self.editor_pane = EditorPane(self.editor, self)
         self._external_bar = ExternalChangeBar(self)
         self.editor_pane.set_banner(self._external_bar)
-        horizontal.addWidget(self.editor_pane)
         self._right_stack = QStackedWidget(self)
         self._right_stack.addWidget(self.preview_panel)
         self._right_stack.addWidget(self.welcome_panel)
         self._right_stack.setCurrentWidget(self.welcome_panel)
-        horizontal.addWidget(self._right_stack)
-        horizontal.setStretchFactor(0, 3)
-        horizontal.setStretchFactor(1, 2)
 
-        bottom = QWidget(self)
-        bottom_layout = QVBoxLayout(bottom)
+        self._bottom_panel = QWidget(self)
+        bottom_layout = QVBoxLayout(self._bottom_panel)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         self.transport_bar = TimelineTransport(self)
         self.transport_bar.setFocusProxy(self.timeline)  # toolbar clicks hand the keys over
@@ -228,13 +289,62 @@ class MainWindow(QMainWindow):
         self.inspector = BlockInspector(self)
         bottom_layout.addWidget(self.inspector)
 
-        vertical = QSplitter(Qt.Orientation.Vertical, self)
-        vertical.addWidget(horizontal)
-        vertical.addWidget(bottom)
-        vertical.setStretchFactor(0, 4)
-        vertical.setStretchFactor(1, 1)
-        self._horizontal, self._vertical = horizontal, vertical
-        self.setCentralWidget(vertical)
+        # The panels are the same widgets in every arrangement; only the splitters change.
+        self._layout_host = QWidget(self)
+        self._layout_host_layout = QVBoxLayout(self._layout_host)
+        self._layout_host_layout.setContentsMargins(0, 0, 0, 0)
+        self.setCentralWidget(self._layout_host)
+        self._arrange(PORTRAIT if self._layout_mode == PORTRAIT else LANDSCAPE)
+
+    def _arrange(self, key: str) -> None:
+        """Lay the panels out for ``key`` (landscape or portrait), keeping each one's sizes."""
+        if self._layout_root is not None:
+            if key == self._layout_key:
+                return
+            # Remember the arrangement being left, so coming back restores its sizes.
+            self._session.remember_layout(
+                horizontal=self._horizontal,
+                vertical=self._vertical,
+                shell_visible=not self.shell.isHidden(),
+                preset=self._layout_key,
+            )
+        preset = preset_for(key)
+        if key == PORTRAIT:
+            # Code over the timeline on the left; the preview takes the full height on the right.
+            column = QSplitter(Qt.Orientation.Vertical, self)
+            column.addWidget(self.editor_pane)
+            column.addWidget(self._bottom_panel)
+            column.setStretchFactor(0, preset.vertical[0])
+            column.setStretchFactor(1, preset.vertical[1])
+            root = QSplitter(Qt.Orientation.Horizontal, self)
+            root.addWidget(column)
+            root.addWidget(self._right_stack)
+            root.setStretchFactor(0, preset.horizontal[0])
+            root.setStretchFactor(1, preset.horizontal[1])
+            self._horizontal, self._vertical = root, column
+        else:
+            row = QSplitter(Qt.Orientation.Horizontal, self)
+            row.addWidget(self.editor_pane)
+            row.addWidget(self._right_stack)
+            row.setStretchFactor(0, preset.horizontal[0])
+            row.setStretchFactor(1, preset.horizontal[1])
+            root = QSplitter(Qt.Orientation.Vertical, self)
+            root.addWidget(row)
+            root.addWidget(self._bottom_panel)
+            root.setStretchFactor(0, preset.vertical[0])
+            root.setStretchFactor(1, preset.vertical[1])
+            self._horizontal, self._vertical = row, root
+        if self._layout_root is not None:
+            # The old splitters are empty now: their panels moved into the new arrangement.
+            self._layout_host_layout.removeWidget(self._layout_root)
+            self._layout_root.deleteLater()
+        self._layout_host_layout.addWidget(root)
+        self._layout_root = root
+        self._layout_key = key
+        self._session.restore_layout(
+            horizontal=self._horizontal, vertical=self._vertical, preset=key
+        )
+        self._refresh_layout_actions()
 
     def _build_actions(self) -> None:
         menu_bar = self.menuBar()
@@ -327,6 +437,7 @@ class MainWindow(QMainWindow):
         )
         self._add_action(run_menu, "Focus live shell", self.focus_shell, "Ctrl+`")
 
+        self._build_scene_menu(menu_bar)
         timeline_menu = menu_bar.addMenu("&Timeline")
         operations = self._timeline_ops
         groups = (
@@ -340,6 +451,7 @@ class MainWindow(QMainWindow):
                 timeline_menu.addSeparator()
             timeline_menu.addActions([operations.action(key) for key in group])
         view_menu = menu_bar.addMenu("&View")
+        self._view_menu = view_menu
         self._add_action(view_menu, "Command palette…", self.open_command_palette, "Ctrl+Shift+P")
         view_menu.addSeparator()
         self._embedded_action = QAction("Embedded preview", self, checkable=True)
@@ -359,6 +471,8 @@ class MainWindow(QMainWindow):
         self._snap_action.toggled.connect(self.timeline.set_snapping)
         view_menu.addAction(self._snap_action)
         self.transport_bar.bind_snap_action(self._snap_action)
+        view_menu.addSeparator()
+        self._build_layout_menu(view_menu)
         view_menu.addSeparator()
         self._theme_menu = view_menu.addMenu("Theme")
         self._theme_menu.aboutToShow.connect(self._populate_theme_menu)
@@ -405,6 +519,14 @@ class MainWindow(QMainWindow):
         self.shell = ShellPanel(self)
         self.shell.lineSubmitted.connect(self._on_shell_line)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.shell)
+
+    def _build_inspector_dock(self) -> None:
+        """The mobject inspector (ADR 0012): hidden until a gear opens it, toggled in View."""
+        self.inspector_dock = MobjectInspector(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+        self.inspector_dock.hide()
+        self.inspector_dock.visibilityChanged.connect(self._on_inspector_visibility)
+        self._view_menu.addAction(self.inspector_dock.toggleViewAction())
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
@@ -497,6 +619,8 @@ class MainWindow(QMainWindow):
         self._timeline_ops.unavailable.connect(self._set_status)
         self.timeline.blockSelected.connect(self._on_block_selected)
         self.inspector.durationCommitted.connect(self._on_inspector_duration)
+        self.editor_pane.inspector_gears.targetRequested.connect(self._open_inspector)
+        self.inspector_dock.applyRequested.connect(self._apply_inspector)
         self.transport_bar.stepRequested.connect(self._on_transport_step)
         self.transport_bar.jumpRequested.connect(self._on_transport_jump)
         self.transport_bar.loopToggled.connect(self._on_transport_loop)
@@ -557,6 +681,7 @@ class MainWindow(QMainWindow):
         if index is not None and index != self.timeline.active_block:
             self._follow_caret_block(index)
         self._refresh_caret_block(line)
+        self._follow_inspector(line)
 
     def _follow_caret_block(self, index: int) -> None:
         """A caret that enters a call selects its block and moves the playhead to it."""
@@ -705,14 +830,21 @@ class MainWindow(QMainWindow):
         if not edits_settled and not self._confirm_discard("open another scene"):
             return False
         self.editor.load_file(target)
+        # The inspector described the previous file; drop its target and its highlight.
+        self.inspector_dock.clear("Click a gear beside a mobject in the code to inspect it.")
         self._external_bar.dismiss()
         self._path = target.resolve()
         # Edits made on the timeline travel with the scene: the host loads its first
         # trace from argv, so the controller must know them before it starts.
         self.controller.patches = self.patches.open_scene(self._path)
+        self._scene_settings.open(self._path)
+        if self._scene_settings.error:
+            self._set_status(f"scene settings unreadable: {self._scene_settings.error}")
         self.watcher.watch(self._path)
         self._refresh_scene_list(self._path)
         self._restore_scene_choice(self._path)
+        self._refresh_scene_menu()
+        self._apply_auto_layout()
         self._update_title()
         self._autosave.set_path(self._path)
         self._offer_recovery()
@@ -726,7 +858,311 @@ class MainWindow(QMainWindow):
             self._start_preview()
         return True
 
-    # Recent files ------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Scene settings and layout (the Scene and View menus)
+    # ------------------------------------------------------------------
+
+    def _build_scene_menu(self, menu_bar: Any) -> None:
+        scene_menu = menu_bar.addMenu("&Scene")
+        self._scene_actions.append(
+            self._add_action(scene_menu, "Scene settings…", self.open_scene_settings, "Ctrl+,")
+        )
+        resolution_menu = scene_menu.addMenu("Resolution")
+        for preset in RESOLUTION_PRESETS:
+            action = QAction(preset.title, self, checkable=True)
+            action.triggered.connect(
+                lambda _checked=False, key=preset.key: self.set_scene_resolution(key)
+            )
+            resolution_menu.addAction(action)
+            self._resolution_actions[preset.key] = action
+        self._scene_actions.append(resolution_menu.menuAction())
+        self._scene_actions.append(
+            self._add_action(scene_menu, "Rotate 90° (portrait ↔ landscape)", self.rotate_scene)
+        )
+        palette_menu = scene_menu.addMenu("Colour palette")
+        none_action = QAction("None", self, checkable=True)
+        none_action.triggered.connect(lambda _checked=False: self.set_scene_palette(""))
+        palette_menu.addAction(none_action)
+        self._palette_actions[""] = none_action
+        palette_menu.addSeparator()
+        for palette in self._palettes():
+            action = QAction(palette.title, self, checkable=True)
+            action.triggered.connect(
+                lambda _checked=False, key=palette.key: self.set_scene_palette(key)
+            )
+            palette_menu.addAction(action)
+            self._palette_actions[palette.key] = action
+        self._scene_actions.append(palette_menu.menuAction())
+        self._scene_actions.append(
+            self._add_action(scene_menu, "Background colour…", self.choose_scene_background)
+        )
+        scene_menu.addSeparator()
+        self._scene_actions.append(
+            self._add_action(
+                scene_menu, "Apply settings to source", self.apply_scene_settings_to_source
+            )
+        )
+        self._scene_actions.append(
+            self._add_action(scene_menu, "Reset scene settings", self.reset_scene_settings)
+        )
+
+    def _build_layout_menu(self, view_menu: Any) -> None:
+        layout_menu = view_menu.addMenu("Layout")
+        choices = (
+            (_AUTO_LAYOUT, "Follow the scene"),
+            (LANDSCAPE, "Landscape"),
+            (PORTRAIT, "Portrait"),
+        )
+        for mode, label in choices:
+            action = QAction(label, self, checkable=True)
+            action.triggered.connect(lambda _checked=False, value=mode: self.set_layout_mode(value))
+            layout_menu.addAction(action)
+            self._layout_actions[mode] = action
+        self._refresh_layout_actions()
+
+    def _palettes(self) -> tuple[Palette, ...]:
+        """Built-in palettes, then the valid palette files in the user's palette folder."""
+        found: list[Palette] = list(BUILTIN_PALETTES)
+        folder = user_palettes_dir()
+        if folder.is_dir():
+            for path in sorted(folder.glob("*.json")):
+                try:
+                    found.append(load_palette_file(path))
+                except PaletteError as exc:
+                    _LOG.warning("ignoring palette %s: %s", path.name, exc)
+        return tuple(found)
+
+    def _stored_scene_defaults(self) -> SceneSettings | None:
+        """The app-wide settings new scenes start with, when the user saved some."""
+        raw = self._session.scene_defaults_json()
+        if not raw:
+            return None
+        try:
+            return SceneSettings.from_dict(json.loads(raw))
+        except (ValueError, SettingsError):
+            _LOG.warning("ignoring the saved default scene settings")
+            return None
+
+    def _default_scene_settings(self) -> SceneSettings:
+        return self._stored_scene_defaults() or SceneSettings()
+
+    def _apply_defaults_to_new_scene(self, target: Path, scene_name: str) -> None:
+        """Give a new scene the saved defaults: the block in its class and the sidecar."""
+        defaults = self._stored_scene_defaults()
+        if defaults is None:
+            return
+        try:
+            source = target.read_text(encoding="utf-8")
+            target.write_text(apply_block(source, scene_name, defaults), encoding="utf-8")
+            save_scene_settings(target, {scene_name: defaults})
+        except (OSError, SettingsError, SidecarError) as exc:
+            self._set_status(f"new scene keeps the built-in settings: {exc}")
+
+    def scene_settings_now(self) -> SceneSettings:
+        """The settings the current scene renders with: its own, else the app defaults."""
+        stored = self._scene_settings.settings_for(self._scene_name())
+        return stored if stored is not None else self._default_scene_settings()
+
+    def _update_code(self, change: Callable[[str], str]) -> str | None:
+        """Apply ``change`` to the scene's code; returns a note for the status line.
+
+        A saved file is written and saved as one undo step.  While there are unsaved
+        edits the change goes into the editor only, so nothing typed is overwritten.
+        """
+        if self._path is None:
+            return None
+        source = self.editor.text()
+        try:
+            text = change(source)
+        except SettingsError as exc:
+            return f"the code was not updated: {exc}"
+        if text == source:
+            return None
+        unsaved = self.editor.is_modified()
+        self.editor.beginUndoAction()
+        try:
+            self.editor.replace_text(text)
+            if not unsaved:
+                self.editor.save_file(self._path)
+                self.watcher.note_save()
+            self._update_title()
+        finally:
+            self.editor.endUndoAction()
+        if unsaved:
+            return "the code change is in the editor; save (Ctrl+S) to write it to disk"
+        return "the code was updated"
+
+    def _commit_scene_settings(self, settings: SceneSettings, status: str) -> bool:
+        name = self._scene_name()
+        if self._path is None or name is None:
+            self._set_status("open a scene first")
+            return False
+        if self._scene_settings.settings_for(name) == settings:
+            self._refresh_scene_menu()
+            return True
+        try:
+            self._scene_settings.set_settings(name, settings)
+        except SidecarError as exc:
+            self._set_status(f"cannot save scene settings: {exc}")
+            return False
+        note = self._update_code(lambda source: apply_block(source, name, settings))
+        self._refresh_scene_menu()
+        self._apply_auto_layout()
+        self._start_preview()
+        self._set_status(f"{status}; {note}" if note else status)
+        return True
+
+    def open_scene_settings(self) -> None:
+        name = self._scene_name()
+        if self._path is None or name is None:
+            self._set_status("open a scene first")
+            return
+        dialog = SceneSettingsDialog(
+            self,
+            scene_name=name,
+            settings=self.scene_settings_now(),
+            palettes=self._palettes(),
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        settings = dialog.settings()
+        if dialog.use_as_default():
+            self._session.remember_scene_defaults_json(json.dumps(settings.to_dict()))
+        self._commit_scene_settings(
+            settings,
+            f"{name} renders at {settings.width}x{settings.height}, {settings.fps} fps",
+        )
+
+    def set_scene_resolution(self, key: str) -> None:
+        preset = next(p for p in RESOLUTION_PRESETS if p.key == key)
+        self._commit_scene_settings(
+            self.scene_settings_now().with_size(preset.width, preset.height),
+            f"{self._scene_name()} renders at {preset.width}x{preset.height}",
+        )
+
+    def rotate_scene(self) -> None:
+        settings = self.scene_settings_now().swapped()
+        self._commit_scene_settings(
+            settings,
+            f"{self._scene_name()} is {settings.orientation}: {settings.width}x{settings.height}",
+        )
+
+    def set_scene_palette(self, key: str) -> None:
+        current = self.scene_settings_now()
+        if not key:
+            settings = replace(current, palette="", swatches=())
+            status = "palette removed"
+        else:
+            palette = next((p for p in self._palettes() if p.key == key), None)
+            if palette is None:
+                self._set_status(f"unknown palette {key!r}")
+                return
+            settings = replace(
+                current,
+                palette=palette.key,
+                background_color=palette.background,
+                swatches=palette.swatches,
+            )
+            status = f"palette {palette.title} applied"
+        self._commit_scene_settings(settings, status)
+
+    def choose_scene_background(self) -> None:
+        current = self.scene_settings_now()
+        chosen = QColorDialog.getColor(QColor(current.background_color), self, "Background colour")
+        if not chosen.isValid():
+            return
+        try:
+            colour = normalize_hex(chosen.name())
+        except SettingsError as exc:
+            self._set_status(str(exc))
+            return
+        self._commit_scene_settings(
+            replace(current, background_color=colour), f"background set to {colour}"
+        )
+
+    def reset_scene_settings(self) -> None:
+        name = self._scene_name()
+        if self._path is None or name is None:
+            self._set_status("open a scene first")
+            return
+        try:
+            changed = self._scene_settings.clear_settings(name)
+        except SidecarError as exc:
+            self._set_status(f"cannot save scene settings: {exc}")
+            return
+        note = self._update_code(lambda source: remove_class_block(source, name))
+        self._refresh_scene_menu()
+        self._apply_auto_layout()
+        self._start_preview()
+        message = (
+            f"{name} is back to the default settings"
+            if changed
+            else f"{name} has no stored settings"
+        )
+        self._set_status(f"{message}; {note}" if note else message)
+
+    def apply_scene_settings_to_source(self) -> None:
+        """Write the scene's settings into its class as the managed block (one undo step)."""
+        name = self._scene_name()
+        if self._path is None or name is None:
+            self._set_status("open a scene first")
+            return
+        if self.editor.is_modified():
+            self._set_status("save the file first (Ctrl+S): settings are written into the code")
+            return
+        source = self.editor.text()
+        try:
+            text = apply_block(source, name, self.scene_settings_now())
+        except SettingsError as exc:
+            self._set_status(f"settings not written: {exc}")
+            return
+        if text == source:
+            self._set_status(f"{name} already has these settings in its source")
+            return
+        self.editor.beginUndoAction()
+        try:
+            self.editor.replace_text(text)
+            self.editor.save_file(self._path)
+            self.watcher.note_save()
+            self._update_title()
+        finally:
+            self.editor.endUndoAction()
+        self._start_preview()
+        self._set_status(f"settings written into {name} in {self._path.name}")
+
+    def _refresh_scene_menu(self) -> None:
+        settings = self.scene_settings_now()
+        preset = resolution_preset_for(settings.width, settings.height)
+        for key, action in self._resolution_actions.items():
+            action.setChecked(preset is not None and key == preset.key)
+        for key, action in self._palette_actions.items():
+            action.setChecked(key == settings.palette)
+
+    def set_layout_mode(self, mode: str) -> None:
+        """Follow the scene's orientation, or pin the landscape or portrait arrangement."""
+        if mode not in (_AUTO_LAYOUT, LANDSCAPE, PORTRAIT):
+            return
+        self._layout_mode = mode
+        self._session.remember_layout_mode(mode)
+        if mode == _AUTO_LAYOUT:
+            self._apply_auto_layout()
+        else:
+            self._arrange(mode)
+        self._refresh_layout_actions()
+
+    def _apply_auto_layout(self) -> None:
+        if self._layout_mode != _AUTO_LAYOUT:
+            return
+        settings = self.scene_settings_now() if self._path is not None else None
+        target = suggest_layout(settings.width, settings.height) if settings else LANDSCAPE
+        self._arrange(target)
+
+    def _refresh_layout_actions(self) -> None:
+        for mode, action in self._layout_actions.items():
+            action.setChecked(mode == self._layout_mode)
+
+    # ------------------------------------------------------------------
+    # Recent files------------------------------------------------------
 
     def recent_files(self) -> list[str]:
         """Remembered scenes, newest first, minus files that no longer exist."""
@@ -822,6 +1258,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard("create a new scene"):
             return
         target = self.create_scene_file(path, template_key, scene_name)
+        self._apply_defaults_to_new_scene(target, scene_name)
         self.open_path(target, edits_settled=True)
 
     def _prompt_scene_name(self, default: str) -> str | None:
@@ -943,11 +1380,16 @@ class MainWindow(QMainWindow):
         if self._path is None or not self._auto_preview:
             return
         self.timeline.set_log(TimelineLog(()))
+        settings = self._scene_settings.settings_for(self._scene_name())
+        self.controller.settings = settings
+        self._running_settings = settings
+        size = (settings.width, settings.height) if settings is not None else self._preview_size
+        self.preview_panel.set_format_text(_format_label(size, settings))
         self.controller.start(
             self._path,
             self._scene_name(),
             embedded=self._embedded,
-            size=self._preview_size,
+            size=size,
             initial_frame=self._initial_frame,
         )
 
@@ -1230,8 +1672,14 @@ class MainWindow(QMainWindow):
     def _on_scene_selected(self, name: str) -> None:
         if self._path is not None and name:
             self._session.remember_scene(self._path, name)
+        self._refresh_scene_menu()
+        self._apply_auto_layout()
         if self._path is not None and name and self.controller.is_running:
-            self.controller.load(self._path, name)
+            if self._scene_settings.settings_for(name) != self._running_settings:
+                # Another size or background: the host has to start again to render it.
+                self._start_preview()
+            else:
+                self.controller.load(self._path, name)
 
     def _toggle_play(self) -> None:
         if self._playback_active:
@@ -1513,6 +1961,105 @@ class MainWindow(QMainWindow):
         """The inspector's duration field was committed."""
         self._on_block_resized(index, seconds, iteration_only=iteration_only)
 
+    # Mobject inspector (ADR 0012) -----------------------------------------
+
+    def _start_schema_loader(self) -> None:
+        """Load the manimlib properties in the background; gears and the inspector wait for it."""
+        self.schema_loader = SchemaLoader(self)
+        self.schema_loader.ready.connect(self._on_schema_ready)
+        self.schema_loader.failed.connect(self._set_status)
+        self.schema_loader.start()
+
+    def _on_schema_ready(self, schema: MobjectSchema) -> None:
+        self.editor_pane.inspector_gears.set_schema(schema)
+        self.inspector_dock.set_schema(schema)
+
+    def _open_inspector(self, target: MobjectTarget, line: int) -> None:
+        self.editor.set_inspected_line(line)
+        self.inspector_dock.show_target(target)
+        self.inspector_dock.show()
+        self.inspector_dock.raise_()
+
+    def _on_inspector_visibility(self, visible: bool) -> None:
+        """The highlight marks the inspected line only while the panel is open."""
+        if not visible:
+            self.editor.set_inspected_line(None)
+
+    def _follow_inspector(self, line: int) -> None:
+        """While the inspector is open with no edits pending, a caret on a mobject's line takes
+        it over."""
+        dock = self.inspector_dock
+        if not dock.isVisible() or dock.has_pending_changes():
+            return
+        target = next(
+            (t for t in self.editor_pane.inspector_gears.targets if line in t.lines), None
+        )
+        if target is not None and (dock.target is None or dock.target.identity != target.identity):
+            self.editor.set_inspected_line(line)
+            dock.show_target(target)
+
+    def _apply_inspector(self, target: MobjectTarget, changes: list[Change]) -> None:
+        """Write the inspector's edits into the scene code as one undo step, then refresh."""
+        dock = self.inspector_dock
+        if self._path is None:
+            dock.set_status("Open a scene file first.")
+            return
+        source = self.editor.text()
+        try:
+            targets = find_mobject_targets(source)
+        except SyntaxError:
+            dock.set_status("The code does not parse, so nothing was written.")
+            return
+        current = next((t for t in targets if t.identity == target.identity), None)
+        if current is None or current.calls != target.calls:
+            dock.set_status(
+                "The code changed since the inspector read it. Reopen it from the gear."
+            )
+            return
+        try:
+            text = apply_changes(source, target, changes)
+        except EditError as error:
+            dock.set_status(f"Not applied: {error}")
+            return
+        unsaved = self.editor.is_modified()
+        self.editor.beginUndoAction()
+        try:
+            self.editor.replace_text(text)
+            if not unsaved:
+                self.editor.save_file(self._path)
+                self.watcher.note_save()
+                self._autosave.discard()
+            self._update_title()
+        finally:
+            self.editor.endUndoAction()
+        if unsaved:
+            status = (
+                "Applied in the editor. Save (Ctrl+S) to write the file and refresh the preview."
+            )
+        else:
+            if self.controller.is_running:
+                self.reload_preview()
+            status = f"Applied and saved to {self._path.name}."
+        self._refresh_inspector_target(target, status)
+
+    def _refresh_inspector_target(self, target: MobjectTarget, status: str) -> None:
+        dock = self.inspector_dock
+        try:
+            targets = find_mobject_targets(self.editor.text())
+        except SyntaxError:
+            self.editor.set_inspected_line(None)
+            dock.clear("The code no longer parses. Fix it to keep inspecting.")
+            return
+        fresh = next((t for t in targets if t.identity == target.identity), None)
+        if fresh is None:
+            self.editor.set_inspected_line(None)
+            dock.clear("This mobject is no longer bound in the code.")
+            return
+        marked = self.editor.inspected_line  # kept across the replace; the target may have moved
+        self.editor.set_inspected_line(marked if marked in fresh.lines else fresh.lines[0])
+        dock.show_target(fresh)
+        dock.set_status(status)
+
     def apply_edits_to_source(self) -> None:
         """Write the timeline edits into the scene file (one undoable editor edit)."""
         if self._path is None:
@@ -1622,6 +2169,7 @@ class MainWindow(QMainWindow):
             current_scene=self._scene_name(),
             block_count=self.timeline.log.num_blocks,
             settings=self._settings,
+            scene_has_settings=self._scene_settings.settings_for(self._scene_name()) is not None,
             initial_still=still,
             initial_range=initial_range,
             controller=self.exports,
@@ -1794,6 +2342,7 @@ class MainWindow(QMainWindow):
         self.editor.apply_theme(theme)
         self.preview_panel.apply_theme(theme)
         self.inspector.apply_theme()
+        self.inspector_dock.apply_theme()
         refresh_glyphs(self)
         self.timeline.update()
         if self._restore_settings:
@@ -1890,7 +2439,9 @@ class MainWindow(QMainWindow):
         if not self._layout_restored:
             # Splitters only take saved sizes once the window has its real size.
             self._layout_restored = True
-            if self._session.restore_layout(horizontal=self._horizontal, vertical=self._vertical):
+            if self._session.restore_layout(
+                horizontal=self._horizontal, vertical=self._vertical, preset=self._layout_key
+            ):
                 self.shell.show()
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -1902,6 +2453,7 @@ class MainWindow(QMainWindow):
             horizontal=self._horizontal,
             vertical=self._vertical,
             shell_visible=not self.shell.isHidden(),
+            preset=self._layout_key,
         )
         self._session.remember_embedded(self._embedded)
         self.watcher.stop()

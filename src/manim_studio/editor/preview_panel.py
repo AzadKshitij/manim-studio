@@ -76,13 +76,18 @@ class PreviewPanel(QWidget):
         header = QHBoxLayout(header_bar)
         header.setContentsMargins(12, 0, 12, 0)
         header.addWidget(self._title_label)
+        self._format_label = QLabel("", self)
+        self._format_label.setObjectName("panelMeta")
+        header.addWidget(self._format_label)
         header.addStretch(1)
         header.addWidget(self._time_label)
 
         self._viewport = QLabel()
         self._viewport.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._viewport.setMinimumSize(320, 180)
-        self._viewport.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # A small floor and an Ignored size hint: the body gives the viewport whatever
+        # room it has (a tall portrait preview can shrink), and _rescale letterboxes.
+        self._viewport.setMinimumSize(96, 96)
+        self._viewport.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._viewport.setToolTip("Click: play or pause  ·  Wheel: step frames")
 
         self._placeholder = QLabel(
@@ -91,6 +96,8 @@ class PreviewPanel(QWidget):
             "Switch to embedded mode to see it here."
         )
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Wrap, so a narrow (portrait) preview can shrink below the longest line.
+        self._placeholder.setWordWrap(True)
 
         self._stack = QStackedLayout()
         self._stack.addWidget(self._placeholder)
@@ -158,6 +165,10 @@ class PreviewPanel(QWidget):
     def _settle(self) -> None:
         """Re-render the last streamed frame smoothly now that it has paused."""
         self._rescale(fast=False)
+
+    def set_format_text(self, text: str) -> None:
+        """The frame's size chip in the header, for example ``1080x1920 · 9:16``."""
+        self._format_label.setText(text)
 
     def set_cache_status(self, text: str) -> None:
         """Small filmstrip indicator ('cache: 312 frames…')."""

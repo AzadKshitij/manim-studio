@@ -69,6 +69,10 @@ class Filmstrip:
         self._evict()
         return True
 
+    def has(self, index: int) -> bool:
+        """Whether a frame is stored at ``index`` (does not refresh its LRU position)."""
+        return index in self._frames
+
     def get(self, index: int) -> bytes | None:
         """Exact lookup, refreshing the entry's LRU position."""
         blob = self._frames.get(index)

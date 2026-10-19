@@ -61,6 +61,13 @@
   `import time`, found on the AST) and scenes importing user modules. Measured on
   `scenes/Welcome.py` (22 blocks, 32 s): retiming the first `wait` keeps 21/22 blocks
   (957 frames) and the cache completes in 0.35-0.37 s instead of 6.1-6.3 s.
+- **A streamed block's end pose is a placeholder.** The frame at a block's end index is the
+  next block's first frame. A streamed block writes its own end pose there only if that
+  index is empty (`FilmstripCrawler._render(boundary=True)`). A reused, shifted next block
+  already holds its first frame there, and that frame must win. Before this rule a retimed
+  streamed `wait` overwrote the next block's first frame with its own last pose
+  (`test_retiming_the_first_wait_of_welcome_keeps_the_later_blocks`, 1.49 grey levels on one
+  frame). A fresh crawl is unaffected: the next block streams its own first frame over it.
 - A reused block owns its frames up to, not including, the next block's first frame; the
   *last* playing block has no follower, so it also keeps its end frame (otherwise a scrub
   to the very end would land one frame early).
