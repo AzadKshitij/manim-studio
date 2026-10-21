@@ -24,7 +24,7 @@ dependencies = [
     "PySide6==6.11.2",
     "pyside6-scintilla==5.6.3.7",
     "manimgl==1.7.2",
-    "moderngl==5.12.0",
+    "moderngl==5.13.0",
     "moderngl-window==3.1.1",
     "IPython>=8.18",
     # Pygments lexers drive the code editor's syntax highlighting and its
@@ -32,14 +32,14 @@ dependencies = [
     "pygments>=2.19",
     # Jedi powers the editor's static completion and calltips off the GUI
     # thread (see manim_studio.python_completion).
-    "jedi>=0.19",
+    "jedi>=0.20.1",
     # Frame codec for the preview stream: zstd encodes ~6x faster than zlib at a
     # ~3x better ratio (docs/perf). manim_studio.frame_codec imports it lazily
     # and falls back to zlib when it is unavailable.
     "zstandard>=0.23",
     # manimgl 1.7.2 imports pkg_resources at import time. setuptools>=81 no
     # longer ships it, so keep the runtime dependency bounded.
-    "setuptools>=69,<81",
+    "setuptools>=84.0.0,<85",
     # pydub (manimgl dependency) needs audioop, removed from stdlib in 3.13.
     "audioop-lts>=0.2.2; python_version >= '3.13'",
     # Single-pass filmstrip crawl suspends construct() at block boundaries without
@@ -63,7 +63,7 @@ dev = [
     "pytest>=8.4",
     "pytest-qt>=4.4",
     "pytest-cov>=6.1",
-    "ruff>=0.11",
+    "ruff>=0.17.1",
     "mypy>=1.15",
     "pyinstaller>=6.22.3",
 ]
